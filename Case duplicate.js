@@ -70,7 +70,7 @@
 
         init() {
             this.addStyles();
-            console.log('[查重腳本 V5.1-Enhanced]：腳本已啟動。');
+            console.log('[查重腳本 V5]：腳本已啟動。');
             this.waitForAnyElement(this.constructor.CONFIG.SELECTORS.BUTTON_CONTAINERS, this.addCustomButtons.bind(this));
         }
 
@@ -123,7 +123,7 @@
         findAllElementsInShadowDom(selector, root = document) { let r = Array.from(root.querySelectorAll(selector)); root.querySelectorAll('*').forEach(el => el.shadowRoot && (r = r.concat(this.findAllElementsInShadowDom(selector, el.shadowRoot)))); return r; }
         findElementInShadowDom(selector, root = document) { return this.findAllElementsInShadowDom(selector, root)[0] || null; }
         delay(ms) { return new Promise(res => setTimeout(res, ms)); }
-        waitForAnyElement(selectors, callback) { console.log(`[查重腳本 V5.1]：正在等待按鈕容器...`); let t = !1; const e = setTimeout(() => { t = !0, console.error(`[查重腳本 V5.1]：錯誤：等待按鈕容器超時。`), o.disconnect() }, this.constructor.CONFIG.TIMEOUTS.WAIT_FOR_ELEMENT); const o = new MutationObserver(() => { if (t) return; for (const t of selectors) { const r = this.findElementInShadowDom(t); if (r) return console.log(`[查重腳本 V5.1]：成功找到按鈕容器。`), clearTimeout(e), o.disconnect(), void callback(r) } }); o.observe(document.body, { childList: !0, subtree: !0 }) }
+        waitForAnyElement(selectors, callback) { console.log(`[查重腳本 V5]：正在等待按鈕容器...`); let t = !1; const e = setTimeout(() => { t = !0, console.error(`[查重腳本 V5]：錯誤：等待按鈕容器超時。`), o.disconnect() }, this.constructor.CONFIG.TIMEOUTS.WAIT_FOR_ELEMENT); const o = new MutationObserver(() => { if (t) return; for (const t of selectors) { const r = this.findElementInShadowDom(t); if (r) return console.log(`[查重腳本 V5]：成功找到按鈕容器。`), clearTimeout(e), o.disconnect(), void callback(r) } }); o.observe(document.body, { childList: !0, subtree: !0 }) }
         clearHighlights() { const e = this.findElementInShadowDom(this.constructor.CONFIG.SELECTORS.TABLE); e && e.querySelectorAll(this.constructor.CONFIG.SELECTORS.TABLE_ROW).forEach(e => { e.style.backgroundColor = "", e.removeAttribute("data-highlighted-by-script") }) }
 
         // =================================================================================
@@ -162,13 +162,13 @@
         // =================================================================================
         // 排序備份與恢復 (無修改)
         // =================================================================================
-        snapshotOriginalOrder() { if (this.originalRowOrder) return; const tableBody = this.findElementInShadowDom(this.constructor.CONFIG.SELECTORS.TABLE_BODY); if (tableBody) { this.originalRowOrder = Array.from(tableBody.querySelectorAll(this.constructor.CONFIG.SELECTORS.TABLE_ROW)); console.log(`[查重腳本 V5.1]：已成功備份 ${this.originalRowOrder.length} 行的原始順序。`); } }
+        snapshotOriginalOrder() { if (this.originalRowOrder) return; const tableBody = this.findElementInShadowDom(this.constructor.CONFIG.SELECTORS.TABLE_BODY); if (tableBody) { this.originalRowOrder = Array.from(tableBody.querySelectorAll(this.constructor.CONFIG.SELECTORS.TABLE_ROW)); console.log(`[查重腳本 V5]：已成功備份 ${this.originalRowOrder.length} 行的原始順序。`); } }
         restoreOriginalOrder() { if (!this.originalRowOrder) { this.showNotification("錯誤：沒有可恢復的排序。", 'error'); return; } this.clearHighlights(); const tableBody = this.findElementInShadowDom(this.constructor.CONFIG.SELECTORS.TABLE_BODY); if (tableBody) { const fragment = document.createDocumentFragment(); this.originalRowOrder.forEach(row => fragment.appendChild(row)); tableBody.innerHTML = ''; tableBody.appendChild(fragment); this.buttons.restoreSort.setAttribute('disabled', 'true'); this.showNotification("已恢復原始排序。", 'success'); } }
 
         // =================================================================================
         // 對話框與剪貼板功能 (無修改)
         // =================================================================================
-        async copyDuplicatesToClipboard(duplicateSummary, button) { if (!navigator.clipboard) return this.showNotification('您的瀏覽器不支援此功能，或頁面非安全協議 (https)。', 'error'); const numbersToCopy = duplicateSummary.map(summary => summary.split(' ')[0]).join('\n'); try { await navigator.clipboard.writeText(numbersToCopy); const originalText = button.textContent; button.textContent = this.constructor.CONFIG.TEXT.COPY_SUCCESS_BUTTON; button.disabled = true; setTimeout(() => { button.textContent = originalText; button.disabled = false; }, this.constructor.CONFIG.TIMEOUTS.COPY_SUCCESS_MSG); } catch (err) { console.error('[查重腳本 V5.1]：複製到剪貼簿失敗：', err); this.showNotification('複製失敗！請檢查瀏覽器權限設置。', 'error'); } }
+        async copyDuplicatesToClipboard(duplicateSummary, button) { if (!navigator.clipboard) return this.showNotification('您的瀏覽器不支援此功能，或頁面非安全協議 (https)。', 'error'); const numbersToCopy = duplicateSummary.map(summary => summary.split(' ')[0]).join('\n'); try { await navigator.clipboard.writeText(numbersToCopy); const originalText = button.textContent; button.textContent = this.constructor.CONFIG.TEXT.COPY_SUCCESS_BUTTON; button.disabled = true; setTimeout(() => { button.textContent = originalText; button.disabled = false; }, this.constructor.CONFIG.TIMEOUTS.COPY_SUCCESS_MSG); } catch (err) { console.error('[查重腳本 V5]：複製到剪貼簿失敗：', err); this.showNotification('複製失敗！請檢查瀏覽器權限設置。', 'error'); } }
         showActionDialog(totalRows, duplicateGroups, duplicateSummary, trackingNumbersMap, table) { const C = this.constructor.CONFIG.TEXT; const overlay = document.createElement('div'); overlay.className = 'custom-dialog-overlay'; const dialogBox = document.createElement('div'); dialogBox.className = 'custom-dialog-box'; const message = document.createElement('div'); message.className = 'custom-dialog-message'; message.innerHTML = C.DIALOG_SUMMARY(totalRows, duplicateGroups.length); const detailsContainer = document.createElement('div'); detailsContainer.className = 'custom-dialog-details'; detailsContainer.innerHTML = duplicateSummary.map(line => `<p>${line.replace('出現 ', ' ').replace('次)', `個 case)`)}</p>`).join(''); const buttonContainer = document.createElement('div'); buttonContainer.className = 'custom-dialog-buttons'; const closeDialog = () => document.body.removeChild(overlay); const btnTop = document.createElement('button'); btnTop.textContent = C.REORDER_TOP_BUTTON; btnTop.className = 'btn-primary'; btnTop.onclick = () => { this.reorderRowsToTop(table.querySelector('tbody'), duplicateGroups); table.scrollIntoView({ behavior: 'smooth' }); closeDialog(); }; const btnInPlace = document.createElement('button'); btnInPlace.textContent = C.REORDER_INPLACE_BUTTON; btnInPlace.className = 'btn-primary'; btnInPlace.onclick = () => { this.reorderRowsInPlace(table.querySelector('tbody'), trackingNumbersMap); if (duplicateGroups.length > 0) duplicateGroups[0][0].scrollIntoView({ behavior: 'smooth', block: 'center' }); closeDialog(); }; const btnCopy = document.createElement('button'); btnCopy.textContent = C.COPY_BUTTON; btnCopy.className = 'btn-secondary'; btnCopy.onclick = () => this.copyDuplicatesToClipboard(duplicateSummary, btnCopy); const btnCancel = document.createElement('button'); btnCancel.textContent = C.CANCEL_BUTTON; btnCancel.className = 'btn-secondary'; btnCancel.onclick = closeDialog; buttonContainer.append(btnTop, btnInPlace, btnCopy, btnCancel); dialogBox.append(message, detailsContainer, buttonContainer); overlay.appendChild(dialogBox); document.body.appendChild(overlay); overlay.addEventListener('click', (e) => { if (e.target === overlay) closeDialog(); }); }
 
         // =================================================================================
@@ -212,7 +212,7 @@
                             const finalCount = match ? parseInt(match[1], 10) : parseInt(statusTextContent, 10);
 
                             if (!isNaN(finalCount) && currentRowCount >= finalCount) {
-                                console.log(`[查重腳本 V5.1]：終止條件1滿足 - '+'號消失且行數匹配 (${currentRowCount}/${finalCount})。`);
+                                console.log(`[查重腳本 V5]：終止條件1滿足 - '+'號消失且行數匹配 (${currentRowCount}/${finalCount})。`);
                                 isLoadComplete = true;
                             }
                         }
@@ -223,7 +223,7 @@
                             if (match && match[1]) {
                                 const totalCount = parseInt(match[1], 10);
                                 if (currentRowCount >= totalCount) {
-                                    console.log(`[查重腳本 V5.1]：終止條件2滿足 - 已加載行數達到總數 (${currentRowCount}/${totalCount})。`);
+                                    console.log(`[查重腳本 V5]：終止條件2滿足 - 已加載行數達到總數 (${currentRowCount}/${totalCount})。`);
                                     isLoadComplete = true;
                                 }
                             }
@@ -238,7 +238,7 @@
 
                     // --- 第三層判斷 (終極兜底): 加載停滯或超時 ---
                     if (lastRowCount === currentRowCount && currentRowCount > 0) {
-                         console.log('[查重腳本 V5.1]：終止條件3滿足 - 行數未增加，判斷為加載完畢。');
+                         console.log('[查重腳本 V5]：終止條件3滿足 - 行數未增加，判斷為加載完畢。');
                          break;
                     }
 
@@ -249,7 +249,7 @@
                     try {
                         await this.waitForNewRows(tableBody, this.constructor.CONFIG.TIMEOUTS.LOAD_MORE_TIMEOUT);
                     } catch (error) {
-                        console.warn(`[查重腳本 V5.1]：終止條件3滿足 - ${error.message}`);
+                        console.warn(`[查重腳本 V5]：終止條件3滿足 - ${error.message}`);
                         break;
                     }
                 }
@@ -259,7 +259,7 @@
                 this.findAndHighlightDuplicates();
 
             } catch (err) {
-                console.error('[查重腳本 V5.1]：自動加載過程中發生錯誤:', err);
+                console.error('[查重腳本 V5]：自動加載過程中發生錯誤:', err);
                 this.showNotification('自動加載失敗，請檢查控制台日誌。', 'error');
             } finally {
                 document.body.removeChild(overlay);
@@ -382,7 +382,7 @@
             container.insertBefore(this.buttons.rangeSelect, container.firstChild);
             container.insertBefore(this.buttons.duplicateCheck, container.firstChild);
 
-            console.log(`[查重腳本 V5.1]：成功新增所有自訂按鈕！`);
+            console.log(`[查重腳本 V5]：成功新增所有自訂按鈕！`);
         }
 
         createButton(id, text, clickHandler) {
