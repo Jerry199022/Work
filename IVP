@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IVP顯示注釋
 // @namespace    IVP顯示注釋
-// @version      V6
+// @version      V7
 // @description  IVP顯示注釋、一眼模式、定義字體顏色。
 // @author       Jerry Law
 // @match        *://ivp.inside.ups.com/*
@@ -13,6 +13,9 @@
 // @grant        GM_registerMenuCommand
 // @grant        GM_getValue
 // @grant        GM_setValue
+// @updateURL    https://raw.githubusercontent.com/Jerry199022/Work/refs/heads/main/IVP
+// @downloadURL  https://raw.githubusercontent.com/Jerry199022/Work/refs/heads/main/IVP
+
 // ==/UserScript==
 
 (function () {
@@ -1540,7 +1543,7 @@ PACKAGE WAS DRIVER RELEASED
     }
 
     function initializeScript() {
-        console.log("開始初始化註釋腳本 (v5.2.0)");
+        console.log("開始初始化註釋腳本");
 
         SCRIPT_STATE.isFullViewModeActive = GM_getValue('fullViewMode', false);
 
