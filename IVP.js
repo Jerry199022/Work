@@ -13,8 +13,8 @@
 // @grant        GM_registerMenuCommand
 // @grant        GM_getValue
 // @grant        GM_setValue
-// @updateURL    https://raw.githubusercontent.com/Jerry199022/Work/refs/heads/main/IVP
-// @downloadURL  https://raw.githubusercontent.com/Jerry199022/Work/refs/heads/main/IVP
+// @updateURL    https://raw.githubusercontent.com/Jerry199022/Work/refs/heads/main/IVP.js
+// @downloadURL  https://raw.githubusercontent.com/Jerry199022/Work/refs/heads/main/IVP.js
 
 // ==/UserScript==
 
@@ -22,7 +22,7 @@
     'use strict';
 
     // ================================================================
-    // A. 原始核心功能 (保持不變)
+    // 替換數據
     // ================================================================
     const annotationsText = `
 #Internal Visibility Portal|注釋版 V5.0
