@@ -8,8 +8,8 @@
 // @grant        GM_registerMenuCommand
 // @grant        GM_addStyle
 // @run-at       document-idle
-// @updateURL    https://raw.githubusercontent.com/Jerry199022/Work/refs/heads/main/Case%20duplicate.js
-// @downloadURL  https://raw.githubusercontent.com/Jerry199022/Work/refs/heads/main/Case%20duplicate.js
+// @updateURL    https://raw.githubusercontent.com/Jerry199022/Work/refs/heads/main/CaseDuplicate.js
+// @downloadURL  https://raw.githubusercontent.com/Jerry199022/Work/refs/heads/main/CaseDuplicate.js
 // ==/UserScript==
 
 (function() {
