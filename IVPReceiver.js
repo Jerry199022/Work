@@ -7,8 +7,8 @@
 // @match        https://ivp.inside.ups.com/internal-visibility-portal*
 // @grant        none
 // @run-at       document-idle
-// @updateURL    https://raw.githubusercontent.com/Jerry199022/Work/refs/heads/main/IVP Receiver.js
-// @downloadURL  https://raw.githubusercontent.com/Jerry199022/Work/refs/heads/main/IVP Receiver.js
+// @updateURL    https://raw.githubusercontent.com/Jerry199022/Work/refs/heads/main/IVPReceiver.js
+// @downloadURL  https://raw.githubusercontent.com/Jerry199022/Work/refs/heads/main/IVPReceiver.js
 // ==/UserScript==
 
 (function() {
