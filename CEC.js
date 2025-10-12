@@ -10,8 +10,8 @@
 // @grant        GM_registerMenuCommand
 // @grant        GM_addStyle
 // @run-at       document-idle
-// @updateURL    https://raw.githubusercontent.com/Jerry199022/Work/refs/heads/main/CEC
-// @downloadURL  https://raw.githubusercontent.com/Jerry199022/Work/refs/heads/main/CEC
+// @updateURL    https://raw.githubusercontent.com/Jerry199022/Work/refs/heads/main/CEC.js
+// @downloadURL  https://raw.githubusercontent.com/Jerry199022/Work/refs/heads/main/CEC.js
 // @grant        none
 
 // ==/UserScript==
