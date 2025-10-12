@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         IVP 接收器
 // @namespace    IVP Receiver
-// @version      V7
+// @version      V6
 // @description  監聽 postMessage，在異步任務完成後回發確認，自動進行搜索
-// @author       Jerry Law (優化 by Gemini)
+// @author       Jerry Law
 // @match        https://ivp.inside.ups.com/internal-visibility-portal*
 // @grant        none
 // @run-at       document-idle
