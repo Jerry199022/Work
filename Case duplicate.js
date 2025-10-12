@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Case查重
 // @namespace    Case duplicate
-// @version      V5
+// @version      V6
 // @description  自動加載所有Case，支持排序恢復，提供更強大的查重與排序功能，並採用多層次加載終止判斷機制。
 // @author       Jerry Law
 // @match        https://upsdrive.lightning.force.com/lightning/*
