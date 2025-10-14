@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CEC功能強化
 // @namespace    CEC Enhanced
-// @version      V46
+// @version      V47
 // @description  快捷操作按鈕、自動指派、IVP快速查詢、聯繫人彈窗優化、按鈕警示色、賬戶檢測、組件屏蔽、設置菜單、自動IVP查詢、URL精準匹配、快捷按鈕可編輯、(Related Cases)數據提取與增強排序功能、關聯案件提取器、回覆case快捷按鈕、全局暫停/恢復功能、性能優化。
 // @author       Jerry Law
 // @match        https://upsdrive.lightning.force.com/*
@@ -14,6 +14,11 @@
 // @downloadURL  https://raw.githubusercontent.com/Jerry199022/Work/refs/heads/main/CEC.js
 
 // ==/UserScript==
+/*
+V46 > 47
+修復內容：
+- Related Cases窗口縮放
+*/
 
 (function() {
     'use strict';
@@ -281,7 +286,7 @@
                     clearInterval(intervalId);
                     reject(new Error(`Timeout waiting for selector: ${selector}`));
                 }
-            }, 300); // 300ms: 輪詢間隔，平衡性能與響應速度。
+            }, 500); // 300ms: 輪詢間隔，平衡性能與響應速度。
         });
     }
 
@@ -3025,14 +3030,23 @@ async function clickTemplateOptionByTitle(templateTitle) {
          * @description 增強表格頭部，添加新的可排序列表頭。
          * @param {HTMLTableElement} table - 目標表格元素。
          */
-        enhanceTableHeaders(table) {
+                enhanceTableHeaders(table) {
             const headerRow = table.querySelector('thead tr');
             if (!headerRow || headerRow.dataset.enhanced) return;
             table.style.tableLayout = 'fixed';
             table.style.width = '100%';
+
+            // 遍歷所有現有的表頭
             headerRow.querySelectorAll('th').forEach(th => {
                 th.querySelector('.slds-resizable')?.remove();
                 th.classList.remove('slds-is-resizable');
+
+                // [新增修復] 找到內部 div 並重置其寬度，這是移除滾動條的關鍵
+                const innerFixedDiv = th.querySelector('.slds-cell-fixed');
+                if (innerFixedDiv) {
+                    innerFixedDiv.style.width = 'auto';
+                }
+
                 const thDataId = th.getAttribute('data-id');
                 const colDef = this.columnDefinitions.find(c => c.dataId && c.dataId === thDataId);
                 if (colDef) {
@@ -3040,11 +3054,19 @@ async function clickTemplateOptionByTitle(templateTitle) {
                     th.style.width = `${colDef.defaultWidth}px`;
                 }
             });
+
             const newHeaders = [];
             this.columnDefinitions.filter(c => c.isAdded).reverse().forEach(col => {
                 const header = headerRow.children[2].cloneNode(true);
                 header.querySelector('.slds-resizable')?.remove();
                 header.classList.remove('slds-is-resizable');
+
+                // [新增修復] 同樣對克隆出的新表頭應用寬度重置修復
+                const innerFixedDiv = header.querySelector('.slds-cell-fixed');
+                if (innerFixedDiv) {
+                    innerFixedDiv.style.width = 'auto';
+                }
+
                 const anchor = header.querySelector('a');
                 anchor.innerHTML = `<span class="slds-truncate">${col.title}</span><span class="gm-sort-icon"></span>`;
                 anchor.classList.add('gm-sortable-header');
@@ -3233,7 +3255,7 @@ async function clickTemplateOptionByTitle(templateTitle) {
      * @param {string} caseUrl - 當前Case頁面的URL，用於標記處理狀態。
      */
     function startHighFrequencyScanner(caseUrl) {
-        const SCAN_INTERVAL = 150; // 150ms: 掃描器輪詢間隔，用於快速檢測頁面元素。
+        const SCAN_INTERVAL = 300; // 150ms: 掃描器輪詢間隔，用於快速檢測頁面元素。
         const MASTER_TIMEOUT = 15000; // 15000ms: 掃描器的總運行超時，防止無限運行。
         const startTime = Date.now();
 
