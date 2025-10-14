@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CEC功能強化
 // @namespace    CEC Enhanced
-// @version      V45
+// @version      V46
 // @description  快捷操作按鈕、自動指派、IVP快速查詢、聯繫人彈窗優化、按鈕警示色、賬戶檢測、組件屏蔽、設置菜單、自動IVP查詢、URL精準匹配、快捷按鈕可編輯、(Related Cases)數據提取與增強排序功能、關聯案件提取器、回覆case快捷按鈕、全局暫停/恢復功能、性能優化。
 // @author       Jerry Law
 // @match        https://upsdrive.lightning.force.com/*
@@ -1440,7 +1440,7 @@
         document.getElementById('add-new-button').addEventListener('click', () => {
             const newButton = {
                 id: `btn-${Date.now()}`,
-                name: "新按鈕",
+                name: "NEW",
                 category: [""],
                 subCategory: [""],
                 role: [""]
@@ -1521,6 +1521,8 @@
         editModal.innerHTML = `<div class="cec-edit-modal-content">${formHTML}</div>`;
         modalContainer.appendChild(editModal);
         const tempButton = JSON.parse(JSON.stringify(button));
+
+        // 監聽輸入框內容變化，同步到臨時數據對象
         editModal.addEventListener('input', (e) => {
             if (e.target.tagName === 'INPUT') {
                 const field = e.target.dataset.field;
@@ -1533,16 +1535,72 @@
                 }
             }
         });
+
+        // [FIXED] 監聽點擊事件，處理選項的添加與刪除
         editModal.addEventListener('click', (e) => {
-            if (e.target.classList.contains('cec-settings-add-option')) {}
-            if (e.target.classList.contains('cec-settings-remove-option')) {}
+            // 處理添加新選項
+            if (e.target.classList.contains('cec-settings-add-option')) {
+                e.preventDefault();
+                const wrapper = e.target.closest('.input-wrapper');
+                const field = wrapper.dataset.wrapperFor;
+
+                // 確保臨時數據中的對應字段是數組
+                if (!Array.isArray(tempButton[field])) {
+                    tempButton[field] = [];
+                }
+                const newIndex = tempButton[field].length;
+                tempButton[field].push(''); // 在臨時數據中添加一個空字符串
+
+                // 在DOM中創建並插入新的輸入行
+                const newRow = document.createElement('div');
+                newRow.className = 'input-row';
+                newRow.innerHTML = `<input type="text" data-field="${field}" data-index="${newIndex}" value=""><button class="cec-settings-remove-option">-</button>`;
+                wrapper.insertBefore(newRow, e.target);
+            }
+
+            // 處理刪除選項
+            if (e.target.classList.contains('cec-settings-remove-option')) {
+                e.preventDefault();
+                const rowToRemove = e.target.closest('.input-row');
+                const input = rowToRemove.querySelector('input');
+                const field = input.dataset.field;
+                const indexToRemove = parseInt(input.dataset.index, 10);
+
+                // 從臨時數據中移除對應項
+                if (Array.isArray(tempButton[field])) {
+                    tempButton[field].splice(indexToRemove, 1);
+                }
+
+                // 從DOM中移除該行
+                const wrapper = rowToRemove.parentElement;
+                rowToRemove.remove();
+
+                // 嚴謹性校驗：重新整理後續兄弟節點的 data-index 屬性，確保數據一致性
+                const remainingRows = wrapper.querySelectorAll('.input-row');
+                remainingRows.forEach((row, newIndex) => {
+                    // 只更新被刪除項之後的元素索引
+                    if (newIndex >= indexToRemove) {
+                         row.querySelector('input').dataset.index = newIndex;
+                    }
+                });
+            }
         });
+
+        // 保存按鈕邏輯
         editModal.querySelector('#save-edit').addEventListener('click', () => {
+            // 過濾掉所有字段中的空字符串選項
+            Object.keys(tempButton).forEach(key => {
+                if (Array.isArray(tempButton[key])) {
+                    tempButton[key] = tempButton[key].filter(item => item.trim() !== '');
+                }
+            });
             Object.assign(button, tempButton);
             saveFn();
             onSaveCallback();
             editModal.remove();
         });
+
+        // 取消按鈕邏輯
         editModal.querySelector('#cancel-edit').addEventListener('click', () => {
             editModal.remove();
         });
@@ -1605,39 +1663,137 @@
     }
 
     /**
-     * @description 根據模板標題自動點擊對應的模板選項。
-     * @param {string} templateTitle - 要點擊的模板的完整標題。
-     * @returns {Promise<void>}
+     * @description 處理編輯器加載完畢後的模板快捷按鈕注入流程。
+     *              此函數被設計為可複用，由 'Compose' 和 'Reply All' 的點擊事件觸發。
      */
-    async function clickTemplateOptionByTitle(templateTitle) {
-        const BUTTON_ICON_SELECTOR = 'lightning-icon[icon-name="utility:insert_template"]';
-        const MENU_ITEM_SELECTOR = `li.uiMenuItem a[role="menuitem"][title="${templateTitle}"]`;
-        const TIMEOUT = 5000; // 5000ms: 等待模板菜單相關元素出現的超時。
-        let clickableButton = null;
+    async function handleEditorReadyForTemplateButtons() {
         try {
-            const iconElement = await waitForElementWithObserver(document.body, BUTTON_ICON_SELECTOR, TIMEOUT);
-            clickableButton = iconElement.closest('a[role="button"]');
-            if (!clickableButton) throw new Error('未能找到 "插入模板" 按鈕。');
-            if (clickableButton.getAttribute('aria-expanded') !== 'true') {
-                clickableButton.click();
-                await waitForAttributeChange(clickableButton, 'aria-expanded', 'true', TIMEOUT);
+            // 1. 等待富文本編輯器核心組件加載完成
+            const editor = await waitForElementWithObserver(document.body, ".slds-rich-text-editor .tox-tinymce", 15000);
+
+            // 2. 根據用戶設置調整編輯器高度
+            const desiredHeight = GM_getValue("richTextEditorHeight", DEFAULTS.richTextEditorHeight) + "px";
+            if (editor.style.height !== desiredHeight) {
+                editor.style.height = desiredHeight;
+                Logger.info('UI.heightAdjust', `[SUCCESS] - 回覆編輯器高度已根據設置調整為 ${desiredHeight}。`);
             }
-            const menuId = clickableButton.getAttribute('aria-controls');
-            if (!menuId) throw new Error('缺少 aria-controls 屬性。');
-            const menuContainer = await waitForElementWithObserver(document.body, `[id="${menuId}"]`, TIMEOUT);
-            const targetOption = findElementInShadows(menuContainer, MENU_ITEM_SELECTOR);
-            if (targetOption) {
-                targetOption.click();
-            } else {
-                throw new Error(`在菜單中未找到標題為 "${templateTitle}" 的選項。`);
+
+            // 3. 異步獲取所有可用的模板選項
+            const templates = await getAndLogTemplateOptions();
+
+            // 4. 如果成功獲取到模板，則執行注入
+            if (templates && templates.length > 1) {
+                // 尋找注入位置的錨點（'Popout'按鈕）
+                const anchorIcon = findElementInShadows(document.body, 'lightning-icon[icon-name="utility:new_window"]');
+                const anchorLi = anchorIcon ? anchorIcon.closest('li.cuf-attachmentsItem') : null;
+
+                if (anchorLi) {
+                    injectTemplateShortcutButtons(anchorLi, templates);
+                } else {
+                    Logger.warn('UI.templateShortcuts', `[FAIL] - 未能找到用於注入快捷按鈕的錨點元素 ("Popout" 按鈕)。`);
+                }
             }
         } catch (error) {
-            if (clickableButton && clickableButton.getAttribute('aria-expanded') === 'true') {
-                clickableButton.click();
-            }
-            throw error;
+            Logger.warn('UI.templateShortcuts', `[FAIL] - 初始化模板快捷按鈕時出錯: ${error.message}`);
         }
     }
+
+    /**
+ * @description 根據模板標題自動點擊對應的模板選項。
+ *              [增強版 v2.1] 在點擊前，會嘗試將光標移動到編輯器第三個頂層元素的位置，並在關鍵步驟間加入短暫延遲以提高穩定性。
+ * @param {string} templateTitle - 要點擊的模板的完整標題。
+ * @returns {Promise<void>}
+ */
+async function clickTemplateOptionByTitle(templateTitle) {
+    // 定義一個可重用的延遲函數，單位為毫秒
+    const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+    const BUTTON_ICON_SELECTOR = 'lightning-icon[icon-name="utility:insert_template"]';
+    const MENU_ITEM_SELECTOR = `li.uiMenuItem a[role="menuitem"][title="${templateTitle}"]`;
+    const EDITOR_IFRAME_SELECTOR = 'iframe.tox-edit-area__iframe';
+    const TIMEOUT = 5000;
+    let clickableButton = null;
+
+    try {
+        // --- START: 新增延遲 (定位前) ---
+        // 增加 50 毫秒延遲，確保之前的操作已完全渲染，為光標定位準備一個穩定的 DOM 環境。
+        await delay(10);
+        // --- END: 新增延遲 ---
+
+        // --- START: 光標定位邏輯 (定位到第三個元素) ---
+        try {
+            const iframe = findElementInShadows(document.body, EDITOR_IFRAME_SELECTOR);
+            if (iframe && iframe.contentDocument) {
+                iframe.contentWindow.focus(); // 確保iframe處於激活狀態
+                const editorDoc = iframe.contentDocument;
+                const editorBody = editorDoc.body;
+
+                // 核心判斷：確保至少有3個子元素
+                if (editorBody && editorBody.children && editorBody.children.length >= 3) {
+                    // 注意：JavaScript 集合的索引是從 0 開始的，所以第三個元素的索引是 2。
+                    // 您的原始代碼中使用了索引 3，這將會選取第四個元素。此處已為您修正為 2。
+                    const targetElement = editorBody.children[3]; // 獲取第三個子元素 (索引為 2)
+
+                    // 再次確認目標元素存在且為常見塊級元素
+                    if (targetElement && ['P', 'DIV', 'TABLE', 'UL', 'OL', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6'].includes(targetElement.tagName)) {
+                        const selection = iframe.contentWindow.getSelection();
+                        const range = editorDoc.createRange();
+
+                        // 將光標設置在目標元素的開頭
+                        range.setStart(targetElement, 0);
+                        range.collapse(true); // 折疊範圍，形成光標
+
+                        selection.removeAllRanges(); // 清除舊選區
+                        selection.addRange(range);   // 應用新光標位置
+
+                        Logger.info('UI.templateCursor', `[SUCCESS] - 光標已成功移動到編輯器第三個元素 (${targetElement.tagName}) 的起始位置。`);
+                    } else {
+                        Logger.warn('UI.templateCursor', `[SKIP] - 第三個元素不存在或不是標準塊級元素，跳過光標移動。`);
+                    }
+                } else {
+                    Logger.warn('UI.templateCursor', `[SKIP] - 編輯器內容不足3個頂層元素，跳過光標移動。`);
+                }
+            }
+        } catch (cursorError) {
+            Logger.error('UI.templateCursor', `[FAIL] - 嘗試移動光標時發生錯誤: ${cursorError.message}`);
+            // 即使光標移動失敗，也要繼續執行模板插入
+        }
+        // --- END: 光標定位邏輯 ---
+
+        // --- START: 新增延遲 (定位後，插入前) ---
+        // 增加 50 毫秒延遲，確保光標定位操作完成後，UI 狀態穩定，再執行後續的點擊操作。
+        await delay(10);
+        // --- END: 新增延遲 ---
+
+        const iconElement = await waitForElementWithObserver(document.body, BUTTON_ICON_SELECTOR, TIMEOUT);
+        clickableButton = iconElement.closest('a[role="button"]');
+        if (!clickableButton) throw new Error('未能找到 "插入模板" 按鈕。');
+
+        if (clickableButton.getAttribute('aria-expanded') !== 'true') {
+            clickableButton.click();
+            await waitForAttributeChange(clickableButton, 'aria-expanded', 'true', TIMEOUT);
+        }
+
+        const menuId = clickableButton.getAttribute('aria-controls');
+        if (!menuId) throw new Error('缺少 aria-controls 屬性。');
+
+        const menuContainer = await waitForElementWithObserver(document.body, `[id="${menuId}"]`, TIMEOUT);
+        const targetOption = findElementInShadows(menuContainer, MENU_ITEM_SELECTOR);
+
+        if (targetOption) {
+            targetOption.click();
+        } else {
+            throw new Error(`在菜單中未找到標題為 "${templateTitle}" 的選項。`);
+        }
+    } catch (error) {
+        Logger.error('UI.templateShortcuts', `[FAIL] - 執行模板插入時出錯: ${error.message}`);
+        if (clickableButton && clickableButton.getAttribute('aria-expanded') === 'true') {
+            // 在出錯時，嘗試關閉已打開的菜單，恢復UI狀態
+            clickableButton.click();
+        }
+        throw error;
+    }
+}
 
     /**
      * @description 根據模板列表，在指定位置注入快捷按鈕。
@@ -1677,7 +1833,7 @@
                 width: '100px',
                 height: '25px',
                 padding: '0 8px',
-                fontSize: '12px',
+                fontSize: '13px',
                 backgroundColor: '#0070d2',
                 color: '#ffffff',
                 border: '1px solid #0070d2',
@@ -1933,34 +2089,42 @@
      * @returns {Promise<boolean>} 如果成功選擇則返回 true。
      */
     async function safeClickWithOptions(modalRoot, buttonSelector, itemValues) {
-        const options = Array.isArray(itemValues) ? itemValues.filter(Boolean) : [itemValues].filter(Boolean);
-        if (options.length === 0) return true;
+        // [FIXED] 調整過濾邏輯，僅排除 null 和 undefined，保留空字符串 ""
+        if (!itemValues || !Array.isArray(itemValues)) {
+            return true; // 如果沒有提供值或格式不對，則靜默成功
+        }
+        const options = itemValues.filter(item => item !== null && item !== undefined);
+        if (options.length === 0) {
+            return true; // 如果過濾後沒有可選項，也視為成功
+        }
+
         for (const option of options) {
             try {
                 const itemSelector = `lightning-base-combobox-item[data-value="${option}"]`;
+                // 增加重試機制以應對UI延遲
                 for (let i = 0; i < 2; i++) { // 重試2次
                     try {
-                        const button = await waitForElementWithObserver(modalRoot, buttonSelector, 10); // 10ms: 快速查找按鈕。
-                        button.dispatchEvent(new MouseEvent("click", {
-                            bubbles: true
-                        }));
-                        await new Promise(resolve => setTimeout(resolve, 5)); // 5ms: 極短延遲等待事件處理。
-                        const item = await waitForElementWithObserver(document.body, itemSelector, 10); // 10ms: 快速查找選項。
-                        item.dispatchEvent(new MouseEvent("click", {
-                            bubbles: true
-                        }));
-                        await new Promise(resolve => setTimeout(resolve, 5)); // 5ms: 極短延遲等待UI反應。
-                        return true;
+                        const button = await waitForElementWithObserver(modalRoot, buttonSelector, 10); // 100ms: 快速查找按鈕
+                        button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+                        await new Promise(resolve => setTimeout(resolve, 5)); // 50ms: 增加短暫延遲等待菜單渲染
+
+                        const item = await waitForElementWithObserver(document.body, itemSelector, 10); // 100ms: 快速查找選項
+                        item.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+                        await new Promise(resolve => setTimeout(resolve, 5)); // 50ms: 點擊後的UI反應延遲
+                        return true; // 只要有一個選項成功，就立即返回
                     } catch (error) {
-                        if (i === 1) throw error;
+                        if (i === 1) throw error; // 最後一次嘗試失敗則拋出異常
+                        // 嘗試關閉可能已打開的下拉菜單以重置狀態
                         document.body.click();
-                        await new Promise(resolve => setTimeout(resolve, 5)); // 5ms: 極短延遲等待UI反應。
+                        await new Promise(resolve => setTimeout(resolve, 5));
                     }
                 }
             } catch (error) {
+                Logger.warn('UI.safeClick', `[SKIP] - 選擇選項 "${option}" 失敗，將嘗試下一個備選項。錯誤: ${error.message}`);
                 // 忽略單個選項的失敗，繼續嘗試下一個
             }
         }
+        // 如果所有備選選項都失敗了，則拋出一個匯總的錯誤
         throw new Error(`所有備選選項 [${options.join(', ')}] 都選擇失敗`);
     }
 
@@ -2583,21 +2747,42 @@
 
     /**
      * @description 檢查計時器狀態，如果案件已超期，則將 "Compose" 按鈕標紅。
+     *              [v45.1 修復版] 增加了內部輪詢機制，以解決計時器與按鈕的異步加載競爭問題。
      */
     function checkAndColorComposeButton() {
-        const timerTextEl = findElementInShadows(document.body, ".milestoneTimerText");
-        const composeButton = findElementInShadows(document.body, "button.testid__dummy-button-submit-action");
-        if (!composeButton) return;
-        const isOverdue = timerTextEl && timerTextEl.textContent.includes("overdue");
-        const isAlreadyRed = composeButton.style.backgroundColor === "red";
-        if (isOverdue && !isAlreadyRed) {
-            composeButton.style.backgroundColor = "red";
-            composeButton.style.color = "white";
-            Logger.info('UI.buttonAlert', `[SUCCESS] - "Compose" 按鈕已因計時器超期標紅。`);
-        } else if (!isOverdue && isAlreadyRed) {
-            composeButton.style.backgroundColor = "";
-            composeButton.style.color = "";
-        }
+        const MAX_ATTEMPTS = 15;      // 最多嘗試15次
+        const POLL_INTERVAL_MS = 200; // 每200毫秒嘗試一次 (總計最多等待 3 秒)
+        let attempts = 0;
+
+        const poller = setInterval(() => {
+            const composeButton = findElementInShadows(document.body, "button.testid__dummy-button-submit-action");
+
+            // 停止條件：找到按鈕 或 達到最大嘗試次數
+            if (composeButton || attempts >= MAX_ATTEMPTS) {
+                clearInterval(poller); // 無論結果如何，都停止輪詢
+
+                if (!composeButton) {
+                    Logger.warn('UI.buttonAlert', '[FAIL] - "Compose" 按鈕高亮檢查終止，在 3 秒內未找到按鈕元素。');
+                    return;
+                }
+
+                // 找到按鈕後，執行原始的高亮邏輯
+                const timerTextEl = findElementInShadows(document.body, ".milestoneTimerText");
+                const isOverdue = timerTextEl && timerTextEl.textContent.includes("overdue");
+                const isAlreadyRed = composeButton.style.backgroundColor === "red";
+
+                if (isOverdue && !isAlreadyRed) {
+                    composeButton.style.backgroundColor = "red";
+                    composeButton.style.color = "white";
+                    Logger.info('UI.buttonAlert', `[SUCCESS] - "Compose" 按鈕已因計時器超期標紅。`);
+                } else if (!isOverdue && isAlreadyRed) {
+                    // 如果狀態恢復正常，則移除高亮
+                    composeButton.style.backgroundColor = "";
+                    composeButton.style.color = "";
+                }
+            }
+            attempts++;
+        }, POLL_INTERVAL_MS);
     }
 
     /**
@@ -3326,45 +3511,39 @@
     function initGlobalClickListener() {
         document.body.addEventListener('click', (event) => {
             if (isScriptPaused) return;
+
+            // --- START: 增強部分 (增加 'Write an email...' 觸發點) ---
+            // 檢查點擊的是否為 "Compose", "Reply All", 或 "Write an email..." 按鈕
             const composeButton = event.target.closest('button.testid__dummy-button-submit-action');
-            if (composeButton) {
+            const replyAllButton = event.target.closest('a[title="Reply All"]');
+            const writeEmailButton = event.target.closest('button[title="Write an email..."]'); // 新增的觸發點檢測
+
+            // 如果是其中任意一個按鈕，則觸發模板按鈕注入流程
+            if (composeButton || replyAllButton || writeEmailButton) {
+                let triggerName = '"Unknown"';
+                if (composeButton) triggerName = '"Compose"';
+                if (replyAllButton) triggerName = '"Reply All"';
+                if (writeEmailButton) triggerName = '"Write an email..."';
+
+                Logger.info('UI.templateShortcuts', `[TRIGGER] - 檢測到 ${triggerName} 按鈕點擊，準備注入模板快捷按鈕。`);
+
+                // 使用短暫延遲以確保編輯器容器開始渲染
                 setTimeout(() => {
-                    waitForElementWithObserver(document.body, ".slds-rich-text-editor .tox-tinymce", 15000) // 15000ms: 等待富文本編輯器出現的超時。
-                        .then(async (editor) => {
-                            const desiredHeight = GM_getValue("richTextEditorHeight", DEFAULTS.richTextEditorHeight) + "px";
-                            if (editor.style.height !== desiredHeight) {
-                                editor.style.height = desiredHeight;
-                                Logger.info('UI.heightAdjust', `[SUCCESS] - 界面元素高度已根據設置調整 (描述框/歷史列表/編輯器)。`);
-                            }
-                            try {
-                                const templates = await getAndLogTemplateOptions();
-                                if (templates && templates.length > 1) {
-                                    const anchorIcon = findElementInShadows(document.body, 'lightning-icon[icon-name="utility:new_window"]');
-                                    const anchorLi = anchorIcon ? anchorIcon.closest('li.cuf-attachmentsItem') : null;
-                                    if (anchorLi) {
-                                        injectTemplateShortcutButtons(anchorLi, templates);
-                                    } else {
-                                        Logger.warn('UI.templateShortcuts', `[FAIL] - 未能找到用於注入快捷按鈕的錨點元素 ("Popout" 按鈕)。`);
-                                    }
-                                }
-                            } catch (e) {
-                                // 忽略錯誤
-                            }
-                        })
-                        .catch(error => {
-                            // 忽略錯誤
-                        });
-                }, 100); // 100ms: 點擊後等待編輯器加載的延遲。
+                    handleEditorReadyForTemplateButtons(); // 調用統一的可複用函數
+                }, 100);
             }
+            // --- END: 增強部分 ---
+
             const associateButton = event.target.closest('button[title="Associate Contact"], a[title="Associate Contact"]');
             if (associateButton) {
-                waitForElementWithObserver(document.body, '.slds-modal__container', 10000).then(modal => { // 10000ms: 等待關聯聯繫人彈窗出現的超時。
+                waitForElementWithObserver(document.body, '.slds-modal__container', 10000).then(modal => {
                     processAssociateContactModal(modal);
                 }).catch(error => {
                     // 忽略錯誤
                 });
                 return;
             }
+
             const ivpButton = event.target.closest('.custom-s-button');
             if (ivpButton) {
                 const row = ivpButton.closest('tr');
