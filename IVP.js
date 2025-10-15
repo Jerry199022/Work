@@ -22,10 +22,12 @@
     'use strict';
 
     // ================================================================
-    // 替換數據
+    // 注釋數據
     // ================================================================
     const annotationsText = `
-#Internal Visibility Portal|注釋版 V5.0
+#REROUTE|改變原定的運送路線
+#INCOMPL DOC|清關文件不完整
+#NOT CLR ABND|棄件
 #DEPARTURE SCAN|轉運離開掃描
 #ASSESS RTN|評估後退運
 #UPS INT COMP|攔截送貨請求已完成
@@ -749,7 +751,9 @@
 #MC|摩納哥
 #FL|列支敦士登
 #GW|幾內亞比索
-#CZECHIA|捷克
+@AW|阿鲁巴
+#ARUBA|阿鲁巴 - AW
+#CZECHIA|捷克 - CZ
 #CONGO, THE DEMOCRATIC REPUBLIC OF|剛果 - CG
 #TANZANIA, UNITED REPUBLIC OF|坦尚尼亞 - TZ
 #MAYOTTE|馬約特島 - YT
@@ -1110,6 +1114,7 @@ PACKAGE WAS DRIVER RELEASED
                 /* 基礎隱藏與樣式微調 */
                 app-ivp-pd-trackingno-detail .ng-star-inserted > .row,
                 app-root > .ng-star-inserted > .row,
+                .ng-star-inserted.h5tracking, /* [增量添加] 在此處新增需要屏蔽的元素 */
                 .footer { display: none !important; }
 
                 /* 極度壓縮表格行高 */
@@ -1286,7 +1291,7 @@ PACKAGE WAS DRIVER RELEASED
             <div id="ivp-settings-modal" class="ivp-settings-backdrop">
                 <div class="ivp-settings-content">
                     <div class="ivp-settings-header">
-                        <h2>IVP 腳本設定 (v5.2.1)</h2>
+                        <h2>IVP 腳本設定</h2>
                         <button id="ivp-settings-close" title="關閉">&times;</button>
                     </div>
                     <div class="ivp-settings-body">
