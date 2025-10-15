@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         CEC功能強化
 // @namespace    CEC Enhanced
-// @version      V47
-// @description  快捷操作按鈕、自動指派、IVP快速查詢、聯繫人彈窗優化、按鈕警示色、賬戶檢測、組件屏蔽、設置菜單、自動IVP查詢、URL精準匹配、快捷按鈕可編輯、(Related Cases)數據提取與增強排序功能、關聯案件提取器、回覆case快捷按鈕、全局暫停/恢復功能、性能優化。
+// @version      V48
+// @description  快捷操作按鈕、自動指派、IVP快速查詢、聯繫人彈窗優化、按鈕警示色、賬戶檢測、組件屏蔽、設置菜單、自動IVP查詢、URL精準匹配、快捷按鈕可編輯、(Related Cases)數據提取與增強排序功能、關聯案件提取器、回覆case快捷按鈕、全局暫停/恢復功能。
 // @author       Jerry Law
 // @match        https://upsdrive.lightning.force.com/*
 // @grant        GM_setValue
@@ -15,9 +15,12 @@
 
 // ==/UserScript==
 /*
-V46 > 47
-修復內容：
-- Related Cases窗口縮放
+V47 > 48
+更新內容：
+- 優化Related Cases窗口縮放
+- Related Cases列表 點擊複製Case Owner名
+- 加強追蹤號提取
+- 優化性能
 */
 
 (function() {
@@ -201,6 +204,7 @@ V46 > 47
     let foundTrackingNumber = null;
     let ivpWindowHandle = null;
     let globalToastTimer = null;
+    let globalScannerId = null; // [新增] 全局掃描器實例句柄，確保任何時候只有一個掃描器在運行
     const processedModals = new WeakSet();
     const processedCaseUrlsInSession = new Set();
     let injectedIWTButtons = {};
@@ -1861,21 +1865,54 @@ async function clickTemplateOptionByTitle(templateTitle) {
 
     /**
      * @description 從頁面中提取追踪號碼，並觸發自動IVP查詢（如果已啟用）。
+     *              [v45.6 精簡日誌版] 使用激進查找模式，並保持控制台輸出簡潔。
      */
     async function extractTrackingNumberAndTriggerIVP() {
         const trackingRegex = /(1Z[A-Z0-9]{16})/;
-        const selector = 'td[data-label="IDENTIFIER VALUE"] a, a[href*="/lightning/r/Shipment_Identifier"]';
+        const selector = 'td[data-label="IDENTIFIER VALUE"]';
+
+        // 保留的日誌：標記功能開始執行
+        Logger.info('IVP.autoQuery', `[START] - 開始查找追踪號...`);
+
+        const pollForElementAggressively = (timeout = 15000) => {
+            return new Promise((resolve, reject) => {
+                const startTime = Date.now();
+                const intervalId = setInterval(() => {
+                    const el = findElementInShadows_Aggressive(document.body, selector);
+                    if (el) {
+                        clearInterval(intervalId);
+                        resolve(el);
+                        return;
+                    }
+                    if (Date.now() - startTime > timeout) {
+                        clearInterval(intervalId);
+                        reject(new Error(`Timeout waiting for selector (aggressive mode): ${selector}`));
+                    }
+                }, 300);
+            });
+        };
+
         try {
-            const element = await waitForElement(document.body, selector, 10000); // 10000ms: 等待追踪號元素出現的超時。
-            if (element && element.textContent) {
-                const match = element.textContent.trim().match(trackingRegex);
+            const element = await pollForElementAggressively();
+            const trackingValue = element.dataset.cellValue;
+
+            if (trackingValue) {
+                const match = trackingValue.trim().match(trackingRegex);
                 if (match) {
                     foundTrackingNumber = match[0];
+                    // 保留的日誌：標記功能成功完成
+                    Logger.info('IVP.autoQuery', `[SUCCESS] - 成功匹配並存儲追踪號: ${foundTrackingNumber}`);
                     autoQueryIVPOnLoad();
+                } else {
+                    // 失敗情況的日誌仍然保留，用於問題排查
+                    Logger.warn('IVP.autoQuery', `[FAIL] - 獲取的值 "${trackingValue}" 不符合追踪號格式。`);
                 }
+            } else {
+                Logger.warn('IVP.autoQuery', `[FAIL] - 找到的目標元素缺少 'data-cell-value' 屬性。`);
             }
         } catch (error) {
-            Logger.warn('IVP.autoQuery', `[SKIP] - 未在頁面中找到追踪號，自動查詢中止。`);
+            // 查找超時的日誌也保留，因為這是功能未執行的關鍵信息
+            Logger.warn('IVP.autoQuery', `[SKIP] - 等待追踪號元素超時或失敗，自動查詢中止。`);
         }
     }
 
@@ -1903,7 +1940,7 @@ async function clickTemplateOptionByTitle(templateTitle) {
                 injectIWantToButtons(anchorElement);
             }
         };
-        iwtModuleObserver = new MutationObserver(debounce(checkAndReInject, 100)); // 100ms: 防抖延遲，處理組件快速刷新的情況，避免性能問題。
+        iwtModuleObserver = new MutationObserver(debounce(checkAndReInject, 200)); // 100ms: 防抖延遲，處理組件快速刷新的情況，避免性能問題。
         iwtModuleObserver.observe(document.body, {
             childList: true,
             subtree: true
@@ -2566,8 +2603,8 @@ async function clickTemplateOptionByTitle(templateTitle) {
             }
             let ownerElement, currentOwner;
             try {
-                const preciseOwnerSelector = 'force-owner-lookup records-hoverable-link a';
-                ownerElement = await waitForElementWithObserver(ownerBlock, preciseOwnerSelector, 15000); // 15000ms: 等待所有者姓名元素出現的超時。
+               const preciseOwnerSelector = 'force-owner-lookup .owner-name span';
+                ownerElement = await waitForElementWithObserver(ownerBlock, preciseOwnerSelector, 10000); // 15000ms: 等待所有者姓名元素出現的超時。
                 currentOwner = ownerElement?.innerText?.trim() || '';
             } catch (err) {
                 Logger.error('AutoAssign.execute', `[FAIL] - 查找 "Case Owner" 姓名元素時發生錯誤或超時。`);
@@ -2582,7 +2619,7 @@ async function clickTemplateOptionByTitle(templateTitle) {
             }
             let assignButton;
             try {
-                assignButton = await waitForElementWithObserver(document.body, 'button[title="Assign Case to Me"]', 20000); // 20000ms: 等待指派按鈕出現的超時。
+                assignButton = await waitForElementWithObserver(document.body, 'button[title="Assign Case to Me"]', 100000); // 20000ms: 等待指派按鈕出現的超時。
             } catch (err) {
                 Logger.error('AutoAssign.execute', `[FAIL] - 查找 "Assign Case to Me" 按鈕時發生錯誤或超時。`);
                 return;
@@ -2755,8 +2792,8 @@ async function clickTemplateOptionByTitle(templateTitle) {
      *              [v45.1 修復版] 增加了內部輪詢機制，以解決計時器與按鈕的異步加載競爭問題。
      */
     function checkAndColorComposeButton() {
-        const MAX_ATTEMPTS = 15;      // 最多嘗試15次
-        const POLL_INTERVAL_MS = 200; // 每200毫秒嘗試一次 (總計最多等待 3 秒)
+        const MAX_ATTEMPTS = 20;      // 最多嘗試20次
+        const POLL_INTERVAL_MS = 500; // 每500毫秒嘗試一次 (總計最多等待 3 秒)
         let attempts = 0;
 
         const poller = setInterval(() => {
@@ -2808,44 +2845,60 @@ async function clickTemplateOptionByTitle(templateTitle) {
     }
 
     /**
-     * @description 異步確定當前 Case 的狀態（打開、關閉或未知）。
-     * @returns {Promise<'ACTIVE_OR_NEW'|'CLOSED'|'UNKNOWN'>} 解析為案件狀態的字符串。
-     */
-    function determineCaseStatus() {
-        return new Promise((resolve) => {
-            const timeout = 15000; // 15000ms: 等待狀態字段出現的超時。
-            let timeoutHandle = setTimeout(() => {
-                observer.disconnect();
-                Logger.error('AutoAssign.preCheck', `[FAIL] - 確定 Case 狀態時超時或失敗。`);
-                resolve('UNKNOWN');
-            }, timeout);
-            const observer = new MutationObserver(() => {
-                if (isScriptPaused) return;
-                const highlightItems = findAllElementsInShadows(document.body, 'records-highlights-details-item');
-                for (const item of highlightItems) {
-                    const fullText = item.innerText;
-                    if (fullText && fullText.includes('Current Status')) {
-                        if (fullText.includes('In Progress') || fullText.includes('New')) {
-                            clearTimeout(timeoutHandle);
-                            observer.disconnect();
-                            resolve('ACTIVE_OR_NEW');
-                            return;
-                        }
-                        if (fullText.includes('Closed')) {
-                            clearTimeout(timeoutHandle);
-                            observer.disconnect();
-                            resolve('CLOSED');
-                            return;
-                        }
+ * @description 異步確定當前 Case 的狀態（打開、關閉或未知）。
+ *              [v45.2 修復版] 採用 "立即檢查，若無則監聽" 模式，以適應SPA導航。
+ * @returns {Promise<'ACTIVE_OR_NEW'|'CLOSED'|'UNKNOWN'>} 解析為案件狀態的字符串。
+ */
+function determineCaseStatus() {
+    return new Promise((resolve) => {
+        const checkStatus = () => {
+            const highlightItems = findAllElementsInShadows(document.body, 'records-highlights-details-item');
+            for (const item of highlightItems) {
+                const fullText = item.innerText;
+                if (fullText && fullText.includes('Current Status')) {
+                    if (fullText.includes('In Progress') || fullText.includes('New')) {
+                        return 'ACTIVE_OR_NEW';
+                    }
+                    if (fullText.includes('Closed')) {
+                        return 'CLOSED';
                     }
                 }
-            });
-            observer.observe(document.body, {
-                childList: true,
-                subtree: true
-            });
+            }
+            return null; // 返回 null 表示未找到
+        };
+
+        // 步驟 1: 立即執行一次檢查
+        const initialStatus = checkStatus();
+        if (initialStatus) {
+            resolve(initialStatus);
+            Logger.info('AutoAssign.preCheck', `[SUCCESS] - 已找到。`);
+            return;
+        }
+
+        // 步驟 2: 如果立即檢查未找到，則啟動觀察器
+        const timeout = 15000; // 15000ms: 等待狀態字段出現的超時。
+        let timeoutHandle = setTimeout(() => {
+            observer.disconnect();
+            Logger.error('AutoAssign.preCheck', `[FAIL] - 確定 Case 狀態時超時或失敗。`);
+            resolve('UNKNOWN');
+        }, timeout);
+
+        const observer = new MutationObserver(() => {
+            if (isScriptPaused) return;
+            const currentStatus = checkStatus();
+            if (currentStatus) {
+                clearTimeout(timeoutHandle);
+                observer.disconnect();
+                resolve(currentStatus);
+            }
         });
-    }
+
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
+    });
+}
 
     /**
      * @description 檢查自動指派所需的關鍵字段（Category, Sub Category, Sub-Status）是否為空。
@@ -3186,6 +3239,7 @@ async function clickTemplateOptionByTitle(templateTitle) {
 
         /**
          * @description 創建一個新的表格單元格（td）。
+         *              [最終修正版] 為 'Case Owner' 列 (ID: 'owner') 增加了點擊複製功能和交互反饋。
          * @param {string} text - 單元格的文本內容。
          * @param {string} colId - 列的ID。
          * @returns {HTMLTableCellElement} 創建的單元格元素。
@@ -3193,7 +3247,42 @@ async function clickTemplateOptionByTitle(templateTitle) {
         createCell(text, colId) {
             const cell = document.createElement('td');
             cell.dataset.colId = colId;
-            cell.innerHTML = `<div class="slds-truncate" title="${text}">${text}</div>`;
+
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'slds-truncate';
+            contentDiv.textContent = text;
+            contentDiv.title = text;
+
+            // [核心修正] 根據用戶反饋，將目標ID從 'queue' 修正為 'owner'
+            if (colId === 'owner') {
+                contentDiv.style.cursor = 'pointer';
+                contentDiv.title = 'Click to copy Case Owner';
+
+                contentDiv.addEventListener('click', (event) => {
+                    event.stopPropagation();
+
+                    navigator.clipboard.writeText(text).then(() => {
+                        const originalText = text;
+                        contentDiv.textContent = '已複製！';
+                        contentDiv.style.color = '#0070d2';
+
+                        setTimeout(() => {
+                            contentDiv.textContent = originalText;
+                            contentDiv.style.color = '';
+                        }, 1500);
+                    }).catch(err => {
+                        Logger.error('RelatedCases.copy', `[FAIL] - 複製 "${text}" 失敗: ${err}`);
+                        const originalText = text;
+                        contentDiv.textContent = 'Copy Failed!';
+
+                        setTimeout(() => {
+                            contentDiv.textContent = originalText;
+                        }, 2000);
+                    });
+                });
+            }
+
+            cell.appendChild(contentDiv);
             return cell;
         },
 
@@ -3265,9 +3354,12 @@ async function clickTemplateOptionByTitle(templateTitle) {
         const processedElements = new WeakSet();
         Logger.info('Core.Scanner', `[START] - 高頻掃描器啟動，處理 ${tasksToRun.length} 個一次性任務。`);
 
-        const scannerId = setInterval(() => {
+        // [核心修改] 將創建的定時器ID賦值給全局句柄 globalScannerId
+        globalScannerId = setInterval(() => {
             if (isScriptPaused || tasksToRun.length === 0 || Date.now() - startTime > MASTER_TIMEOUT) {
-                clearInterval(scannerId);
+                // [核心修改] 使用全局句柄來清理定時器
+                clearInterval(globalScannerId);
+                globalScannerId = null; // [新增] 清理全局句柄狀態，確保其準確性
                 if (tasksToRun.length > 0) {
                     const unfinished = tasksToRun.map(t => t.id).join(', ');
                     Logger.warn('Core.Scanner', `[TIMEOUT] - 掃描器超時，仍有 ${tasksToRun.length} 個任務未完成: [${unfinished}]。`);
@@ -3635,15 +3727,25 @@ async function clickTemplateOptionByTitle(templateTitle) {
 
     /**
      * @description 監控URL的變化。當URL變化時，重置狀態並根據新的URL觸發相應的頁面初始化邏輯。
+     *              [優化版] 增加了“內容就緒守衛”機制，確保在核心UI渲染後再執行初始化。
      */
     async function monitorUrlChanges() {
         if (isScriptPaused) {
             return;
         }
         if (location.href === lastUrl) return;
+
+        // [核心修改] 在處理新頁面前，終止任何可能存在的舊掃描器
+        if (globalScannerId) {
+            clearInterval(globalScannerId);
+            Logger.info('Core.Scanner', `[CLEANUP] - 上一個頁面的掃描器 (ID: ${globalScannerId}) 已被終止。`);
+            globalScannerId = null;
+        }
+
         Logger.info('Core.Router', `[CHANGE] - URL 變更，開始處理新頁面: ${location.href}`);
         lastUrl = location.href;
 
+        // 狀態重置邏輯保持不變
         injectedIWTButtons = {};
         if (assignButtonObserver) assignButtonObserver.disconnect();
         if (iwtModuleObserver) iwtModuleObserver.disconnect();
@@ -3657,6 +3759,23 @@ async function clickTemplateOptionByTitle(templateTitle) {
 
         if (caseRecordPagePattern.test(location.href)) {
             const caseUrl = location.href;
+
+            // --- [新增] 內容就緒守衛機制 ---
+            const PAGE_READY_SELECTOR = 'c-cec-case-categorization';
+            const PAGE_READY_TIMEOUT = 20000; // 20秒: 等待核心UI出現的超時時間
+
+            try {
+                Logger.info('Core.Router', `[GATEKEEPER] - 等待頁面核心元素 "${PAGE_READY_SELECTOR}" 出現...`);
+                await waitForElementWithObserver(document.body, PAGE_READY_SELECTOR, PAGE_READY_TIMEOUT);
+                Logger.info('Core.Router', `[GATEKEEPER] - 核心元素已出現，開始執行頁面初始化。`);
+            } catch (error) {
+                Logger.warn('Core.Router', `[GATEKEEPER] - 等待核心元素超時 (${PAGE_READY_TIMEOUT / 1000}秒)，已中止當前頁面的初始化。這可能是由於頁面加載緩慢或頁面結構發生變化。`);
+                return; // 安全地中止執行，不進行後續操作
+            }
+            // --- 守衛機制結束 ---
+
+
+            // --- 所有初始化邏輯現在被保護在守衛之後 ---
             Logger.info('Core.Router', `[SUCCESS] - Case 頁面功能初始化完成。`);
             startHighFrequencyScanner(caseUrl);
             initModalButtonObserver();
