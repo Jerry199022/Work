@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CEC功能強化
 // @namespace    CEC Enhanced
-// @version      V48
+// @version      V49
 // @description  快捷操作按鈕、自動指派、IVP快速查詢、聯繫人彈窗優化、按鈕警示色、賬戶檢測、組件屏蔽、設置菜單、自動IVP查詢、URL精準匹配、快捷按鈕可編輯、(Related Cases)數據提取與增強排序功能、關聯案件提取器、回覆case快捷按鈕、全局暫停/恢復功能。
 // @author       Jerry Law
 // @match        https://upsdrive.lightning.force.com/*
@@ -15,12 +15,12 @@
 
 // ==/UserScript==
 /*
-V47 > 48
+V48 > 49
 更新內容：
-- 優化Related Cases窗口縮放
-- Related Cases列表 點擊複製Case Owner名
-- 加強追蹤號提取
-- 優化性能
+-優化回覆case框定位
+-優化插入模版後輸入框內容定位（默認關閉）
+-Close this Case（Auto）廢棄隱藏功能。恢復穩定。
+-添加"I Want To..."自動化按鈕評論文本設置
 */
 
 (function() {
@@ -89,12 +89,20 @@ V47 > 48
         richTextEditorHeight: 500,
         caseDescriptionHeight: 160,
         caseHistoryHeight: 208,
+        iwtAutoFillTexts: {
+            reOpen: 'Reopen',
+            closeCase: 'Close',
+            documentContact: 'Call customer and explaim'
+        },
         iWantToButtonStyles: {
             marginTop: '-7px',
             marginBottom: '5px',
             marginLeft: '0px',
             marginRight: '0px',
         },
+        // [新增] 模板插入優化功能的默認配置
+        postInsertionEnhancementsEnabled: false, // 模板插入後增強處理 (默認關閉)
+        cursorPositionBrIndex: 5,               // 光標定位到第5個<br>標籤前
         actionButtons: [{
             id: "btn-1",
             name: "運輸",
@@ -679,6 +687,9 @@ V47 > 48
     /**
      * @description 創建並向頁面注入腳本的設置菜單UI（HTML和CSS）。
      */
+    /**
+     * @description 創建並向頁面注入腳本的設置菜單UI（HTML和CSS）。
+     */
     function createSettingsUI() {
         if (document.getElementById('cec-settings-modal')) return;
 
@@ -686,7 +697,7 @@ V47 > 48
             <div id="cec-settings-modal" class="cec-settings-backdrop">
                 <div class="cec-settings-content">
                     <div class="cec-settings-header">
-                        <h2>腳本設定 By Jerry Law</h2>
+                        <h2>腳本設定</h2>
                         <button id="cec-settings-close" title="關閉">&times;</button>
                     </div>
                     <div class="cec-settings-body">
@@ -752,6 +763,14 @@ V47 > 48
                                     <div class="cec-settings-input-group"><input type="number" id="richTextEditorHeightInput" class="cec-settings-input"><span>px</span></div>
                                 </div>
                             </div>
+                            <!-- [位置調整] "窗口與流程" 板塊已從 "自動化" 標籤頁移動至此 -->
+                            <hr class="cec-settings-divider">
+                            <div class="cec-settings-section">
+                                <h3 class="cec-settings-section-title">窗口與流程</h3>
+                                <div class="cec-settings-option">
+                                    <div class="cec-settings-option-main"><label for="sentinelCloseToggle" class="cec-settings-label">關聯聯繫人後快速關閉窗口</label><label class="cec-settings-switch"><input type="checkbox" id="sentinelCloseToggle"><span class="cec-settings-slider"></span></label></div>
+                                </div>
+                            </div>
                         </div>
                         <div id="tab-automation" class="cec-settings-tab-content">
                             <div class="cec-settings-section">
@@ -766,11 +785,33 @@ V47 > 48
                                     <div class="cec-settings-option-main"><label for="blockIVPToggle" class="cec-settings-label">屏蔽原生IVP卡片自動加載</label><label class="cec-settings-switch"><input type="checkbox" id="blockIVPToggle"><span class="cec-settings-slider"></span></label></div>
                                 </div>
                             </div>
+                            <!-- [修改] 模板插入優化設置板塊 (已簡化) -->
+                            <div class="cec-settings-section">
+                                <h3 class="cec-settings-section-title">模板插入優化</h3>
+                                <div class="cec-settings-option">
+                                    <div class="cec-settings-option-main">
+                                        <label for="postInsertionEnhancementsToggle" class="cec-settings-label">啟用模板插入後增強處理</label>
+                                        <label class="cec-settings-switch"><input type="checkbox" id="postInsertionEnhancementsToggle"><span class="cec-settings-slider"></span></label>
+                                    </div>
+                                    <p class="cec-settings-description">啟用後，將自動附加智能粘貼、精準定位光標並應用視覺偏移。</p>
+                                </div>
+                                <div class="cec-settings-option">
+                                    <label for="cursorPositionInput" class="cec-settings-label">光標定位於第 N 個換行符前</label>
+                                    <input type="number" id="cursorPositionInput" class="cec-settings-input" style="width: 80px; margin-top: 4px;">
+                                    <p class="cec-settings-description">默認為 4。此設置僅在“增強處理”啟用時生效。</p>
+                                </div>
+                            </div>
                             <hr class="cec-settings-divider">
                             <div class="cec-settings-section">
-                                <h3 class="cec-settings-section-title">窗口與流程</h3>
-                                <div class="cec-settings-option">
-                                    <div class="cec-settings-option-main"><label for="sentinelCloseToggle" class="cec-settings-label">關聯聯繫人後快速關閉窗口</label><label class="cec-settings-switch"><input type="checkbox" id="sentinelCloseToggle"><span class="cec-settings-slider"></span></label></div>
+                                <h3 class="cec-settings-section-title">自動化評論文本</h3>
+                                <p class="cec-settings-description" style="margin-top:-12px; margin-bottom:12px;">為 "I Want To..." 自動化按鈕設置評論內容，留空則不輸入任何文本。</p>
+                                <div class="cec-settings-option-grid">
+                                    <label for="reOpenCommentInput">Re-Open Case</label>
+                                    <input type="text" id="reOpenCommentInput" class="cec-settings-input">
+                                    <label for="closeCaseCommentInput">Close this Case</label>
+                                    <input type="text" id="closeCaseCommentInput" class="cec-settings-input">
+                                    <label for="docContactCommentInput">Document Customer Contact</label>
+                                    <input type="text" id="docContactCommentInput" class="cec-settings-input">
                                 </div>
                             </div>
                         </div>
@@ -1195,7 +1236,7 @@ V47 > 48
             clearTimeout(toastTimer);
             toast.textContent = message;
             toast.classList.add('show');
-            toastTimer = setTimeout(() => toast.classList.remove('show'), 2000); // 2000ms: 設置保存提示的顯示時長。
+            toastTimer = setTimeout(() => toast.classList.remove('show'), 2000);
         };
 
         const tabs = modal.querySelectorAll('.cec-settings-tab-button');
@@ -1252,6 +1293,27 @@ V47 > 48
             const value = sentinelCloseToggle.checked;
             GM_setValue('sentinelCloseEnabled', value);
             Logger.info('Settings.save', `[SUCCESS] - 設置已保存: sentinelCloseEnabled = ${value}`);
+            showToast();
+        };
+
+        // [修正] 模板插入優化功能的設置邏輯 (已移除 visualOffsetToggle 相關代碼)
+        const postInsertionEnhancementsToggle = document.getElementById('postInsertionEnhancementsToggle');
+        postInsertionEnhancementsToggle.checked = GM_getValue('postInsertionEnhancementsEnabled', DEFAULTS.postInsertionEnhancementsEnabled);
+        postInsertionEnhancementsToggle.onchange = () => {
+            const value = postInsertionEnhancementsToggle.checked;
+            GM_setValue('postInsertionEnhancementsEnabled', value);
+            Logger.info('Settings.save', `[SUCCESS] - 設置已保存: postInsertionEnhancementsEnabled = ${value}`);
+            showToast();
+        };
+
+        const cursorPositionInput = document.getElementById('cursorPositionInput');
+        cursorPositionInput.value = GM_getValue('cursorPositionBrIndex', DEFAULTS.cursorPositionBrIndex);
+        cursorPositionInput.onchange = () => {
+            const value = parseInt(cursorPositionInput.value, 10);
+            const finalValue = (value && value > 0) ? value : DEFAULTS.cursorPositionBrIndex;
+            cursorPositionInput.value = finalValue;
+            GM_setValue('cursorPositionBrIndex', finalValue);
+            Logger.info('Settings.save', `[SUCCESS] - 設置已保存: cursorPositionBrIndex = ${finalValue}`);
             showToast();
         };
 
@@ -1351,6 +1413,30 @@ V47 > 48
             showToast();
         };
 
+        const autoFillTexts = GM_getValue('iwtAutoFillTexts', DEFAULTS.iwtAutoFillTexts);
+
+        const reOpenInput = document.getElementById('reOpenCommentInput');
+        const closeCaseInput = document.getElementById('closeCaseCommentInput');
+        const docContactInput = document.getElementById('docContactCommentInput');
+
+        reOpenInput.value = autoFillTexts.reOpen;
+        closeCaseInput.value = autoFillTexts.closeCase;
+        docContactInput.value = autoFillTexts.documentContact;
+
+        const createTextSaveHandler = (key, inputElement) => {
+            return () => {
+                const currentSettings = GM_getValue('iwtAutoFillTexts', DEFAULTS.iwtAutoFillTexts);
+                currentSettings[key] = inputElement.value;
+                GM_setValue('iwtAutoFillTexts', currentSettings);
+                Logger.info('Settings.save', `[SUCCESS] - 設置已保存: iwtAutoFillTexts.${key} = ${currentSettings[key]}`);
+                showToast();
+            };
+        };
+
+        reOpenInput.onchange = createTextSaveHandler('reOpen', reOpenInput);
+        closeCaseInput.onchange = createTextSaveHandler('closeCase', closeCaseInput);
+        docContactInput.onchange = createTextSaveHandler('documentContact', docContactInput);
+
         const buttonList = document.getElementById('button-config-list');
         let currentButtons = GM_getValue('actionButtons', JSON.parse(JSON.stringify(DEFAULTS.actionButtons)));
         let draggedItem = null;
@@ -1390,7 +1476,7 @@ V47 > 48
         buttonList.addEventListener('dragstart', (e) => {
             if (e.target.classList.contains('cec-settings-button-drag-handle')) {
                 draggedItem = e.target.closest('.cec-settings-button-item');
-                setTimeout(() => draggedItem.classList.add('dragging'), 0); // 0ms: 確保拖拽樣式在下一個繪製週期應用，避免影響拖拽圖像的生成。
+                setTimeout(() => draggedItem.classList.add('dragging'), 0);
             }
         });
 
@@ -1709,14 +1795,16 @@ V47 > 48
 
     /**
  * @description 根據模板標題自動點擊對應的模板選項。
- *              [增強版 v2.1] 在點擊前，會嘗試將光標移動到編輯器第三個頂層元素的位置，並在關鍵步驟間加入短暫延遲以提高穩定性。
+ *              [增強版 v3.5 - 結構化定位] 定位光標，滾動視圖，並為模板區域附加粘貼為純文本（保留換行）的功能。
+ *              此版本移除了對特定問候語文本的依賴，改為依賴模板的HTML結構進行定位，更加健壯。
  * @param {string} templateTitle - 要點擊的模板的完整標題。
  * @returns {Promise<void>}
  */
 async function clickTemplateOptionByTitle(templateTitle) {
-    // 定義一個可重用的延遲函數，單位為毫秒
-    const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+    // [修改] 視覺偏移量現在從常量變為變量
+    let VIEW_ADJUSTMENT_OFFSET_PX = -80;
 
+    const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
     const BUTTON_ICON_SELECTOR = 'lightning-icon[icon-name="utility:insert_template"]';
     const MENU_ITEM_SELECTOR = `li.uiMenuItem a[role="menuitem"][title="${templateTitle}"]`;
     const EDITOR_IFRAME_SELECTOR = 'iframe.tox-edit-area__iframe';
@@ -1724,56 +1812,33 @@ async function clickTemplateOptionByTitle(templateTitle) {
     let clickableButton = null;
 
     try {
-        // --- START: 新增延遲 (定位前) ---
-        // 增加 50 毫秒延遲，確保之前的操作已完全渲染，為光標定位準備一個穩定的 DOM 環境。
-        await delay(10);
-        // --- END: 新增延遲 ---
-
-        // --- START: 光標定位邏輯 (定位到第三個元素) ---
+        // --- 階段一 & 二: 模板插入前的光標預定位邏輯 (保持不變) ---
         try {
             const iframe = findElementInShadows(document.body, EDITOR_IFRAME_SELECTOR);
             if (iframe && iframe.contentDocument) {
-                iframe.contentWindow.focus(); // 確保iframe處於激活狀態
+                iframe.contentWindow.focus();
                 const editorDoc = iframe.contentDocument;
                 const editorBody = editorDoc.body;
-
-                // 核心判斷：確保至少有3個子元素
                 if (editorBody && editorBody.children && editorBody.children.length >= 3) {
-                    // 注意：JavaScript 集合的索引是從 0 開始的，所以第三個元素的索引是 2。
-                    // 您的原始代碼中使用了索引 3，這將會選取第四個元素。此處已為您修正為 2。
-                    const targetElement = editorBody.children[3]; // 獲取第三個子元素 (索引為 2)
-
-                    // 再次確認目標元素存在且為常見塊級元素
+                    const targetElement = editorBody.children[2];
                     if (targetElement && ['P', 'DIV', 'TABLE', 'UL', 'OL', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6'].includes(targetElement.tagName)) {
                         const selection = iframe.contentWindow.getSelection();
                         const range = editorDoc.createRange();
-
-                        // 將光標設置在目標元素的開頭
                         range.setStart(targetElement, 0);
-                        range.collapse(true); // 折疊範圍，形成光標
-
-                        selection.removeAllRanges(); // 清除舊選區
-                        selection.addRange(range);   // 應用新光標位置
-
+                        range.collapse(true);
+                        selection.removeAllRanges();
+                        selection.addRange(range);
                         Logger.info('UI.templateCursor', `[SUCCESS] - 光標已成功移動到編輯器第三個元素 (${targetElement.tagName}) 的起始位置。`);
-                    } else {
-                        Logger.warn('UI.templateCursor', `[SKIP] - 第三個元素不存在或不是標準塊級元素，跳過光標移動。`);
                     }
-                } else {
-                    Logger.warn('UI.templateCursor', `[SKIP] - 編輯器內容不足3個頂層元素，跳過光標移動。`);
                 }
             }
         } catch (cursorError) {
             Logger.error('UI.templateCursor', `[FAIL] - 嘗試移動光標時發生錯誤: ${cursorError.message}`);
-            // 即使光標移動失敗，也要繼續執行模板插入
         }
-        // --- END: 光標定位邏輯 ---
 
-        // --- START: 新增延遲 (定位後，插入前) ---
-        // 增加 50 毫秒延遲，確保光標定位操作完成後，UI 狀態穩定，再執行後續的點擊操作。
-        await delay(10);
-        // --- END: 新增延遲 ---
+        await delay(100);
 
+        // --- 階段三: 模板菜單的自動化操作 (保持不變) ---
         const iconElement = await waitForElementWithObserver(document.body, BUTTON_ICON_SELECTOR, TIMEOUT);
         clickableButton = iconElement.closest('a[role="button"]');
         if (!clickableButton) throw new Error('未能找到 "插入模板" 按鈕。');
@@ -1791,13 +1856,111 @@ async function clickTemplateOptionByTitle(templateTitle) {
 
         if (targetOption) {
             targetOption.click();
+
+            // =================================================================================
+            // [修改] 階段四: 模板插入後的增強處理 (V3.6 - 完全可配置版)
+            // =================================================================================
+            setTimeout(() => {
+                // [新增] 總開關：只有在用戶啟用時才執行所有增強處理
+                if (!GM_getValue('postInsertionEnhancementsEnabled', DEFAULTS.postInsertionEnhancementsEnabled)) {
+                    Logger.info('UI.cursorPosition', '[SKIP] - 模板插入後增強處理功能未啟用。');
+                    return;
+                }
+
+                try {
+                    const iframe = findElementInShadows(document.body, EDITOR_IFRAME_SELECTOR);
+                    if (!iframe || !iframe.contentDocument || !iframe.contentDocument.body) {
+                        throw new Error('無法找到富文本編輯器 iframe。');
+                    }
+                    const iframeWindow = iframe.contentWindow;
+                    const iframeDocument = iframe.contentDocument;
+                    const editorBody = iframeDocument.body;
+
+                    const firstParagraph = editorBody.querySelector('p');
+                    const targetContainerSpan = firstParagraph ? firstParagraph.querySelector('span') : null;
+
+                    if (!targetContainerSpan || targetContainerSpan.getElementsByTagName('br').length === 0) {
+                        throw new Error('在編輯器中未找到預期的模板結構 (包含<br>的span)。');
+                    }
+
+                    if (!targetContainerSpan.dataset.pasteHandlerAttached) {
+                        targetContainerSpan.addEventListener('paste', (event) => {
+                            event.preventDefault();
+                            const text = (event.clipboardData || iframeWindow.clipboardData).getData('text/plain');
+                            const selection = iframeWindow.getSelection();
+                            if (!selection.rangeCount) return;
+
+                            const range = selection.getRangeAt(0);
+                            range.deleteContents();
+
+                            const fragment = iframeDocument.createDocumentFragment();
+                            const lines = text.split('\n');
+
+                            lines.forEach((line, index) => {
+                                fragment.appendChild(iframeDocument.createTextNode(line));
+                                if (index < lines.length - 1) {
+                                    fragment.appendChild(iframeDocument.createElement('br'));
+                                }
+                            });
+
+                            range.insertNode(fragment);
+                            range.collapse(false);
+                            selection.removeAllRanges();
+                            selection.addRange(range);
+                        });
+                        targetContainerSpan.dataset.pasteHandlerAttached = 'true';
+                        Logger.info('UI.pasteHandler', '[SUCCESS] - 已成功為模板區域附加「粘貼為純文本(保留換行)」處理器。');
+                    }
+
+                    // [修改] 從設置中讀取光標定位參數
+                    const userBrPosition = GM_getValue('cursorPositionBrIndex', DEFAULTS.cursorPositionBrIndex);
+                    const brIndex = userBrPosition - 1; // 轉換為0基索引
+
+                    const allBrTags = targetContainerSpan.getElementsByTagName('br');
+                    let targetPositionNode = null;
+
+                    if (allBrTags.length > brIndex && brIndex >= 0) {
+                        targetPositionNode = allBrTags[brIndex];
+                    } else {
+                        throw new Error(`模板結構不符合預期，未能找到用於定位光標的第 ${userBrPosition} 個<br>標籤。`);
+                    }
+
+                    const selection = iframeWindow.getSelection();
+                    const range = iframeDocument.createRange();
+                    range.setStartBefore(targetPositionNode);
+                    range.collapse(true);
+                    selection.removeAllRanges();
+                    selection.addRange(range);
+
+                    if (typeof targetPositionNode.scrollIntoView === 'function') {
+                        targetPositionNode.scrollIntoView({
+                            behavior: 'auto',
+                            block: 'center'
+                        });
+
+                        // [新增] 條件化視覺偏移：只有在用戶啟用時才執行
+                        if (GM_getValue('visualOffsetEnabled', DEFAULTS.visualOffsetEnabled)) {
+                            iframeWindow.scrollBy(0, VIEW_ADJUSTMENT_OFFSET_PX);
+                        }
+                    }
+
+                    iframeWindow.focus();
+                    Logger.info('UI.cursorPosition', `[SUCCESS] - 模板插入後，光標已成功定位到第 ${userBrPosition} 個換行符前。`);
+
+                } catch (error) {
+                    Logger.warn('UI.cursorPosition', `[SKIP] - 嘗試定位光標或附加事件時失敗: ${error.message}`);
+                }
+            }, 100);
+            // =================================================================================
+            // [結束] 修改邏輯結束
+            // =================================================================================
+
         } else {
             throw new Error(`在菜單中未找到標題為 "${templateTitle}" 的選項。`);
         }
     } catch (error) {
         Logger.error('UI.templateShortcuts', `[FAIL] - 執行模板插入時出錯: ${error.message}`);
         if (clickableButton && clickableButton.getAttribute('aria-expanded') === 'true') {
-            // 在出錯時，嘗試關閉已打開的菜單，恢復UI狀態
             clickableButton.click();
         }
         throw error;
@@ -1806,10 +1969,19 @@ async function clickTemplateOptionByTitle(templateTitle) {
 
     /**
      * @description 根據模板列表，在指定位置注入快捷按鈕。
+     *              [功能增強版] 注入成功後，自動將郵件框架定位到窗口底部，並支持偏移量調整。
      * @param {HTMLElement} anchorLiElement - 作為定位錨點的 "Popout" 按鈕所在的 <li> 元素。
      * @param {string[]} templates - 從菜單讀取到的完整模板標題列表。
      */
     function injectTemplateShortcutButtons(anchorLiElement, templates) {
+        // =================================================================================
+        // [新增] 在此處調整您期望的底部偏移量（單位：像素）
+        // 正數 = 留出更多底部空間 (向下滾動更多)
+        // 負數 = 向上回滾，隱藏部分底部
+        // 0 = 緊貼底部 (默認)
+        const BOTTOM_OFFSET_PIXELS = 50;
+        // =================================================================================
+
         const parentList = anchorLiElement.parentElement;
         if (!parentList || parentList.dataset.shortcutsInjected === 'true') {
             return;
@@ -1820,6 +1992,7 @@ async function clickTemplateOptionByTitle(templateTitle) {
 
         const templatesToShow = templates.slice(1, 6);
         if (templatesToShow.length === 0) {
+            repositionComposerToBottom(BOTTOM_OFFSET_PIXELS);
             return;
         }
 
@@ -1861,6 +2034,36 @@ async function clickTemplateOptionByTitle(templateTitle) {
 
         parentList.dataset.shortcutsInjected = 'true';
         Logger.info('UI.templateShortcuts', `[SUCCESS] - ${templatesToShow.length} 個回覆模板快捷按鈕注入成功。`);
+
+        setTimeout(() => repositionComposerToBottom(BOTTOM_OFFSET_PIXELS), 100);
+    }
+
+    /**
+     * @description [可配置偏移量版] 查找並將組件滾動到視口底部，並應用一個額外的偏移量。
+     * @param {number} [offset=0] - 滾動完成後的額外垂直偏移量（像素）。
+     */
+    function repositionComposerToBottom(offset = 0) {
+        const composerContainer = findElementInShadows(document.body, 'flexipage-component2[data-component-id="flexipage_tabset7"]');
+
+        if (composerContainer && composerContainer.dataset.cecScrolled !== 'true') {
+            try {
+                // 步驟 1: 瞬移到視口底部
+                composerContainer.scrollIntoView({
+                    block: 'end',
+                    inline: 'nearest'
+                });
+
+                // 步驟 2: [新增] 應用額外的偏移量
+                if (offset !== 0) {
+                    window.scrollBy(0, offset);
+                }
+
+                composerContainer.dataset.cecScrolled = 'true';
+                Logger.info('UI.composerPosition', `[SUCCESS] - 回覆郵件框架已滾動至窗口底部 (額外偏移量: ${offset}px)。`);
+            } catch (error) {
+                Logger.error('UI.composerPosition', `[FAIL] - 嘗試滾動郵件框架時出錯: ${error.message}`);
+            }
+        }
     }
 
     /**
@@ -1940,55 +2143,63 @@ async function clickTemplateOptionByTitle(templateTitle) {
                 injectIWantToButtons(anchorElement);
             }
         };
-        iwtModuleObserver = new MutationObserver(debounce(checkAndReInject, 200)); // 100ms: 防抖延遲，處理組件快速刷新的情況，避免性能問題。
+        iwtModuleObserver = new MutationObserver(debounce(checkAndReInject, 350)); // 100ms: 防抖延遲，處理組件快速刷新的情況，避免性能問題。
         iwtModuleObserver.observe(document.body, {
             childList: true,
             subtree: true
         });
     }
 
-    /**
-     * @description 處理 "Re-Open Case" 自動化流程的第二階段。
-     * @param {string} comment - 要填寫的評論。
-     */
     async function handleStageTwoReOpen(comment) {
-        const reOpenCaseComponent = await waitForElementWithObserver(document.body, 'c-cec-re-open-case', 5000); // 5000ms: 等待組件出現的超時。
-        await new Promise(resolve => setTimeout(resolve, 800)); // 800ms: 等待組件內部元素加載的硬延遲，確保所有元素渲染完畢。
-        const commentBox = await waitForElementWithObserver(reOpenCaseComponent, 'textarea[name="commentField"]', 5000); // 5000ms: 等待評論框出現的超時。
+    const reOpenCaseComponent = await waitForElementWithObserver(document.body, 'c-cec-re-open-case', 5000);
+    await new Promise(resolve => setTimeout(resolve, 300));
+    if (comment) {
+        const commentBox = await waitForElementWithObserver(reOpenCaseComponent, 'textarea[name="commentField"]', 5000);
         simulateTyping(commentBox, comment);
-        await new Promise(resolve => setTimeout(resolve, 100)); // 100ms: 模擬輸入後的短暫延遲，確保事件觸發。
-        const finalSubmitButton = await waitForElementWithObserver(reOpenCaseComponent, '.slds-card__footer button.slds-button_brand', 5000); // 5000ms: 等待提交按鈕出現的超時。
-        finalSubmitButton.click();
-        showCompletionToast(reOpenCaseComponent, 'Re-Open Case: 操作成功！請等待網頁更新！');
     }
-
+    await new Promise(resolve => setTimeout(resolve, 500));
+    const finalSubmitButton = await waitForElementWithObserver(reOpenCaseComponent, '.slds-card__footer button.slds-button_brand', 5000);
+    finalSubmitButton.click();
+    showCompletionToast(reOpenCaseComponent, 'Re-Open Case: 操作成功！請等待網頁更新！');
+}
     /**
      * @description 處理 "Close this Case" 自動化流程的第二階段。
      * @param {string} comment - 要填寫的評論。
      */
     async function handleStageTwoCloseCase(comment) {
-        const closeCaseComponent = await waitForElementWithObserver(document.body, 'c-cec-close-case', 5000); // 5000ms: 等待組件出現的超時。
-        await new Promise(resolve => setTimeout(resolve, 50)); // 50ms: 短暫延遲，確保組件穩定。
-        await selectComboboxOption(closeCaseComponent, 'button[aria-label="Case Sub Status"]', 'Request Completed');
-        const commentBox = await waitForElementWithObserver(closeCaseComponent, 'textarea.slds-textarea', 5000); // 5000ms: 等待評論框出現的超時。
+    const closeCaseComponent = await waitForElementWithObserver(document.body, 'c-cec-close-case', 5000);
+    await new Promise(resolve => setTimeout(resolve, 300));
+    await selectComboboxOption(closeCaseComponent, 'button[aria-label="Case Sub Status"]', 'Request Completed');
+    if (comment) {
+        const commentBox = await waitForElementWithObserver(closeCaseComponent, 'textarea.slds-textarea', 5000);
         simulateTyping(commentBox, comment);
-        await new Promise(resolve => setTimeout(resolve, 50)); // 50ms: 短暫延遲。
-        const finalSubmitButton = await waitForElementWithObserver(closeCaseComponent, '.slds-card__footer button.slds-button_brand', 5000); // 5000ms: 等待提交按鈕出現的超時。
-        finalSubmitButton.click();
-        showCompletionToast(closeCaseComponent, 'Close Case: 操作成功！請等待網頁更新！');
     }
+    await new Promise(resolve => setTimeout(resolve, 500));
+    const finalSubmitButton = await waitForElementWithObserver(closeCaseComponent, '.slds-card__footer button.slds-button_brand', 5000);
+    finalSubmitButton.click();
+    showCompletionToast(closeCaseComponent, 'Close Case: 操作成功！請等待網頁更新！');
+}
 
     /**
      * @description 處理 "Document Customer Contact" 自動化流程的第二階段。
      */
-    async function handleStageTwoDocumentContact() {
-        const docContactComponent = await waitForElementWithObserver(document.body, 'c-cec-document-customer-contact', 5000); // 5000ms: 等待組件出現的超時。
-        await new Promise(resolve => setTimeout(resolve, 300)); // 300ms: 等待組件內部元素加載的硬延遲。
+    async function handleStageTwoDocumentContact(comment) {
+        const docContactComponent = await waitForElementWithObserver(document.body, 'c-cec-document-customer-contact', 5000);
+        await new Promise(resolve => setTimeout(resolve, 300));
         const radioButtonSelector = 'input[value="Spoke with customer"]';
-        const radioButton = await waitForElementWithObserver(docContactComponent, radioButtonSelector, 5000); // 5000ms: 等待單選按鈕出現的超時。
-        await new Promise(resolve => setTimeout(resolve, 100)); // 100ms: 短暫延遲。
+        const radioButton = await waitForElementWithObserver(docContactComponent, radioButtonSelector, 5000);
+        // 在點擊前加入短暫延時，確保事件監聽器已激活，這是穩定性的關鍵
+        await new Promise(resolve => setTimeout(resolve, 100));
         radioButton.click();
-        const finalSubmitButton = await waitForElementWithObserver(docContactComponent, '.slds-card__footer button.slds-button_brand', 5000); // 5000ms: 等待提交按鈕出現的超時。
+        if (comment) {
+            try {
+                const commentBox = await waitForElementWithObserver(docContactComponent, 'textarea.slds-textarea', 5000);
+                simulateTyping(commentBox, comment);
+            } catch (error) {
+            }
+        }
+        await new Promise(resolve => setTimeout(resolve, 500));
+        const finalSubmitButton = await waitForElementWithObserver(docContactComponent, '.slds-card__footer button.slds-button_brand', 5000);
         finalSubmitButton.click();
         showCompletionToast(docContactComponent, 'Document Contact: 操作成功！請等待網頁更新！');
     }
@@ -2041,13 +2252,17 @@ async function clickTemplateOptionByTitle(templateTitle) {
         buttonContainer.className = 'slds-grid slds-wrap';
         const styles = GM_getValue('iWantToButtonStyles', DEFAULTS.iWantToButtonStyles);
         Object.assign(buttonContainer.style, styles);
+
+        // [核心修改] 從存儲中讀取用戶自定義的評論文本
+        const autoFillTexts = GM_getValue('iwtAutoFillTexts', DEFAULTS.iwtAutoFillTexts);
+
         const buttonConfigs = [{
             name: 'Re-Open Case (Auto)',
             title: '自動執行 "Re-Open Case"',
             action: () => automateIWantToAction({
                 searchText: 'Re-Open Case',
                 stageTwoHandler: handleStageTwoReOpen,
-                finalComment: 'Reopen'
+                finalComment: autoFillTexts.reOpen // 使用配置值
             })
         }, {
             name: 'Close this Case (Auto)',
@@ -2055,14 +2270,15 @@ async function clickTemplateOptionByTitle(templateTitle) {
             action: () => automateIWantToAction({
                 searchText: 'Close this Case',
                 stageTwoHandler: handleStageTwoCloseCase,
-                finalComment: 'Close'
+                finalComment: autoFillTexts.closeCase // 使用配置值
             })
         }, {
             name: 'Document Customer Contact (Auto)',
             title: '自動執行 "Document Customer Contact"',
             action: () => automateIWantToAction({
                 searchText: 'Document Customer Contact',
-                stageTwoHandler: handleStageTwoDocumentContact
+                stageTwoHandler: handleStageTwoDocumentContact,
+                finalComment: autoFillTexts.documentContact // 使用配置值
             })
         }];
         buttonConfigs.forEach(config => {
@@ -2550,6 +2766,7 @@ async function clickTemplateOptionByTitle(templateTitle) {
 
     /**
      * @description 執行自動指派的核心邏輯，包括所有者驗證、緩存檢查和點擊操作。
+     *              [V49.3 延時修復版] 根據用戶要求，在指派成功4秒後，重新執行高亮檢查。
      * @param {string} caseUrl - 當前 Case 的 URL，用作緩存鍵。
      * @param {boolean} [isCachedCase=false] - 是否為緩存命中模式，此模式下僅應用視覺反饋。
      */
@@ -2636,6 +2853,16 @@ async function clickTemplateOptionByTitle(templateTitle) {
                 };
                 GM_setValue(ASSIGNMENT_CACHE_KEY, cache);
                 Logger.info('AutoAssign.execute', `[SUCCESS] - 自動指派成功，已點擊 "Assign Case to Me" 按鈕並更新緩存。`);
+
+                // =================================================================================
+                // SECTION: [新增修復] 延時4秒後，重新執行高亮檢查
+                // =================================================================================
+                setTimeout(() => {
+                    Logger.info('AutoAssign.reColor', `[DELAYED CHECK] - 4秒後執行高亮狀態重新檢查。`);
+                    checkAndColorComposeButton();
+                }, 8000); // 按照您要求的4秒延遲
+                // =================================================================================
+
             } else {
                 Logger.warn('AutoAssign.execute', `[SKIP] - "Assign Case to Me" 按鈕不存在或處於禁用狀態。`);
             }
