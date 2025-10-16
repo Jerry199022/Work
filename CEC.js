@@ -2152,7 +2152,7 @@ async function clickTemplateOptionByTitle(templateTitle) {
 
     async function handleStageTwoReOpen(comment) {
     const reOpenCaseComponent = await waitForElementWithObserver(document.body, 'c-cec-re-open-case', 5000);
-    await new Promise(resolve => setTimeout(resolve, 300));
+    await new Promise(resolve => setTimeout(resolve, 500));
     if (comment) {
         const commentBox = await waitForElementWithObserver(reOpenCaseComponent, 'textarea[name="commentField"]', 5000);
         simulateTyping(commentBox, comment);
@@ -2168,7 +2168,7 @@ async function clickTemplateOptionByTitle(templateTitle) {
      */
     async function handleStageTwoCloseCase(comment) {
     const closeCaseComponent = await waitForElementWithObserver(document.body, 'c-cec-close-case', 5000);
-    await new Promise(resolve => setTimeout(resolve, 300));
+    await new Promise(resolve => setTimeout(resolve, 500));
     await selectComboboxOption(closeCaseComponent, 'button[aria-label="Case Sub Status"]', 'Request Completed');
     if (comment) {
         const commentBox = await waitForElementWithObserver(closeCaseComponent, 'textarea.slds-textarea', 5000);
@@ -2185,7 +2185,7 @@ async function clickTemplateOptionByTitle(templateTitle) {
      */
     async function handleStageTwoDocumentContact(comment) {
         const docContactComponent = await waitForElementWithObserver(document.body, 'c-cec-document-customer-contact', 5000);
-        await new Promise(resolve => setTimeout(resolve, 300));
+        await new Promise(resolve => setTimeout(resolve, 500));
         const radioButtonSelector = 'input[value="Spoke with customer"]';
         const radioButton = await waitForElementWithObserver(docContactComponent, radioButtonSelector, 5000);
         // 在點擊前加入短暫延時，確保事件監聽器已激活，這是穩定性的關鍵
