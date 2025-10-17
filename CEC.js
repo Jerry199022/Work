@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         CEC功能強化
 // @namespace    CEC Enhanced
-// @version      V49
-// @description  快捷操作按鈕、自動指派、IVP快速查詢、聯繫人彈窗優化、按鈕警示色、賬戶檢測、組件屏蔽、設置菜單、自動IVP查詢、URL精準匹配、快捷按鈕可編輯、(Related Cases)數據提取與增強排序功能、關聯案件提取器、回覆case快捷按鈕、全局暫停/恢復功能。
+// @version      V53
+// @description  快捷操作按鈕、自動指派、IVP快速查詢、聯繫人彈窗優化、按鈕警示色、賬戶檢測、組件屏蔽、設置菜單、自動IVP查詢、URL精準匹配、快捷按鈕可編輯、(Related Cases)數據提取與增強排序功能、關聯案件提取器、回覆case快捷按鈕、已跟進case提示、全局暫停/恢復功能。
 // @author       Jerry Law
 // @match        https://upsdrive.lightning.force.com/*
 // @grant        GM_setValue
@@ -12,74 +12,80 @@
 // @run-at       document-idle
 // @updateURL    https://raw.githubusercontent.com/Jerry199022/Work/refs/heads/main/CEC.js
 // @downloadURL  https://raw.githubusercontent.com/Jerry199022/Work/refs/heads/main/CEC.js
-
 // ==/UserScript==
+
 /*
-V48 > 49
+V49 > V53
 更新內容：
--優化回覆case框定位
--優化插入模版後輸入框內容定位（默認關閉）
--Close this Case（Auto）廢棄隱藏功能。恢復穩定。
 -添加"I Want To..."自動化按鈕評論文本設置
+可在設置面板添加多個文本，多于（空白或得一個文本）按鈕為直接點擊，一個文本按鈕會變成下拉選單，選擇對應文本進行自動化操作。
+-添加對已回覆的case的緩存，緩存時間為10小時。當日再次處理同一case會有提示。可在控制面板開關此功能（默認關閉）。
+-修復Auto Assign Bug
 */
 
 (function() {
     'use strict';
 
     // =================================================================================
-    // SECTION: 全新日誌記錄器 (Logger)
+    // SECTION: 專業級日誌記錄器 (Professional Logger)
     // =================================================================================
 
     /**
-     * @description 一個專業的、可配置的日誌記錄器，用於提供結構化的腳本運行信息。
+     * @description 一個專業的、可配置的日誌記錄器，提供帶時間戳、級別和模塊的結構化輸出。
      */
-    const Logger = {
-        LogLevel: {
+    const Log = {
+        levels: {
             DEBUG: 0,
             INFO: 1,
             WARN: 2,
             ERROR: 3,
             NONE: 4
         },
-        currentLevel: 1, // 默認為 INFO 級別
+        level: 1, // 默認日誌級別：INFO。設為 0 可查看 DEBUG 信息。
 
         /**
-         * @description 內部日誌處理函數。
-         * @param {number} level - 日誌級別。
+         * @private
+         * @description 內部日誌處理函數，格式化並輸出日誌。
+         * @param {number} level - 日誌級別枚舉值。
          * @param {string} levelStr - 日誌級別的字符串表示。
          * @param {string} module - 產生日誌的功能模塊名。
          * @param {string} message - 日誌消息。
+         * @param {Function} logFn - 用於輸出的 console 函數 (e.g., console.log)。
          */
-        _log(level, levelStr, module, message) {
-            if (level >= this.currentLevel) {
-                levelStr = levelStr.trim();
-                console.log(`[${levelStr}] [CEC Enhanced] [${module}] ${message}`);
+        _log(level, levelStr, module, message, logFn) {
+            if (level >= this.level) {
+                const timestamp = new Date().toLocaleTimeString('en-US', {
+                    hour12: false
+                });
+                logFn(`[${timestamp}] [${levelStr}] [CEC Enhanced|${module}] ${message}`);
             }
         },
 
         debug(module, message) {
-            this._log(this.LogLevel.DEBUG, 'DEBUG', module, message);
+            this._log(this.levels.DEBUG, 'DEBUG', module, message, console.log);
         },
         info(module, message) {
-            this._log(this.LogLevel.INFO, 'INFO ', module, message);
+            this._log(this.levels.INFO, 'INFO ', module, message, console.info);
         },
         warn(module, message) {
-            this._log(this.LogLevel.WARN, 'WARN ', module, message);
+            this._log(this.levels.WARN, 'WARN ', module, message, console.warn);
         },
         error(module, message) {
-            this._log(this.LogLevel.ERROR, 'ERROR', module, message);
+            this._log(this.levels.ERROR, 'ERROR', module, message, console.error);
         }
     };
 
 
     // =================================================================================
-    // SECTION: 全局配置與狀態變量
+    // SECTION: 全局配置與狀態管理 (Global Configuration & State)
     // =================================================================================
 
     /**
      * @description 存儲腳本所有功能的默認配置。
+     *              當 GM 存儲中沒有對應值時，將使用此處的默認值。
      */
     const DEFAULTS = {
+        notifyOnRepliedCaseEnabled: false,
         autoSwitchEnabled: true,
         autoAssignUser: '',
         sentinelCloseEnabled: true,
@@ -90,9 +96,9 @@ V48 > 49
         caseDescriptionHeight: 160,
         caseHistoryHeight: 208,
         iwtAutoFillTexts: {
-            reOpen: 'Reopen',
-            closeCase: 'Close',
-            documentContact: 'Call customer and explaim'
+            reOpen: ['Reopen'],
+            closeCase: ['Close'],
+            documentContact: ['Call customer and explain']
         },
         iWantToButtonStyles: {
             marginTop: '-7px',
@@ -100,9 +106,8 @@ V48 > 49
             marginLeft: '0px',
             marginRight: '0px',
         },
-        // [新增] 模板插入優化功能的默認配置
-        postInsertionEnhancementsEnabled: false, // 模板插入後增強處理 (默認關閉)
-        cursorPositionBrIndex: 5,               // 光標定位到第5個<br>標籤前
+        postInsertionEnhancementsEnabled: false,
+        cursorPositionBrIndex: 5,
         actionButtons: [{
             id: "btn-1",
             name: "運輸",
@@ -199,7 +204,7 @@ V48 > 49
     };
 
     /**
-     * @description 存儲性能相關的配置。
+     * @description 存儲性能相關的配置，如輪詢間隔和防抖延時。
      */
     const PERF_CONFIG = {
         HEARTBEAT_INTERVAL_MS: 10000, // 10000ms: 心跳檢測間隔。用於捕獲由非標準事件觸發的URL變化，作為事件監聽器的補充。
@@ -212,7 +217,7 @@ V48 > 49
     let foundTrackingNumber = null;
     let ivpWindowHandle = null;
     let globalToastTimer = null;
-    let globalScannerId = null; // [新增] 全局掃描器實例句柄，確保任何時候只有一個掃描器在運行
+    let globalScannerId = null;
     const processedModals = new WeakSet();
     const processedCaseUrlsInSession = new Set();
     let injectedIWTButtons = {};
@@ -226,7 +231,42 @@ V48 > 49
     // =================================================================================
 
     /**
-     * @description 檢查一個元素是否在DOM中可見。
+     * @description 從 URL 字符串中安全地提取 18 位的 Salesforce Case ID。
+     * @param {string} urlString - 包含 Case ID 的 URL。
+     * @returns {string|null} 成功則返回 Case ID 字符串，否則返回 null。
+     */
+    function getCaseIdFromUrl(urlString) {
+        if (!urlString) return null;
+        const match = urlString.match(/\/Case\/([a-zA-Z0-9]{18})/);
+        if (match && match[1]) {
+            return match[1];
+        }
+        Log.warn('Core.Utils', `未能從 URL 中提取 Case ID: ${urlString}`);
+        return null;
+    }
+
+    /**
+     * @description 規範化 Case URL，移除查詢參數和哈希值，確保緩存鍵的一致性。
+     * @param {string} urlString - 原始的 URL 字符串。
+     * @returns {string|null} 規範化後的 URL，如果輸入無效則返回 null。
+     */
+    function normalizeCaseUrl(urlString) {
+        try {
+            const url = new URL(urlString, location.origin);
+            const caseRecordPagePattern = /^\/lightning\/r\/Case\/[a-zA-Z0-9]{18}\/view$/;
+            let pathname = url.pathname.replace(/\/$/, '');
+            if (caseRecordPagePattern.test(pathname)) {
+                return `${url.origin}${pathname}`;
+            }
+            return null;
+        } catch (e) {
+            Log.error('Core.Utils', `URL 規範化失敗: ${e.message} for URL: ${urlString}`);
+            return null;
+        }
+    }
+
+    /**
+     * @description 檢查一個元素是否在DOM中實際可見。
      * @param {HTMLElement} el - 要檢查的元素。
      * @returns {boolean} 如果元素可見則返回 true。
      */
@@ -235,7 +275,7 @@ V48 > 49
     }
 
     /**
-     * @description 遞歸地在根節點及其所有Shadow DOM中查找單個可見的元素。
+     * @description 遞歸地在根節點及其所有 Shadow DOM 中查找單個可見的元素。
      * @param {Node} root - 開始搜索的根節點。
      * @param {string} selector - CSS選擇器。
      * @returns {HTMLElement|null} 找到的第一個可見元素，或 null。
@@ -260,7 +300,7 @@ V48 > 49
     }
 
     /**
-     * @description 遞歸地在根節點及其所有Shadow DOM中查找所有可見的元素。
+     * @description 遞歸地在根節點及其所有 Shadow DOM 中查找所有可見的元素。
      * @param {Node} root - 開始搜索的根節點。
      * @param {string} selector - CSS選擇器。
      * @returns {HTMLElement[]} 包含所有找到的可見元素的數組。
@@ -281,7 +321,7 @@ V48 > 49
      * @description 使用輪詢的方式等待一個元素出現在DOM中。
      * @param {Node} root - 開始搜索的根節點。
      * @param {string} selector - CSS選擇器。
-     * @param {number} timeout - 超時時間（毫秒）。
+     * @param {number} [timeout=10000] - 超時時間（毫秒）。
      * @returns {Promise<HTMLElement>} 解析為找到的元素。
      */
     function waitForElement(root, selector, timeout = 10000) {
@@ -298,7 +338,7 @@ V48 > 49
                     clearInterval(intervalId);
                     reject(new Error(`Timeout waiting for selector: ${selector}`));
                 }
-            }, 500); // 300ms: 輪詢間隔，平衡性能與響應速度。
+            }, 500); // 500ms: 輪詢間隔，平衡性能與響應速度。
         });
     }
 
@@ -352,7 +392,7 @@ V48 > 49
     }
 
     /**
-     * @description 模擬用戶在輸入框中輸入內容。
+     * @description 模擬用戶在輸入框中輸入內容，觸發相關的 DOM 事件。
      * @param {HTMLInputElement|HTMLTextAreaElement} element - 目標輸入框元素。
      * @param {string} value - 要輸入的值。
      */
@@ -419,7 +459,7 @@ V48 > 49
     }
 
     /**
-     * @description 等待一個按鈕變為可點擊狀態（aria-disabled="false"）。
+     * @description 等待一個按鈕變為可點擊狀態（通常是 aria-disabled="false"）。
      * @param {string} selector - 按鈕的CSS選擇器。
      * @returns {Promise<HTMLElement>} 解析為可點擊的按鈕元素。
      */
@@ -520,6 +560,134 @@ V48 > 49
         }, 2500); // 2500ms: 提示顯示的總時長。
     }
 
+    /**
+     * @description 將時間戳格式化為 "X 小時 Y 分鐘前" 的詳細字符串。
+     * @param {number} timestamp - 過去的某個時間點的時間戳 (毫秒)。
+     * @returns {string} 格式化後的時間差字符串。
+     */
+    function formatTimeAgo(timestamp) {
+        const diffMs = Date.now() - timestamp;
+        const diffMinutes = Math.round(diffMs / (1000 * 60));
+
+        if (diffMinutes < 1) {
+            return '剛剛';
+        }
+        if (diffMinutes < 60) {
+            return `你 在 ${diffMinutes} 分 鐘 前 已 回 覆 過 此 Case`;
+        }
+
+        const hours = Math.floor(diffMinutes / 60);
+        const minutes = diffMinutes % 60;
+
+        return `你 在 ${hours} 小 時 ${minutes} 分 鐘 前 已 回 覆 過 此 Case`;
+    }
+
+    /**
+     * @description 將時間戳格式化為 "（X 分鐘前）" 的簡潔字符串，用於列表頁。
+     * @param {number} timestamp - 過去的某個時間點的時間戳 (毫秒)。
+     * @returns {string} 格式化後的時間差字符串。
+     */
+    function formatTimeAgoSimple(timestamp) {
+        const diffMs = Date.now() - timestamp;
+        const diffMinutes = Math.round(diffMs / (1000 * 60));
+
+        if (diffMinutes < 1) {
+            return '（剛剛）';
+        }
+        if (diffMinutes < 60) {
+            return `（${diffMinutes}分鐘）`;
+        }
+
+        const hours = Math.floor(diffMinutes / 60);
+        const minutes = diffMinutes % 60;
+
+        if (minutes === 0) {
+            return `（${hours}小時）`;
+        }
+        return `（${hours}小時${minutes}分鐘）`;
+    }
+
+    /**
+     * @description 檢查當前 Case 是否在近期被回覆過，如果啟用該功能，則觸發大型通知。
+     * @param {string} caseUrl - 當前 Case 的 URL。
+     */
+    function checkAndNotifyForRecentSend(caseUrl) {
+        if (!GM_getValue('notifyOnRepliedCaseEnabled', DEFAULTS.notifyOnRepliedCaseEnabled)) {
+            return;
+        }
+
+        const SEND_BUTTON_CACHE_KEY = 'sendButtonClickLog';
+        const CACHE_TTL_MS = 10 * 60 * 60 * 1000; // 10小時: 已回覆記錄的緩存有效期。
+
+        const caseId = getCaseIdFromUrl(caseUrl);
+        if (!caseId) {
+            Log.warn('Feature.NotifyReplied', `無法從 URL (${caseUrl}) 提取 Case ID，跳過近期處理檢查。`);
+            return;
+        }
+
+        const cache = GM_getValue(SEND_BUTTON_CACHE_KEY, {});
+        const entry = cache[caseId];
+
+        if (entry && (Date.now() - entry.timestamp < CACHE_TTL_MS)) {
+            const timeAgoString = formatTimeAgo(entry.timestamp);
+            showGlobalCompletionNotification(timeAgoString, {
+                fontSize: '20px',
+                minWidth: '500px'
+            });
+            Log.info('Feature.NotifyReplied', `檢測到 Case ID ${caseId} 的近期處理記錄，已顯示通知: "${timeAgoString}"`);
+        }
+    }
+
+    /**
+     * @description 在頁面中央顯示一個可自定義尺寸的全局通知。
+     * @param {string} message - 要顯示的通知消息。
+     * @param {object} [options={}] - 一個包含自定義選項的對象。
+     * @param {string} [options.theme='success'] - SLDS 主題 ('success', 'warning', 'error')。
+     * @param {string} [options.fontSize='30px'] - 提示文字的字體大小。
+     * @param {string} [options.boxWidth='auto'] - 提示框的寬度。
+     * @param {string} [options.minWidth='450px'] - 提示框的最小寬度。
+     */
+    function showGlobalCompletionNotification(message, options = {}) {
+        const {
+            theme = 'success',
+                fontSize = '30px',
+                boxWidth = 'auto',
+                minWidth = '450px'
+        } = options;
+
+        const NOTIFICATION_ID = 'cec-global-completion-notification';
+        let overlay = document.getElementById(NOTIFICATION_ID);
+
+        if (overlay) {
+            overlay.remove();
+        }
+
+        overlay = document.createElement('div');
+        overlay.id = NOTIFICATION_ID;
+        overlay.className = 'cec-global-completion-overlay';
+        overlay.innerHTML = `
+            <div class="slds-notify slds-notify_toast slds-theme_${theme}" style="width: ${boxWidth}; min-width: ${minWidth};">
+                <div class="slds-notify__content" style="text-align: center; width: 100%;">
+                    <h2 class="slds-text-heading_small" style="font-size: ${fontSize}; font-weight: bold; font-family: 'Microsoft YaHei', sans-serif;">${message}</h2>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+
+        requestAnimationFrame(() => {
+            overlay.classList.add('show');
+        });
+
+        setTimeout(() => {
+            overlay.classList.remove('show');
+            setTimeout(() => {
+                if (overlay.parentNode) {
+                    overlay.parentNode.removeChild(overlay);
+                }
+            }, 300); // 300ms: 等待淡出動畫完成後再移除元素。
+        }, 1800); // 1800ms: 通知顯示的總時長。
+    }
+
 
     // =================================================================================
     // SECTION: 樣式注入與UI創建 (Styles & UI)
@@ -533,6 +701,71 @@ V48 > 49
         if (document.getElementById(styleId)) return;
 
         const css = `
+            .cec-iwt-dropdown-trigger {
+                position: relative;
+                display: inline-block;
+                width: 100%;
+            }
+            .cec-iwt-dropdown-menu {
+                display: none;
+                position: absolute;
+                top: 100%;
+                left: 0;
+                background-color: #0070d2;
+                min-width: 100%;
+                box-shadow: 0px 8px 16px 0px rgba(0,0,0,0.2);
+                z-index: 1001;
+                border-radius: .25rem;
+                border: 1px solid #005fb2;
+                list-style: none;
+                padding: 4px 0;
+                margin-top: 4px;
+                max-height: 200px;
+                overflow-y: auto;
+            }
+            .cec-global-completion-overlay {
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background-color: rgba(0, 0, 0, 0.4);
+                z-index: 10001;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                opacity: 0;
+                transition: opacity 0.3s ease;
+                pointer-events: none;
+            }
+            .cec-global-completion-overlay.show {
+                opacity: 1;
+            }
+            .cec-global-completion-overlay .slds-notify_toast {
+                pointer-events: all;
+                box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+            }
+            .cec-iwt-dropdown-menu.show {
+                display: block;
+            }
+            .cec-iwt-dropdown-item {
+                color: #ffffff;
+                padding: 8px 12px;
+                text-decoration: none;
+                display: block;
+                cursor: pointer;
+                font-size: 13px;
+                white-space: nowrap;
+                text-align: left;
+            }
+            .cec-iwt-dropdown-item:hover {
+                background-color: #005fb2;
+            }
+            .cec-dropdown-arrow {
+                margin-left: 8px;
+                font-size: 10px;
+                vertical-align: middle;
+            }
             .cec-iwt-button-override,
             .custom-action-button-container .slds-button,
             .custom-s-button,
@@ -590,6 +823,9 @@ V48 > 49
                 overflow: hidden;
                 text-overflow: ellipsis;
                 transition: background-color 0.2s ease, border-color 0.2s ease;
+                display: flex;
+                justify-content: center;
+                align-items: center;
             }
             .cec-iwt-button-override:hover, .cec-iwt-button-override:focus {
                 background-color: #005fb2 !important;
@@ -687,9 +923,6 @@ V48 > 49
     /**
      * @description 創建並向頁面注入腳本的設置菜單UI（HTML和CSS）。
      */
-    /**
-     * @description 創建並向頁面注入腳本的設置菜單UI（HTML和CSS）。
-     */
     function createSettingsUI() {
         if (document.getElementById('cec-settings-modal')) return;
 
@@ -718,6 +951,16 @@ V48 > 49
                             </div>
                         </div>
                         <div id="tab-interface" class="cec-settings-tab-content">
+                            <div class="cec-settings-section">
+                                <h3 class="cec-settings-section-title">通知與提示</h3>
+                                <div class="cec-settings-option">
+                                    <div class="cec-settings-option-main">
+                                        <label for="notifyOnRepliedCaseToggle" class="cec-settings-label">提示已回覆過的 Case （設置后需刷新頁面）</label>
+                                        <label class="cec-settings-switch"><input type="checkbox" id="notifyOnRepliedCaseToggle"><span class="cec-settings-slider"></span></label>
+                                    </div>
+                                    <p class="cec-settings-description">在 Case 詳情頁和列表頁，對近期已回覆的 Case 進行醒目提示。</p>
+                                </div>
+                            </div>
                             <div class="cec-settings-section">
                                 <h3 class="cec-settings-section-title">組件屏蔽</h3>
                                 <div class="cec-settings-option">
@@ -763,7 +1006,6 @@ V48 > 49
                                     <div class="cec-settings-input-group"><input type="number" id="richTextEditorHeightInput" class="cec-settings-input"><span>px</span></div>
                                 </div>
                             </div>
-                            <!-- [位置調整] "窗口與流程" 板塊已從 "自動化" 標籤頁移動至此 -->
                             <hr class="cec-settings-divider">
                             <div class="cec-settings-section">
                                 <h3 class="cec-settings-section-title">窗口與流程</h3>
@@ -785,7 +1027,6 @@ V48 > 49
                                     <div class="cec-settings-option-main"><label for="blockIVPToggle" class="cec-settings-label">屏蔽原生IVP卡片自動加載</label><label class="cec-settings-switch"><input type="checkbox" id="blockIVPToggle"><span class="cec-settings-slider"></span></label></div>
                                 </div>
                             </div>
-                            <!-- [修改] 模板插入優化設置板塊 (已簡化) -->
                             <div class="cec-settings-section">
                                 <h3 class="cec-settings-section-title">模板插入優化</h3>
                                 <div class="cec-settings-option">
@@ -804,14 +1045,21 @@ V48 > 49
                             <hr class="cec-settings-divider">
                             <div class="cec-settings-section">
                                 <h3 class="cec-settings-section-title">自動化評論文本</h3>
-                                <p class="cec-settings-description" style="margin-top:-12px; margin-bottom:12px;">為 "I Want To..." 自動化按鈕設置評論內容，留空則不輸入任何文本。</p>
-                                <div class="cec-settings-option-grid">
-                                    <label for="reOpenCommentInput">Re-Open Case</label>
-                                    <input type="text" id="reOpenCommentInput" class="cec-settings-input">
-                                    <label for="closeCaseCommentInput">Close this Case</label>
-                                    <input type="text" id="closeCaseCommentInput" class="cec-settings-input">
-                                    <label for="docContactCommentInput">Document Customer Contact</label>
-                                    <input type="text" id="docContactCommentInput" class="cec-settings-input">
+                                <p class="cec-settings-description" style="margin-top:-12px; margin-bottom:12px;">為 "I Want To..." 自動化按鈕設置多個評論選項。</p>
+                                <div class="cec-settings-comment-group">
+                                    <label class="cec-settings-label">Re-Open Case</label>
+                                    <ul id="reOpen-list" class="cec-settings-comment-list"></ul>
+                                    <button class="cec-settings-add-comment-button" data-key="reOpen">+ 添加選項</button>
+                                </div>
+                                <div class="cec-settings-comment-group">
+                                    <label class="cec-settings-label">Close this Case</label>
+                                    <ul id="closeCase-list" class="cec-settings-comment-list"></ul>
+                                    <button class="cec-settings-add-comment-button" data-key="closeCase">+ 添加選項</button>
+                                </div>
+                                <div class="cec-settings-comment-group">
+                                    <label class="cec-settings-label">Document Customer Contact</label>
+                                    <ul id="docContact-list" class="cec-settings-comment-list"></ul>
+                                    <button class="cec-settings-add-comment-button" data-key="documentContact">+ 添加選項</button>
                                 </div>
                             </div>
                         </div>
@@ -833,6 +1081,45 @@ V48 > 49
         `;
 
         const modalCSS = `
+            .cec-settings-comment-group {
+                margin-bottom: 20px;
+            }
+            .cec-settings-comment-group .cec-settings-label {
+                font-weight: 600;
+                margin-bottom: 8px;
+                display: block;
+            }
+            .cec-settings-comment-list {
+                list-style: none;
+                padding: 0;
+                margin: 0;
+            }
+            .cec-settings-comment-item {
+                display: flex;
+                align-items: center;
+                margin-bottom: 8px;
+            }
+            .cec-settings-comment-item input {
+                flex-grow: 1;
+                margin-right: 8px;
+            }
+            .cec-settings-delete-comment-button {
+                background: none;
+                border: none;
+                cursor: pointer;
+                color: #c23934;
+                font-size: 1.2rem;
+                padding: 0 4px;
+            }
+            .cec-settings-add-comment-button {
+                background: none;
+                border: 1px dashed #0070d2;
+                color: #0070d2;
+                padding: 4px 12px;
+                border-radius: 4px;
+                cursor: pointer;
+                margin-top: 4px;
+            }
             .cec-settings-backdrop {
                 position: fixed;
                 top: 0;
@@ -1236,7 +1523,7 @@ V48 > 49
             clearTimeout(toastTimer);
             toast.textContent = message;
             toast.classList.add('show');
-            toastTimer = setTimeout(() => toast.classList.remove('show'), 2000);
+            toastTimer = setTimeout(() => toast.classList.remove('show'), 2000); // 2000ms: toast 顯示時長。
         };
 
         const tabs = modal.querySelectorAll('.cec-settings-tab-button');
@@ -1250,12 +1537,21 @@ V48 > 49
             });
         });
 
+        const notifyOnRepliedCaseToggle = document.getElementById('notifyOnRepliedCaseToggle');
+        notifyOnRepliedCaseToggle.checked = GM_getValue('notifyOnRepliedCaseEnabled', DEFAULTS.notifyOnRepliedCaseEnabled);
+        notifyOnRepliedCaseToggle.onchange = () => {
+            const value = notifyOnRepliedCaseToggle.checked;
+            GM_setValue('notifyOnRepliedCaseEnabled', value);
+            Log.info('UI.Settings', `設置已保存: notifyOnRepliedCaseEnabled = ${value}`);
+            showToast();
+        };
+
         const autoAssignUserInput = document.getElementById('autoAssignUserInput');
         autoAssignUserInput.value = GM_getValue('autoAssignUser', DEFAULTS.autoAssignUser);
         autoAssignUserInput.onchange = () => {
             const value = autoAssignUserInput.value.trim();
             GM_setValue('autoAssignUser', value);
-            Logger.info('Settings.save', `[SUCCESS] - 設置已保存: autoAssignUser = ${value}`);
+            Log.info('UI.Settings', `設置已保存: autoAssignUser = ${value}`);
             showToast();
         };
 
@@ -1264,7 +1560,7 @@ V48 > 49
         autoIVPQueryToggle.onchange = () => {
             const value = autoIVPQueryToggle.checked;
             GM_setValue('autoIVPQueryEnabled', value);
-            Logger.info('Settings.save', `[SUCCESS] - 設置已保存: autoIVPQueryEnabled = ${value}`);
+            Log.info('UI.Settings', `設置已保存: autoIVPQueryEnabled = ${value}`);
             showToast();
         };
 
@@ -1273,7 +1569,7 @@ V48 > 49
         autoSwitchToggle.onchange = () => {
             const value = autoSwitchToggle.checked;
             GM_setValue('autoSwitchEnabled', value);
-            Logger.info('Settings.save', `[SUCCESS] - 設置已保存: autoSwitchEnabled = ${value}`);
+            Log.info('UI.Settings', `設置已保存: autoSwitchEnabled = ${value}`);
             showToast();
         };
 
@@ -1282,7 +1578,7 @@ V48 > 49
         blockIVPToggle.onchange = () => {
             const value = blockIVPToggle.checked;
             GM_setValue('blockIVPCard', value);
-            Logger.info('Settings.save', `[SUCCESS] - 設置已保存: blockIVPCard = ${value}`);
+            Log.info('UI.Settings', `設置已保存: blockIVPCard = ${value}`);
             showToast();
             if (value) handleIVPCardBlocking();
         };
@@ -1292,17 +1588,16 @@ V48 > 49
         sentinelCloseToggle.onchange = () => {
             const value = sentinelCloseToggle.checked;
             GM_setValue('sentinelCloseEnabled', value);
-            Logger.info('Settings.save', `[SUCCESS] - 設置已保存: sentinelCloseEnabled = ${value}`);
+            Log.info('UI.Settings', `設置已保存: sentinelCloseEnabled = ${value}`);
             showToast();
         };
 
-        // [修正] 模板插入優化功能的設置邏輯 (已移除 visualOffsetToggle 相關代碼)
         const postInsertionEnhancementsToggle = document.getElementById('postInsertionEnhancementsToggle');
         postInsertionEnhancementsToggle.checked = GM_getValue('postInsertionEnhancementsEnabled', DEFAULTS.postInsertionEnhancementsEnabled);
         postInsertionEnhancementsToggle.onchange = () => {
             const value = postInsertionEnhancementsToggle.checked;
             GM_setValue('postInsertionEnhancementsEnabled', value);
-            Logger.info('Settings.save', `[SUCCESS] - 設置已保存: postInsertionEnhancementsEnabled = ${value}`);
+            Log.info('UI.Settings', `設置已保存: postInsertionEnhancementsEnabled = ${value}`);
             showToast();
         };
 
@@ -1313,7 +1608,7 @@ V48 > 49
             const finalValue = (value && value > 0) ? value : DEFAULTS.cursorPositionBrIndex;
             cursorPositionInput.value = finalValue;
             GM_setValue('cursorPositionBrIndex', finalValue);
-            Logger.info('Settings.save', `[SUCCESS] - 設置已保存: cursorPositionBrIndex = ${finalValue}`);
+            Log.info('UI.Settings', `設置已保存: cursorPositionBrIndex = ${finalValue}`);
             showToast();
         };
 
@@ -1341,7 +1636,7 @@ V48 > 49
             const value = cleanModeToggle.checked;
             GM_setValue('cleanModeEnabled', value);
             toggleCleanModeStyles();
-            Logger.info('Settings.save', `[SUCCESS] - 設置已保存: cleanModeEnabled = ${value}`);
+            Log.info('UI.Settings', `設置已保存: cleanModeEnabled = ${value}`);
             showToast();
         };
 
@@ -1354,7 +1649,7 @@ V48 > 49
                 currentUserConfig[e.target.dataset.id] = e.target.checked;
                 GM_setValue('cleanModeUserConfig', currentUserConfig);
                 toggleCleanModeStyles();
-                Logger.info('Settings.save', `[SUCCESS] - 設置已保存: cleanModeUserConfig updated for ${e.target.dataset.id}`);
+                Log.info('UI.Settings', `設置已保存: cleanModeUserConfig updated for ${e.target.dataset.id}`);
                 showToast();
             }
         });
@@ -1366,7 +1661,7 @@ V48 > 49
                 GM_setValue('cleanModeUserConfig', currentUserConfig);
                 renderCleanModeList();
                 toggleCleanModeStyles();
-                Logger.info('Settings.reset', `[SUCCESS] - "組件屏蔽" 配置已恢復為默認值。`);
+                Log.info('UI.Settings', `"組件屏蔽" 配置已恢復為默認值。`);
                 showToast('組件屏蔽列表已恢復默認');
             }
         });
@@ -1380,7 +1675,7 @@ V48 > 49
             if (e.target.name === 'highlightMode') {
                 const value = e.target.value;
                 GM_setValue('accountHighlightMode', value);
-                Logger.info('Settings.save', `[SUCCESS] - 設置已保存: accountHighlightMode = ${value}`);
+                Log.info('UI.Settings', `設置已保存: accountHighlightMode = ${value}`);
                 showToast();
             }
         });
@@ -1391,7 +1686,7 @@ V48 > 49
             const value = parseInt(caseHistoryInput.value) || DEFAULTS.caseHistoryHeight;
             GM_setValue('caseHistoryHeight', value);
             injectStyleOverrides();
-            Logger.info('Settings.save', `[SUCCESS] - 設置已保存: caseHistoryHeight = ${value}`);
+            Log.info('UI.Settings', `設置已保存: caseHistoryHeight = ${value}`);
             showToast();
         };
 
@@ -1400,7 +1695,7 @@ V48 > 49
         caseDescInput.onchange = () => {
             const value = parseInt(caseDescInput.value) || DEFAULTS.caseDescriptionHeight;
             GM_setValue('caseDescriptionHeight', value);
-            Logger.info('Settings.save', `[SUCCESS] - 設置已保存: caseDescriptionHeight = ${value}`);
+            Log.info('UI.Settings', `設置已保存: caseDescriptionHeight = ${value}`);
             showToast();
         };
 
@@ -1409,33 +1704,75 @@ V48 > 49
         richTextInput.onchange = () => {
             const value = parseInt(richTextInput.value) || DEFAULTS.richTextEditorHeight;
             GM_setValue('richTextEditorHeight', value);
-            Logger.info('Settings.save', `[SUCCESS] - 設置已保存: richTextEditorHeight = ${value}`);
+            Log.info('UI.Settings', `設置已保存: richTextEditorHeight = ${value}`);
             showToast();
         };
 
-        const autoFillTexts = GM_getValue('iwtAutoFillTexts', DEFAULTS.iwtAutoFillTexts);
-
-        const reOpenInput = document.getElementById('reOpenCommentInput');
-        const closeCaseInput = document.getElementById('closeCaseCommentInput');
-        const docContactInput = document.getElementById('docContactCommentInput');
-
-        reOpenInput.value = autoFillTexts.reOpen;
-        closeCaseInput.value = autoFillTexts.closeCase;
-        docContactInput.value = autoFillTexts.documentContact;
-
-        const createTextSaveHandler = (key, inputElement) => {
-            return () => {
-                const currentSettings = GM_getValue('iwtAutoFillTexts', DEFAULTS.iwtAutoFillTexts);
-                currentSettings[key] = inputElement.value;
-                GM_setValue('iwtAutoFillTexts', currentSettings);
-                Logger.info('Settings.save', `[SUCCESS] - 設置已保存: iwtAutoFillTexts.${key} = ${currentSettings[key]}`);
-                showToast();
-            };
+        const migrateAutoFillTexts = () => {
+            let settings = GM_getValue('iwtAutoFillTexts', DEFAULTS.iwtAutoFillTexts);
+            let changed = false;
+            for (const key in settings) {
+                if (typeof settings[key] === 'string') {
+                    settings[key] = [settings[key]];
+                    changed = true;
+                }
+            }
+            if (changed) {
+                GM_setValue('iwtAutoFillTexts', settings);
+                Log.info('UI.Settings', '自動化評論文本設置已成功遷移到新格式。');
+            }
+            return settings;
         };
 
-        reOpenInput.onchange = createTextSaveHandler('reOpen', reOpenInput);
-        closeCaseInput.onchange = createTextSaveHandler('closeCase', closeCaseInput);
-        docContactInput.onchange = createTextSaveHandler('documentContact', docContactInput);
+        let autoFillTexts = migrateAutoFillTexts();
+
+        const renderCommentList = (key, listElement) => {
+            listElement.innerHTML = '';
+            const items = autoFillTexts[key] || [];
+            items.forEach((text, index) => {
+                const li = document.createElement('li');
+                li.className = 'cec-settings-comment-item';
+                li.innerHTML = `
+                    <input type="text" class="cec-settings-input" data-index="${index}" value="${text}">
+                    <button class="cec-settings-delete-comment-button" data-index="${index}" title="刪除">&times;</button>
+                `;
+                listElement.appendChild(li);
+            });
+        };
+
+        const setupCommentListHandlers = (key, listElement, addButton) => {
+            renderCommentList(key, listElement);
+
+            addButton.addEventListener('click', () => {
+                autoFillTexts[key].push('');
+                GM_setValue('iwtAutoFillTexts', autoFillTexts);
+                renderCommentList(key, listElement);
+                showToast();
+            });
+
+            listElement.addEventListener('change', (e) => {
+                if (e.target.tagName === 'INPUT') {
+                    const index = parseInt(e.target.dataset.index, 10);
+                    autoFillTexts[key][index] = e.target.value;
+                    GM_setValue('iwtAutoFillTexts', autoFillTexts);
+                    showToast();
+                }
+            });
+
+            listElement.addEventListener('click', (e) => {
+                if (e.target.classList.contains('cec-settings-delete-comment-button')) {
+                    const index = parseInt(e.target.dataset.index, 10);
+                    autoFillTexts[key].splice(index, 1);
+                    GM_setValue('iwtAutoFillTexts', autoFillTexts);
+                    renderCommentList(key, listElement);
+                    showToast();
+                }
+            });
+        };
+
+        setupCommentListHandlers('reOpen', document.getElementById('reOpen-list'), document.querySelector('[data-key="reOpen"]'));
+        setupCommentListHandlers('closeCase', document.getElementById('closeCase-list'), document.querySelector('[data-key="closeCase"]'));
+        setupCommentListHandlers('documentContact', document.getElementById('docContact-list'), document.querySelector('[data-key="documentContact"]'));
 
         const buttonList = document.getElementById('button-config-list');
         let currentButtons = GM_getValue('actionButtons', JSON.parse(JSON.stringify(DEFAULTS.actionButtons)));
@@ -1443,7 +1780,7 @@ V48 > 49
 
         const saveButtons = () => {
             GM_setValue('actionButtons', currentButtons);
-            Logger.info('Settings.save', `[SUCCESS] - 設置已保存: actionButtons updated`);
+            Log.info('UI.Settings', `設置已保存: actionButtons updated`);
             showToast();
         };
 
@@ -1551,7 +1888,7 @@ V48 > 49
                 currentButtons = JSON.parse(JSON.stringify(DEFAULTS.actionButtons));
                 saveButtons();
                 renderButtonList();
-                Logger.info('Settings.reset', `[SUCCESS] - "快捷按鈕" 配置已恢復為默認值。`);
+                Log.info('UI.Settings', `"快捷按鈕" 配置已恢復為默認值。`);
             }
         });
 
@@ -1617,7 +1954,6 @@ V48 > 49
         modalContainer.appendChild(editModal);
         const tempButton = JSON.parse(JSON.stringify(button));
 
-        // 監聽輸入框內容變化，同步到臨時數據對象
         editModal.addEventListener('input', (e) => {
             if (e.target.tagName === 'INPUT') {
                 const field = e.target.dataset.field;
@@ -1631,29 +1967,24 @@ V48 > 49
             }
         });
 
-        // [FIXED] 監聽點擊事件，處理選項的添加與刪除
         editModal.addEventListener('click', (e) => {
-            // 處理添加新選項
             if (e.target.classList.contains('cec-settings-add-option')) {
                 e.preventDefault();
                 const wrapper = e.target.closest('.input-wrapper');
                 const field = wrapper.dataset.wrapperFor;
 
-                // 確保臨時數據中的對應字段是數組
                 if (!Array.isArray(tempButton[field])) {
                     tempButton[field] = [];
                 }
                 const newIndex = tempButton[field].length;
-                tempButton[field].push(''); // 在臨時數據中添加一個空字符串
+                tempButton[field].push('');
 
-                // 在DOM中創建並插入新的輸入行
                 const newRow = document.createElement('div');
                 newRow.className = 'input-row';
                 newRow.innerHTML = `<input type="text" data-field="${field}" data-index="${newIndex}" value=""><button class="cec-settings-remove-option">-</button>`;
                 wrapper.insertBefore(newRow, e.target);
             }
 
-            // 處理刪除選項
             if (e.target.classList.contains('cec-settings-remove-option')) {
                 e.preventDefault();
                 const rowToRemove = e.target.closest('.input-row');
@@ -1661,29 +1992,23 @@ V48 > 49
                 const field = input.dataset.field;
                 const indexToRemove = parseInt(input.dataset.index, 10);
 
-                // 從臨時數據中移除對應項
                 if (Array.isArray(tempButton[field])) {
                     tempButton[field].splice(indexToRemove, 1);
                 }
 
-                // 從DOM中移除該行
                 const wrapper = rowToRemove.parentElement;
                 rowToRemove.remove();
 
-                // 嚴謹性校驗：重新整理後續兄弟節點的 data-index 屬性，確保數據一致性
                 const remainingRows = wrapper.querySelectorAll('.input-row');
                 remainingRows.forEach((row, newIndex) => {
-                    // 只更新被刪除項之後的元素索引
                     if (newIndex >= indexToRemove) {
-                         row.querySelector('input').dataset.index = newIndex;
+                        row.querySelector('input').dataset.index = newIndex;
                     }
                 });
             }
         });
 
-        // 保存按鈕邏輯
         editModal.querySelector('#save-edit').addEventListener('click', () => {
-            // 過濾掉所有字段中的空字符串選項
             Object.keys(tempButton).forEach(key => {
                 if (Array.isArray(tempButton[key])) {
                     tempButton[key] = tempButton[key].filter(item => item.trim() !== '');
@@ -1695,7 +2020,6 @@ V48 > 49
             editModal.remove();
         });
 
-        // 取消按鈕邏輯
         editModal.querySelector('#cancel-edit').addEventListener('click', () => {
             editModal.remove();
         });
@@ -1718,6 +2042,104 @@ V48 > 49
     // =================================================================================
     // SECTION: 核心功能邏輯 (Feature Logic)
     // =================================================================================
+
+    /**
+     * @description 處理 Case 列表頁的表格行，為已回覆的 Case 添加時間注釋。
+     * @param {HTMLTableSectionElement} tableBody - 要處理的表格 tbody 元素。
+     */
+    function processCaseListRows(tableBody) {
+        const SEND_BUTTON_CACHE_KEY = 'sendButtonClickLog';
+        const CACHE_TTL_MS = 10 * 60 * 60 * 1000; // 10小時: 已回覆記錄的緩存有效期。
+        const cache = GM_getValue(SEND_BUTTON_CACHE_KEY, {});
+
+        const rows = tableBody.querySelectorAll('tr[data-row-key-value]:not([data-cec-processed="true"])');
+
+        rows.forEach(row => {
+            row.dataset.cecProcessed = 'true';
+
+            const caseId = row.getAttribute('data-row-key-value');
+            if (!caseId) return;
+
+            const entry = cache[caseId];
+
+            if (entry && (Date.now() - entry.timestamp < CACHE_TTL_MS)) {
+                const caseNumberCell = row.querySelector('td[data-label="Case Number"]');
+                if (caseNumberCell) {
+                    const caseNumberLink = findElementInShadows(caseNumberCell, `a[href*="${caseId}"]`);
+                    if (caseNumberLink) {
+                        const annotationSpan = document.createElement('span');
+                        annotationSpan.textContent = ` ${formatTimeAgoSimple(entry.timestamp)}`;
+                        annotationSpan.style.color = '#000000';
+                        annotationSpan.style.fontSize = 'inherit';
+                        annotationSpan.style.fontWeight = 'normal';
+                        annotationSpan.style.marginLeft = '8px';
+
+                        const injectionTarget = caseNumberLink.parentElement;
+                        if (injectionTarget) {
+                            injectionTarget.appendChild(annotationSpan);
+                        } else {
+                            caseNumberLink.insertAdjacentElement('afterend', annotationSpan);
+                        }
+                    } else {
+                        Log.warn('Feature.CaseList', `在 Case ID ${caseId} 的行中，已定位到 Case Number 單元格，但在其內部未找到對應的 a 標籤錨點。`);
+                    }
+                } else {
+                    Log.warn('Feature.CaseList', `在 Case ID ${caseId} 的行中，未能定位到 data-label="Case Number" 的單元格。`);
+                }
+            }
+        });
+    }
+
+    /**
+     * @description 初始化對 Case 列表頁的監控，以便在列表更新時處理新的行。
+     */
+    async function initCaseListMonitor() {
+        if (!GM_getValue('notifyOnRepliedCaseEnabled', DEFAULTS.notifyOnRepliedCaseEnabled)) {
+            return;
+        }
+
+        try {
+            const dataTableSelector = 'lightning-datatable';
+            const dataTable = await waitForElementWithObserver(document.body, dataTableSelector, 20000); // 20000ms: 等待列表組件出現的超時。
+            Log.info('Feature.CaseList', 'lightning-datatable 組件已找到。');
+
+            const tableBody = await new Promise((resolve, reject) => {
+                const startTime = Date.now();
+                const intervalId = setInterval(() => {
+                    const tbody = findElementInShadows(dataTable, 'tbody');
+                    if (tbody) {
+                        clearInterval(intervalId);
+                        resolve(tbody);
+                    } else if (Date.now() - startTime > 10000) { // 10000ms: 等待 tbody 出現的超時。
+                        clearInterval(intervalId);
+                        reject(new Error('在 lightning-datatable 內部等待 tbody 超時。'));
+                    }
+                }, 300); // 300ms: 輪詢間隔。
+            });
+            Log.info('Feature.CaseList', '表格 tbody 元素已找到，準備處理行數據。');
+
+            processCaseListRows(tableBody);
+            Log.info('Feature.CaseList', '首次行數據處理完成。');
+
+            const observer = new MutationObserver(() => {
+                const debouncedProcess = debounce(() => {
+                    Log.info('Feature.CaseList', '檢測到列表更新，執行處理...');
+                    processCaseListRows(tableBody);
+                }, 300); // 300ms: 防抖延遲，應對列表快速刷新。
+                debouncedProcess();
+            });
+
+            observer.observe(tableBody, {
+                childList: true,
+                subtree: true,
+            });
+
+            Log.info('Feature.CaseList', 'Case 列表頁監控器已成功啟動並持續監控中。');
+
+        } catch (error) {
+            Log.warn('Feature.CaseList', `啟動 Case 列表頁監控器失敗: ${error.message}`);
+        }
+    }
 
     /**
      * @description 異步獲取並記錄富文本編輯器中的所有可用模板選項。
@@ -1759,111 +2181,150 @@ V48 > 49
 
     /**
      * @description 處理編輯器加載完畢後的模板快捷按鈕注入流程。
-     *              此函數被設計為可複用，由 'Compose' 和 'Reply All' 的點擊事件觸發。
      */
     async function handleEditorReadyForTemplateButtons() {
         try {
-            // 1. 等待富文本編輯器核心組件加載完成
-            const editor = await waitForElementWithObserver(document.body, ".slds-rich-text-editor .tox-tinymce", 15000);
+            const editor = await waitForElementWithObserver(document.body, ".slds-rich-text-editor .tox-tinymce", 15000); // 15000ms: 等待編輯器核心加載的超時。
 
-            // 2. 根據用戶設置調整編輯器高度
             const desiredHeight = GM_getValue("richTextEditorHeight", DEFAULTS.richTextEditorHeight) + "px";
             if (editor.style.height !== desiredHeight) {
                 editor.style.height = desiredHeight;
-                Logger.info('UI.heightAdjust', `[SUCCESS] - 回覆編輯器高度已根據設置調整為 ${desiredHeight}。`);
+                Log.info('UI.Enhancement', `回覆編輯器高度已根據設置調整為 ${desiredHeight}。`);
             }
 
-            // 3. 異步獲取所有可用的模板選項
             const templates = await getAndLogTemplateOptions();
 
-            // 4. 如果成功獲取到模板，則執行注入
             if (templates && templates.length > 1) {
-                // 尋找注入位置的錨點（'Popout'按鈕）
                 const anchorIcon = findElementInShadows(document.body, 'lightning-icon[icon-name="utility:new_window"]');
                 const anchorLi = anchorIcon ? anchorIcon.closest('li.cuf-attachmentsItem') : null;
 
                 if (anchorLi) {
                     injectTemplateShortcutButtons(anchorLi, templates);
                 } else {
-                    Logger.warn('UI.templateShortcuts', `[FAIL] - 未能找到用於注入快捷按鈕的錨點元素 ("Popout" 按鈕)。`);
+                    Log.warn('UI.Enhancement', `未能找到用於注入快捷按鈕的錨點元素 ("Popout" 按鈕)。`);
                 }
             }
+
+            setupSendButtonListener();
         } catch (error) {
-            Logger.warn('UI.templateShortcuts', `[FAIL] - 初始化模板快捷按鈕時出錯: ${error.message}`);
+            Log.warn('UI.Enhancement', `初始化模板快捷按鈕時出錯: ${error.message}`);
         }
     }
 
     /**
- * @description 根據模板標題自動點擊對應的模板選項。
- *              [增強版 v3.5 - 結構化定位] 定位光標，滾動視圖，並為模板區域附加粘貼為純文本（保留換行）的功能。
- *              此版本移除了對特定問候語文本的依賴，改為依賴模板的HTML結構進行定位，更加健壯。
- * @param {string} templateTitle - 要點擊的模板的完整標題。
- * @returns {Promise<void>}
- */
-async function clickTemplateOptionByTitle(templateTitle) {
-    // [修改] 視覺偏移量現在從常量變為變量
-    let VIEW_ADJUSTMENT_OFFSET_PX = -80;
+     * @description 部署一個一次性的監聽器，用於捕獲郵件發送事件並記錄緩存。
+     */
+    async function setupSendButtonListener() {
+        if (!GM_getValue('notifyOnRepliedCaseEnabled', DEFAULTS.notifyOnRepliedCaseEnabled)) {
+            return;
+        }
 
-    const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-    const BUTTON_ICON_SELECTOR = 'lightning-icon[icon-name="utility:insert_template"]';
-    const MENU_ITEM_SELECTOR = `li.uiMenuItem a[role="menuitem"][title="${templateTitle}"]`;
-    const EDITOR_IFRAME_SELECTOR = 'iframe.tox-edit-area__iframe';
-    const TIMEOUT = 5000;
-    let clickableButton = null;
+        const SEND_BUTTON_CACHE_KEY = 'sendButtonClickLog';
+        const CACHE_TTL_MS = 10 * 60 * 60 * 1000; // 10小時: 緩存有效期。
 
-    try {
-        // --- 階段一 & 二: 模板插入前的光標預定位邏輯 (保持不變) ---
         try {
-            const iframe = findElementInShadows(document.body, EDITOR_IFRAME_SELECTOR);
-            if (iframe && iframe.contentDocument) {
-                iframe.contentWindow.focus();
-                const editorDoc = iframe.contentDocument;
-                const editorBody = editorDoc.body;
-                if (editorBody && editorBody.children && editorBody.children.length >= 3) {
-                    const targetElement = editorBody.children[2];
-                    if (targetElement && ['P', 'DIV', 'TABLE', 'UL', 'OL', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6'].includes(targetElement.tagName)) {
-                        const selection = iframe.contentWindow.getSelection();
-                        const range = editorDoc.createRange();
-                        range.setStart(targetElement, 0);
-                        range.collapse(true);
-                        selection.removeAllRanges();
-                        selection.addRange(range);
-                        Logger.info('UI.templateCursor', `[SUCCESS] - 光標已成功移動到編輯器第三個元素 (${targetElement.tagName}) 的起始位置。`);
+            const sendButtonSelector = 'button.slds-button--brand.cuf-publisherShareButton';
+            const sendButton = await waitForElementWithObserver(document.body, sendButtonSelector, 15000); // 15000ms: 等待發送按鈕的超時。
+
+            const buttonLabel = findElementInShadows(sendButton, 'span.label');
+            if (!buttonLabel || buttonLabel.textContent.trim() !== 'Send') {
+                throw new Error('找到的按鈕不是預期的 "Send" 按鈕。');
+            }
+
+            sendButton.addEventListener('click', () => {
+                const caseId = getCaseIdFromUrl(location.href);
+
+                if (caseId) {
+                    Log.info('Feature.NotifyReplied', `"Send" 按鈕被點擊，為 Case ID: ${caseId} 記錄緩存。`);
+                    const cache = GM_getValue(SEND_BUTTON_CACHE_KEY, {});
+                    cache[caseId] = {
+                        timestamp: Date.now()
+                    };
+                    GM_setValue(SEND_BUTTON_CACHE_KEY, cache);
+                    Log.info('Feature.NotifyReplied', `緩存記錄成功，有效期10小時。`);
+                } else {
+                    Log.error('Feature.NotifyReplied', `點擊 "Send" 按鈕後，未能從當前 URL (${location.href}) 提取 Case ID，無法記錄緩存。`);
+                }
+            }, {
+                once: true
+            });
+
+            Log.info('Feature.NotifyReplied', `"Send" 按鈕監聽器已成功部署。`);
+
+        } catch (error) {
+            Log.warn('Feature.NotifyReplied', `部署 "Send" 按鈕監聽器失敗: ${error.message}`);
+        }
+    }
+
+    /**
+     * @description 根據模板標題自動點擊對應的模板選項，並執行插入後的光標定位和粘貼優化。
+     * @param {string} templateTitle - 要點擊的模板的完整標題。
+     */
+    async function clickTemplateOptionByTitle(templateTitle) {
+        let VIEW_ADJUSTMENT_OFFSET_PX = -80;
+        const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+        const BUTTON_ICON_SELECTOR = 'lightning-icon[icon-name="utility:insert_template"]';
+        const MENU_ITEM_SELECTOR = `li.uiMenuItem a[role="menuitem"][title="${templateTitle}"]`;
+        const EDITOR_IFRAME_SELECTOR = 'iframe.tox-edit-area__iframe';
+        const TIMEOUT = 5000; // 5000ms: 通用操作超時。
+        let clickableButton = null;
+
+        try {
+            try {
+                const iframe = await waitForElementWithObserver(document.body, EDITOR_IFRAME_SELECTOR, TIMEOUT);
+                await delay(100); // 100ms: 等待 iframe 內部內容穩定，這是關鍵的時序修正。
+
+                if (iframe && iframe.contentDocument) {
+                    iframe.contentWindow.focus();
+                    const editorDoc = iframe.contentDocument;
+                    const editorBody = editorDoc.body;
+                    let targetElement = null;
+
+                    if (editorBody && editorBody.children && editorBody.children.length >= 3) {
+                        targetElement = editorBody.children[2];
+                        Log.info('UI.Enhancement', '檢測到回覆郵件場景，光標將定位於引用內容前。');
+                    } else if (editorBody && editorBody.firstElementChild) {
+                        targetElement = editorBody.firstElementChild;
+                        Log.info('UI.Enhancement', '檢測到新郵件場景，光標將定位於編輯器頂部。');
+                    }
+
+                    if (targetElement) {
+                        const tagName = targetElement.tagName;
+                        if (tagName && ['P', 'DIV', 'TABLE', 'UL', 'OL', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6'].includes(tagName)) {
+                            const selection = iframe.contentWindow.getSelection();
+                            const range = editorDoc.createRange();
+                            range.setStart(targetElement, 0);
+                            range.collapse(true);
+                            selection.removeAllRanges();
+                            selection.addRange(range);
+                        }
                     }
                 }
+            } catch (cursorError) {
+                Log.error('UI.Enhancement', `嘗試預定位光標時發生錯誤: ${cursorError.message}`);
             }
-        } catch (cursorError) {
-            Logger.error('UI.templateCursor', `[FAIL] - 嘗試移動光標時發生錯誤: ${cursorError.message}`);
-        }
 
-        await delay(100);
+            const iconElement = await waitForElementWithObserver(document.body, BUTTON_ICON_SELECTOR, TIMEOUT);
+            clickableButton = iconElement.closest('a[role="button"]');
+            if (!clickableButton) throw new Error('未能找到 "插入模板" 按鈕。');
 
-        // --- 階段三: 模板菜單的自動化操作 (保持不變) ---
-        const iconElement = await waitForElementWithObserver(document.body, BUTTON_ICON_SELECTOR, TIMEOUT);
-        clickableButton = iconElement.closest('a[role="button"]');
-        if (!clickableButton) throw new Error('未能找到 "插入模板" 按鈕。');
+            if (clickableButton.getAttribute('aria-expanded') !== 'true') {
+                clickableButton.click();
+                await waitForAttributeChange(clickableButton, 'aria-expanded', 'true', TIMEOUT);
+            }
 
-        if (clickableButton.getAttribute('aria-expanded') !== 'true') {
-            clickableButton.click();
-            await waitForAttributeChange(clickableButton, 'aria-expanded', 'true', TIMEOUT);
-        }
+            const menuId = clickableButton.getAttribute('aria-controls');
+            if (!menuId) throw new Error('缺少 aria-controls 屬性。');
 
-        const menuId = clickableButton.getAttribute('aria-controls');
-        if (!menuId) throw new Error('缺少 aria-controls 屬性。');
+            const menuContainer = await waitForElementWithObserver(document.body, `[id="${menuId}"]`, TIMEOUT);
+            const targetOption = findElementInShadows(menuContainer, MENU_ITEM_SELECTOR);
 
-        const menuContainer = await waitForElementWithObserver(document.body, `[id="${menuId}"]`, TIMEOUT);
-        const targetOption = findElementInShadows(menuContainer, MENU_ITEM_SELECTOR);
+            if (targetOption) {
+                targetOption.click();
+                await delay(100); // 100ms: 等待模板內容完全注入，這是另一個關鍵的時序修正。
 
-        if (targetOption) {
-            targetOption.click();
-
-            // =================================================================================
-            // [修改] 階段四: 模板插入後的增強處理 (V3.6 - 完全可配置版)
-            // =================================================================================
-            setTimeout(() => {
-                // [新增] 總開關：只有在用戶啟用時才執行所有增強處理
                 if (!GM_getValue('postInsertionEnhancementsEnabled', DEFAULTS.postInsertionEnhancementsEnabled)) {
-                    Logger.info('UI.cursorPosition', '[SKIP] - 模板插入後增強處理功能未啟用。');
+                    Log.info('UI.Enhancement', '模板插入後增強處理功能未啟用。');
                     return;
                 }
 
@@ -1893,6 +2354,9 @@ async function clickTemplateOptionByTitle(templateTitle) {
                             const range = selection.getRangeAt(0);
                             range.deleteContents();
 
+                            const fontWrapper = iframeDocument.createElement('span');
+                            fontWrapper.style.fontFamily = 'Arial, sans-serif';
+
                             const fragment = iframeDocument.createDocumentFragment();
                             const lines = text.split('\n');
 
@@ -1903,18 +2367,18 @@ async function clickTemplateOptionByTitle(templateTitle) {
                                 }
                             });
 
-                            range.insertNode(fragment);
+                            fontWrapper.appendChild(fragment);
+                            range.insertNode(fontWrapper);
                             range.collapse(false);
                             selection.removeAllRanges();
                             selection.addRange(range);
                         });
                         targetContainerSpan.dataset.pasteHandlerAttached = 'true';
-                        Logger.info('UI.pasteHandler', '[SUCCESS] - 已成功為模板區域附加「粘貼為純文本(保留換行)」處理器。');
+                        Log.info('UI.Enhancement', '已成功為模板區域附加「粘貼為純文本(保留換行)並強制Arial字體」處理器。');
                     }
 
-                    // [修改] 從設置中讀取光標定位參數
                     const userBrPosition = GM_getValue('cursorPositionBrIndex', DEFAULTS.cursorPositionBrIndex);
-                    const brIndex = userBrPosition - 1; // 轉換為0基索引
+                    const brIndex = userBrPosition - 1;
 
                     const allBrTags = targetContainerSpan.getElementsByTagName('br');
                     let targetPositionNode = null;
@@ -1937,50 +2401,37 @@ async function clickTemplateOptionByTitle(templateTitle) {
                             behavior: 'auto',
                             block: 'center'
                         });
-
-                        // [新增] 條件化視覺偏移：只有在用戶啟用時才執行
                         if (GM_getValue('visualOffsetEnabled', DEFAULTS.visualOffsetEnabled)) {
                             iframeWindow.scrollBy(0, VIEW_ADJUSTMENT_OFFSET_PX);
                         }
                     }
 
                     iframeWindow.focus();
-                    Logger.info('UI.cursorPosition', `[SUCCESS] - 模板插入後，光標已成功定位到第 ${userBrPosition} 個換行符前。`);
+                    Log.info('UI.Enhancement', `模板插入後，光標已成功定位到第 ${userBrPosition} 個換行符前。`);
 
                 } catch (error) {
-                    Logger.warn('UI.cursorPosition', `[SKIP] - 嘗試定位光標或附加事件時失敗: ${error.message}`);
+                    Log.warn('UI.Enhancement', `嘗試定位光標或附加事件時失敗: ${error.message}`);
                 }
-            }, 100);
-            // =================================================================================
-            // [結束] 修改邏輯結束
-            // =================================================================================
 
-        } else {
-            throw new Error(`在菜單中未找到標題為 "${templateTitle}" 的選項。`);
+            } else {
+                throw new Error(`在菜單中未找到標題為 "${templateTitle}" 的選項。`);
+            }
+        } catch (error) {
+            Log.error('UI.Enhancement', `執行模板插入時出錯: ${error.message}`);
+            if (clickableButton && clickableButton.getAttribute('aria-expanded') === 'true') {
+                clickableButton.click();
+            }
+            throw error;
         }
-    } catch (error) {
-        Logger.error('UI.templateShortcuts', `[FAIL] - 執行模板插入時出錯: ${error.message}`);
-        if (clickableButton && clickableButton.getAttribute('aria-expanded') === 'true') {
-            clickableButton.click();
-        }
-        throw error;
     }
-}
 
     /**
-     * @description 根據模板列表，在指定位置注入快捷按鈕。
-     *              [功能增強版] 注入成功後，自動將郵件框架定位到窗口底部，並支持偏移量調整。
+     * @description 根據模板列表，在指定位置注入快捷按鈕，並自動滾動視圖。
      * @param {HTMLElement} anchorLiElement - 作為定位錨點的 "Popout" 按鈕所在的 <li> 元素。
      * @param {string[]} templates - 從菜單讀取到的完整模板標題列表。
      */
     function injectTemplateShortcutButtons(anchorLiElement, templates) {
-        // =================================================================================
-        // [新增] 在此處調整您期望的底部偏移量（單位：像素）
-        // 正數 = 留出更多底部空間 (向下滾動更多)
-        // 負數 = 向上回滾，隱藏部分底部
-        // 0 = 緊貼底部 (默認)
-        const BOTTOM_OFFSET_PIXELS = 50;
-        // =================================================================================
+        const BOTTOM_OFFSET_PIXELS = 50; // 50px: 滾動到底部後的額外偏移量，留出更多可視空間。
 
         const parentList = anchorLiElement.parentElement;
         if (!parentList || parentList.dataset.shortcutsInjected === 'true') {
@@ -2033,13 +2484,13 @@ async function clickTemplateOptionByTitle(templateTitle) {
         });
 
         parentList.dataset.shortcutsInjected = 'true';
-        Logger.info('UI.templateShortcuts', `[SUCCESS] - ${templatesToShow.length} 個回覆模板快捷按鈕注入成功。`);
+        Log.info('UI.Enhancement', `${templatesToShow.length} 個回覆模板快捷按鈕注入成功。`);
 
-        setTimeout(() => repositionComposerToBottom(BOTTOM_OFFSET_PIXELS), 100);
+        setTimeout(() => repositionComposerToBottom(BOTTOM_OFFSET_PIXELS), 100); // 100ms: 延遲執行滾動，確保按鈕渲染完成。
     }
 
     /**
-     * @description [可配置偏移量版] 查找並將組件滾動到視口底部，並應用一個額外的偏移量。
+     * @description 查找並將郵件編輯器組件滾動到視口底部，並應用一個額外的偏移量。
      * @param {number} [offset=0] - 滾動完成後的額外垂直偏移量（像素）。
      */
     function repositionComposerToBottom(offset = 0) {
@@ -2047,75 +2498,64 @@ async function clickTemplateOptionByTitle(templateTitle) {
 
         if (composerContainer && composerContainer.dataset.cecScrolled !== 'true') {
             try {
-                // 步驟 1: 瞬移到視口底部
                 composerContainer.scrollIntoView({
                     block: 'end',
                     inline: 'nearest'
                 });
 
-                // 步驟 2: [新增] 應用額外的偏移量
                 if (offset !== 0) {
                     window.scrollBy(0, offset);
                 }
 
                 composerContainer.dataset.cecScrolled = 'true';
-                Logger.info('UI.composerPosition', `[SUCCESS] - 回覆郵件框架已滾動至窗口底部 (額外偏移量: ${offset}px)。`);
+                Log.info('UI.Enhancement', `回覆郵件框架已滾動至窗口底部 (額外偏移量: ${offset}px)。`);
             } catch (error) {
-                Logger.error('UI.composerPosition', `[FAIL] - 嘗試滾動郵件框架時出錯: ${error.message}`);
+                Log.error('UI.Enhancement', `嘗試滾動郵件框架時出錯: ${error.message}`);
             }
         }
     }
 
     /**
      * @description 從頁面中提取追踪號碼，並觸發自動IVP查詢（如果已啟用）。
-     *              [v45.6 精簡日誌版] 使用激進查找模式，並保持控制台輸出簡潔。
      */
     async function extractTrackingNumberAndTriggerIVP() {
+        const TRACKING_CACHE_KEY = 'trackingNumberLog';
+        const CACHE_TTL_MS = 30 * 60 * 1000; // 30分鐘: 追踪號緩存有效期。
+        const currentUrl = location.href;
+
+        const cache = GM_getValue(TRACKING_CACHE_KEY, {});
+        const entry = cache[currentUrl];
+
+        if (entry && (Date.now() - entry.timestamp < CACHE_TTL_MS)) {
+            foundTrackingNumber = entry.trackingNumber;
+            Log.info('Feature.IVP', `從緩存中成功讀取追踪號: ${foundTrackingNumber}`);
+            autoQueryIVPOnLoad();
+            return;
+        }
+
         const trackingRegex = /(1Z[A-Z0-9]{16})/;
-        const selector = 'td[data-label="IDENTIFIER VALUE"]';
-
-        // 保留的日誌：標記功能開始執行
-        Logger.info('IVP.autoQuery', `[START] - 開始查找追踪號...`);
-
-        const pollForElementAggressively = (timeout = 15000) => {
-            return new Promise((resolve, reject) => {
-                const startTime = Date.now();
-                const intervalId = setInterval(() => {
-                    const el = findElementInShadows_Aggressive(document.body, selector);
-                    if (el) {
-                        clearInterval(intervalId);
-                        resolve(el);
-                        return;
-                    }
-                    if (Date.now() - startTime > timeout) {
-                        clearInterval(intervalId);
-                        reject(new Error(`Timeout waiting for selector (aggressive mode): ${selector}`));
-                    }
-                }, 300);
-            });
-        };
-
+        const selector = 'td[data-label="IDENTIFIER VALUE"] a, a[href*="/lightning/r/Shipment_Identifier"]';
         try {
-            const element = await pollForElementAggressively();
-            const trackingValue = element.dataset.cellValue;
-
-            if (trackingValue) {
-                const match = trackingValue.trim().match(trackingRegex);
+            const element = await waitForElement(document.body, selector, 10000); // 10000ms: 等待追踪號元素的超時。
+            if (element && element.textContent) {
+                const match = element.textContent.trim().match(trackingRegex);
                 if (match) {
-                    foundTrackingNumber = match[0];
-                    // 保留的日誌：標記功能成功完成
-                    Logger.info('IVP.autoQuery', `[SUCCESS] - 成功匹配並存儲追踪號: ${foundTrackingNumber}`);
+                    const extractedNumber = match[0];
+                    Log.info('Feature.IVP', `成功提取追踪號: ${extractedNumber}`);
+                    foundTrackingNumber = extractedNumber;
+
+                    cache[currentUrl] = {
+                        trackingNumber: extractedNumber,
+                        timestamp: Date.now()
+                    };
+                    GM_setValue(TRACKING_CACHE_KEY, cache);
+                    Log.info('Feature.IVP', `追踪號已寫入緩存，有效期30分鐘。`);
+
                     autoQueryIVPOnLoad();
-                } else {
-                    // 失敗情況的日誌仍然保留，用於問題排查
-                    Logger.warn('IVP.autoQuery', `[FAIL] - 獲取的值 "${trackingValue}" 不符合追踪號格式。`);
                 }
-            } else {
-                Logger.warn('IVP.autoQuery', `[FAIL] - 找到的目標元素缺少 'data-cell-value' 屬性。`);
             }
         } catch (error) {
-            // 查找超時的日誌也保留，因為這是功能未執行的關鍵信息
-            Logger.warn('IVP.autoQuery', `[SKIP] - 等待追踪號元素超時或失敗，自動查詢中止。`);
+            Log.warn('Feature.IVP', `在10秒內未找到追踪號元素，自動IVP查詢將不會觸發。`);
         }
     }
 
@@ -2133,69 +2573,74 @@ async function clickTemplateOptionByTitle(templateTitle) {
                 }
             })
             .catch(() => {
-                Logger.warn('IWT.init', `[FAIL] - 未找到 "I Want To..." 組件容器，自動化按鈕未注入。`);
+                Log.warn('Feature.IWT', `未找到 "I Want To..." 組件容器，自動化按鈕未注入。`);
             });
         const checkAndReInject = () => {
-            if (isScriptPaused) return;
-            if (!initialInjectionDone) return;
+            if (isScriptPaused || !initialInjectionDone) return;
             const anchorElement = findElementInShadows(document.body, ANCHOR_SELECTOR);
             if (anchorElement && anchorElement.dataset.customButtonsInjected !== 'true') {
                 injectIWantToButtons(anchorElement);
             }
         };
-        iwtModuleObserver = new MutationObserver(debounce(checkAndReInject, 350)); // 100ms: 防抖延遲，處理組件快速刷新的情況，避免性能問題。
+        iwtModuleObserver = new MutationObserver(debounce(checkAndReInject, 350)); // 350ms: 防抖延遲，處理組件快速刷新的情況。
         iwtModuleObserver.observe(document.body, {
             childList: true,
             subtree: true
         });
     }
 
+    /**
+     * @description 處理 "Re-Open Case" 自動化流程的第二階段。
+     * @param {string} comment - 要填寫的評論。
+     */
     async function handleStageTwoReOpen(comment) {
-    const reOpenCaseComponent = await waitForElementWithObserver(document.body, 'c-cec-re-open-case', 5000);
-    await new Promise(resolve => setTimeout(resolve, 500));
-    if (comment) {
-        const commentBox = await waitForElementWithObserver(reOpenCaseComponent, 'textarea[name="commentField"]', 5000);
-        simulateTyping(commentBox, comment);
+        const reOpenCaseComponent = await waitForElementWithObserver(document.body, 'c-cec-re-open-case', 5000); // 5000ms: 等待組件超時。
+        await new Promise(resolve => setTimeout(resolve, 500)); // 500ms: 等待組件內部元素渲染。
+        if (comment) {
+            const commentBox = await waitForElementWithObserver(reOpenCaseComponent, 'textarea[name="commentField"]', 5000);
+            simulateTyping(commentBox, comment);
+        }
+        await new Promise(resolve => setTimeout(resolve, 500)); // 500ms: 等待UI響應輸入。
+        const finalSubmitButton = await waitForElementWithObserver(reOpenCaseComponent, '.slds-card__footer button.slds-button_brand', 5000);
+        finalSubmitButton.click();
+        showCompletionToast(reOpenCaseComponent, 'Re-Open Case: 操作成功！請等待網頁更新！');
     }
-    await new Promise(resolve => setTimeout(resolve, 500));
-    const finalSubmitButton = await waitForElementWithObserver(reOpenCaseComponent, '.slds-card__footer button.slds-button_brand', 5000);
-    finalSubmitButton.click();
-    showCompletionToast(reOpenCaseComponent, 'Re-Open Case: 操作成功！請等待網頁更新！');
-}
+
     /**
      * @description 處理 "Close this Case" 自動化流程的第二階段。
      * @param {string} comment - 要填寫的評論。
      */
     async function handleStageTwoCloseCase(comment) {
-    const closeCaseComponent = await waitForElementWithObserver(document.body, 'c-cec-close-case', 5000);
-    await new Promise(resolve => setTimeout(resolve, 500));
-    await selectComboboxOption(closeCaseComponent, 'button[aria-label="Case Sub Status"]', 'Request Completed');
-    if (comment) {
-        const commentBox = await waitForElementWithObserver(closeCaseComponent, 'textarea.slds-textarea', 5000);
-        simulateTyping(commentBox, comment);
+        const closeCaseComponent = await waitForElementWithObserver(document.body, 'c-cec-close-case', 5000);
+        await new Promise(resolve => setTimeout(resolve, 500));
+        await selectComboboxOption(closeCaseComponent, 'button[aria-label="Case Sub Status"]', 'Request Completed');
+        if (comment) {
+            const commentBox = await waitForElementWithObserver(closeCaseComponent, 'textarea.slds-textarea', 5000);
+            simulateTyping(commentBox, comment);
+        }
+        await new Promise(resolve => setTimeout(resolve, 500));
+        const finalSubmitButton = await waitForElementWithObserver(closeCaseComponent, '.slds-card__footer button.slds-button_brand', 5000);
+        finalSubmitButton.click();
+        showCompletionToast(closeCaseComponent, 'Close Case: 操作成功！請等待網頁更新！');
     }
-    await new Promise(resolve => setTimeout(resolve, 500));
-    const finalSubmitButton = await waitForElementWithObserver(closeCaseComponent, '.slds-card__footer button.slds-button_brand', 5000);
-    finalSubmitButton.click();
-    showCompletionToast(closeCaseComponent, 'Close Case: 操作成功！請等待網頁更新！');
-}
 
     /**
      * @description 處理 "Document Customer Contact" 自動化流程的第二階段。
+     * @param {string} comment - 要填寫的評論。
      */
     async function handleStageTwoDocumentContact(comment) {
         const docContactComponent = await waitForElementWithObserver(document.body, 'c-cec-document-customer-contact', 5000);
         await new Promise(resolve => setTimeout(resolve, 500));
         const radioButtonSelector = 'input[value="Spoke with customer"]';
         const radioButton = await waitForElementWithObserver(docContactComponent, radioButtonSelector, 5000);
-        // 在點擊前加入短暫延時，確保事件監聽器已激活，這是穩定性的關鍵
-        await new Promise(resolve => setTimeout(resolve, 100));
+        await new Promise(resolve => setTimeout(resolve, 100)); // 100ms: 點擊前短暫延時，確保事件監聽器已激活。
         radioButton.click();
         if (comment) {
             try {
                 const commentBox = await waitForElementWithObserver(docContactComponent, 'textarea.slds-textarea', 5000);
                 simulateTyping(commentBox, comment);
             } catch (error) {
+                // 忽略錯誤，某些情況下可能沒有評論框
             }
         }
         await new Promise(resolve => setTimeout(resolve, 500));
@@ -2205,7 +2650,7 @@ async function clickTemplateOptionByTitle(templateTitle) {
     }
 
     /**
-     * @description 執行一個完整的 "I Want To..." 自動化流程，包括搜索、點擊和處理第二階段。
+     * @description 執行一個完整的 "I Want To..." 自動化流程。
      * @param {object} config - 流程配置對象。
      * @param {string} config.searchText - 要在搜索框中輸入的文本。
      * @param {Function} [config.stageTwoHandler] - 處理第二階段的函數。
@@ -2217,15 +2662,15 @@ async function clickTemplateOptionByTitle(templateTitle) {
             stageTwoHandler,
             finalComment
         } = config;
-        Logger.info('IWT.automateAction', `[START] - 啟動自動化流程: "${searchText}"。`);
+        Log.info('Feature.IWT', `啟動自動化流程: "${searchText}"。`);
         try {
-            const searchInput = await waitForElementWithObserver(document.body, 'c-ceclookup input.slds-combobox__input', 5000); // 5000ms: 等待搜索框出現的超時。
+            const searchInput = await waitForElementWithObserver(document.body, 'c-ceclookup input.slds-combobox__input', 5000);
             const dropdownTrigger = searchInput.closest('.slds-dropdown-trigger');
             if (!dropdownTrigger) throw new Error('無法找到下拉列表的觸發容器 .slds-dropdown-trigger');
             searchInput.focus();
             simulateTyping(searchInput, searchText);
-            await waitForAttributeChange(dropdownTrigger, 'aria-expanded', 'true', 5000); // 5000ms: 等待搜索結果下拉框展開的超時。
-            await new Promise(resolve => setTimeout(resolve, 200)); // 200ms: 等待搜索結果加載的延遲。
+            await waitForAttributeChange(dropdownTrigger, 'aria-expanded', 'true', 5000);
+            await new Promise(resolve => setTimeout(resolve, 200)); // 200ms: 等待搜索結果加載。
             simulateKeyEvent(searchInput, 'ArrowDown', 40);
             await new Promise(resolve => setTimeout(resolve, 100)); // 100ms: 模擬按鍵後的延遲。
             simulateKeyEvent(searchInput, 'Enter', 13);
@@ -2233,15 +2678,15 @@ async function clickTemplateOptionByTitle(templateTitle) {
             firstSubmitButton.click();
             if (stageTwoHandler && typeof stageTwoHandler === 'function') {
                 await stageTwoHandler(finalComment);
-                Logger.info('IWT.automateAction', `[SUCCESS] - 自動化流程: "${searchText}" 已成功完成。`);
+                Log.info('Feature.IWT', `自動化流程: "${searchText}" 已成功完成。`);
             }
         } catch (error) {
-            Logger.error('IWT.automateAction', `[FAIL] - 流程 "${searchText}" 在 "第一階段" 階段失敗: ${error.message}`);
+            Log.error('Feature.IWT', `流程 "${searchText}" 在 "第一階段" 失敗: ${error.message}`);
         }
     }
 
     /**
-     * @description 向 "I Want To..." 組件下方注入自定義的自動化操作按鈕。
+     * @description 向 "I Want To..." 組件下方注入自定義的、帶有下拉選項的自動化操作按鈕。
      * @param {HTMLElement} anchorElement - 用於定位的錨點元素。
      */
     function injectIWantToButtons(anchorElement) {
@@ -2253,49 +2698,133 @@ async function clickTemplateOptionByTitle(templateTitle) {
         const styles = GM_getValue('iWantToButtonStyles', DEFAULTS.iWantToButtonStyles);
         Object.assign(buttonContainer.style, styles);
 
-        // [核心修改] 從存儲中讀取用戶自定義的評論文本
-        const autoFillTexts = GM_getValue('iwtAutoFillTexts', DEFAULTS.iwtAutoFillTexts);
+        let settings = GM_getValue('iwtAutoFillTexts', DEFAULTS.iwtAutoFillTexts);
+        if (settings && settings.reOpen && typeof settings.reOpen === 'string') {
+            Log.info('Feature.IWT', '檢測到舊版 IWT 按鈕數據格式，正在動態遷移。');
+            for (const key in settings) {
+                if (typeof settings[key] === 'string') {
+                    settings[key] = [settings[key]];
+                }
+            }
+        }
+        const autoFillTexts = settings;
+
+        const handleOutsideClick = (e, dropdownMenu, trigger) => {
+            if (!trigger.contains(e.target)) {
+                dropdownMenu.classList.remove('show');
+                document.removeEventListener('click', trigger.__outsideClickListener);
+                delete trigger.__outsideClickListener;
+            }
+        };
 
         const buttonConfigs = [{
             name: 'Re-Open Case (Auto)',
             title: '自動執行 "Re-Open Case"',
-            action: () => automateIWantToAction({
-                searchText: 'Re-Open Case',
-                stageTwoHandler: handleStageTwoReOpen,
-                finalComment: autoFillTexts.reOpen // 使用配置值
-            })
+            actionKey: 'reOpen',
+            searchText: 'Re-Open Case',
+            handler: handleStageTwoReOpen
         }, {
             name: 'Close this Case (Auto)',
             title: '自動執行 "Close this Case"',
-            action: () => automateIWantToAction({
-                searchText: 'Close this Case',
-                stageTwoHandler: handleStageTwoCloseCase,
-                finalComment: autoFillTexts.closeCase // 使用配置值
-            })
+            actionKey: 'closeCase',
+            searchText: 'Close this Case',
+            handler: handleStageTwoCloseCase
         }, {
             name: 'Document Customer Contact (Auto)',
             title: '自動執行 "Document Customer Contact"',
-            action: () => automateIWantToAction({
-                searchText: 'Document Customer Contact',
-                stageTwoHandler: handleStageTwoDocumentContact,
-                finalComment: autoFillTexts.documentContact // 使用配置值
-            })
+            actionKey: 'documentContact',
+            searchText: 'Document Customer Contact',
+            handler: handleStageTwoDocumentContact
         }];
+
         buttonConfigs.forEach(config => {
             const layoutItem = document.createElement('div');
             layoutItem.className = 'slds-var-p-right_xx-small slds-size_4-of-12';
-            const button = document.createElement('button');
-            button.textContent = config.name;
-            button.title = config.title;
-            button.className = 'slds-button slds-button_stretch cec-iwt-button-override';
-            button.addEventListener('click', config.action);
-            layoutItem.appendChild(button);
+            const commentOptions = autoFillTexts[config.actionKey] || [];
+
+            if (commentOptions.length === 1) {
+                const directButton = document.createElement('button');
+                directButton.title = config.title;
+                directButton.className = 'slds-button slds-button_stretch cec-iwt-button-override';
+                directButton.textContent = config.name;
+                directButton.addEventListener('click', () => {
+                    automateIWantToAction({
+                        searchText: config.searchText,
+                        stageTwoHandler: config.handler,
+                        finalComment: commentOptions[0]
+                    });
+                });
+                layoutItem.appendChild(directButton);
+                injectedIWTButtons[config.name] = directButton;
+
+            } else {
+                const dropdownTrigger = document.createElement('div');
+                dropdownTrigger.className = 'cec-iwt-dropdown-trigger';
+
+                const mainButton = document.createElement('button');
+                mainButton.title = config.title;
+                mainButton.className = 'slds-button slds-button_stretch cec-iwt-button-override';
+                mainButton.innerHTML = `${config.name} <span class="cec-dropdown-arrow">▼</span>`;
+
+                const dropdownMenu = document.createElement('ul');
+                dropdownMenu.className = 'cec-iwt-dropdown-menu';
+
+                if (commentOptions.length > 1) {
+                    commentOptions.forEach(comment => {
+                        const item = document.createElement('li');
+                        item.className = 'cec-iwt-dropdown-item';
+                        item.textContent = comment;
+                        item.addEventListener('click', () => {
+                            automateIWantToAction({
+                                searchText: config.searchText,
+                                stageTwoHandler: config.handler,
+                                finalComment: comment
+                            });
+                            dropdownMenu.classList.remove('show');
+                        });
+                        dropdownMenu.appendChild(item);
+                    });
+                } else {
+                    const disabledItem = document.createElement('li');
+                    disabledItem.className = 'cec-iwt-dropdown-item';
+                    disabledItem.textContent = '無可用評論';
+                    disabledItem.style.color = '#ccc';
+                    disabledItem.style.cursor = 'not-allowed';
+                    dropdownMenu.appendChild(disabledItem);
+                }
+
+                mainButton.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    document.querySelectorAll('.cec-iwt-dropdown-menu.show').forEach(menu => {
+                        if (menu !== dropdownMenu) {
+                            menu.classList.remove('show');
+                        }
+                    });
+                    dropdownMenu.classList.toggle('show');
+                    if (dropdownMenu.classList.contains('show')) {
+                        if (!dropdownTrigger.__outsideClickListener) {
+                            dropdownTrigger.__outsideClickListener = (event) => handleOutsideClick(event, dropdownMenu, dropdownTrigger);
+                            document.addEventListener('click', dropdownTrigger.__outsideClickListener);
+                        }
+                    } else {
+                        if (dropdownTrigger.__outsideClickListener) {
+                            document.removeEventListener('click', dropdownTrigger.__outsideClickListener);
+                            delete dropdownTrigger.__outsideClickListener;
+                        }
+                    }
+                });
+
+                dropdownTrigger.appendChild(mainButton);
+                dropdownTrigger.appendChild(dropdownMenu);
+                layoutItem.appendChild(dropdownTrigger);
+                injectedIWTButtons[config.name] = mainButton;
+            }
             buttonContainer.appendChild(layoutItem);
-            injectedIWTButtons[config.name] = button;
         });
+
         anchorElement.insertAdjacentElement('afterend', buttonContainer);
         anchorElement.dataset.customButtonsInjected = 'true';
-        Logger.info('IWT.injectButtons', `[SUCCESS] - "I Want To..." 自動化按鈕注入成功。`);
+        Log.info('Feature.IWT', `"I Want To..." 帶下拉選項的自動化按鈕注入成功。`);
         initAssignButtonMonitor();
     }
 
@@ -2311,7 +2840,7 @@ async function clickTemplateOptionByTitle(templateTitle) {
             }
         });
         const state = isAssignButtonDisabled ? '禁用' : '啟用';
-        Logger.info('IWT.buttonLinkage', `[UPDATE] - 聯動狀態更新，自動化按鈕已設置為 ${state} 狀態。`);
+        Log.info('Feature.IWT', `聯動狀態更新，自動化按鈕已設置為 ${state} 狀態。`);
     }
 
     /**
@@ -2332,9 +2861,9 @@ async function clickTemplateOptionByTitle(templateTitle) {
                 attributes: true,
                 attributeFilter: ['disabled', 'aria-disabled']
             });
-            Logger.info('IWT.buttonLinkage', `[SUCCESS] - "Assign Case to Me" 按鈕狀態監控已啟動，實現狀態聯動。`);
+            Log.info('Feature.IWT', `"Assign Case to Me" 按鈕狀態監控已啟動，實現狀態聯動。`);
         } catch (error) {
-            Logger.warn('IWT.buttonLinkage', `[FAIL] - 未找到 "Assign Case to Me" 按鈕，狀態聯動功能未啟動。`);
+            Log.warn('Feature.IWT', `未找到 "Assign Case to Me" 按鈕，狀態聯動功能未啟動。`);
             updateIWTButtonStates(false);
         }
     }
@@ -2347,47 +2876,46 @@ async function clickTemplateOptionByTitle(templateTitle) {
      * @returns {Promise<boolean>} 如果成功選擇則返回 true。
      */
     async function safeClickWithOptions(modalRoot, buttonSelector, itemValues) {
-        // [FIXED] 調整過濾邏輯，僅排除 null 和 undefined，保留空字符串 ""
         if (!itemValues || !Array.isArray(itemValues)) {
-            return true; // 如果沒有提供值或格式不對，則靜默成功
+            return true;
         }
         const options = itemValues.filter(item => item !== null && item !== undefined);
         if (options.length === 0) {
-            return true; // 如果過濾後沒有可選項，也視為成功
+            return true;
         }
 
         for (const option of options) {
             try {
                 const itemSelector = `lightning-base-combobox-item[data-value="${option}"]`;
-                // 增加重試機制以應對UI延遲
-                for (let i = 0; i < 2; i++) { // 重試2次
+                for (let i = 0; i < 2; i++) {
                     try {
-                        const button = await waitForElementWithObserver(modalRoot, buttonSelector, 10); // 100ms: 快速查找按鈕
-                        button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-                        await new Promise(resolve => setTimeout(resolve, 5)); // 50ms: 增加短暫延遲等待菜單渲染
+                        const button = await waitForElementWithObserver(modalRoot, buttonSelector, 10); // 10ms: 快速查找按鈕。
+                        button.dispatchEvent(new MouseEvent("click", {
+                            bubbles: true
+                        }));
+                        await new Promise(resolve => setTimeout(resolve, 5)); // 5ms: 等待菜單渲染。
 
-                        const item = await waitForElementWithObserver(document.body, itemSelector, 10); // 100ms: 快速查找選項
-                        item.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-                        await new Promise(resolve => setTimeout(resolve, 5)); // 50ms: 點擊後的UI反應延遲
-                        return true; // 只要有一個選項成功，就立即返回
+                        const item = await waitForElementWithObserver(document.body, itemSelector, 10); // 10ms: 快速查找選項。
+                        item.dispatchEvent(new MouseEvent("click", {
+                            bubbles: true
+                        }));
+                        await new Promise(resolve => setTimeout(resolve, 5)); // 5ms: 點擊後的UI反應延遲。
+                        return true;
                     } catch (error) {
-                        if (i === 1) throw error; // 最後一次嘗試失敗則拋出異常
-                        // 嘗試關閉可能已打開的下拉菜單以重置狀態
+                        if (i === 1) throw error;
                         document.body.click();
                         await new Promise(resolve => setTimeout(resolve, 5));
                     }
                 }
             } catch (error) {
-                Logger.warn('UI.safeClick', `[SKIP] - 選擇選項 "${option}" 失敗，將嘗試下一個備選項。錯誤: ${error.message}`);
-                // 忽略單個選項的失敗，繼續嘗試下一個
+                Log.warn('UI.ModalButtons', `選擇選項 "${option}" 失敗，將嘗試下一個備選項。錯誤: ${error.message}`);
             }
         }
-        // 如果所有備選選項都失敗了，則拋出一個匯總的錯誤
         throw new Error(`所有備選選項 [${options.join(', ')}] 都選擇失敗`);
     }
 
     /**
-     * @description 在彈出窗口的底部注入快捷操作按鈕，並實現自動換行。
+     * @description 在彈出窗口的底部注入快捷操作按鈕。
      * @param {HTMLElement} footer - 彈窗的 footer 元素。
      */
     function addModalActionButtons(footer) {
@@ -2440,7 +2968,7 @@ async function clickTemplateOptionByTitle(templateTitle) {
                     await safeClickWithOptions(modalRoot, 'button[aria-label*="Case Sub Category"]', config.subCategory);
                     await safeClickWithOptions(modalRoot, 'button[aria-label*="Inquirer Role"]', config.role);
                 } catch (error) {
-                    // 錯誤已在 safeClickWithOptions 內部處理
+                    // 錯誤已在 safeClickWithOptions 內部記錄
                 }
             });
             buttonContainer.appendChild(btn);
@@ -2454,7 +2982,7 @@ async function clickTemplateOptionByTitle(templateTitle) {
         });
 
         footer.insertBefore(buttonContainer, saveButtonWrapper);
-        Logger.info('UI.modalButtons', `[SUCCESS] - 快捷操作按鈕已成功注入彈窗。`);
+        Log.info('UI.ModalButtons', `快捷操作按鈕已成功注入彈窗。`);
     }
 
     /**
@@ -2471,7 +2999,7 @@ async function clickTemplateOptionByTitle(templateTitle) {
         const trySendMessage = () => {
             if (attempt >= MAX_RETRIES || !windowHandle || windowHandle.closed) {
                 if (attempt >= MAX_RETRIES) {
-                    Logger.error('IVP.ipc', `[FAIL] - 發送消息至 IVP 窗口達到最大重試次數，已停止。`);
+                    Log.error('Feature.IVP', `發送消息至 IVP 窗口達到最大重試次數，已停止。`);
                 }
                 if (intervalId) clearInterval(intervalId);
                 window.removeEventListener('message', confirmationListener);
@@ -2486,7 +3014,7 @@ async function clickTemplateOptionByTitle(templateTitle) {
             if (event.origin !== targetOrigin) return;
             if (event.data && event.data.type === 'CEC_REQUEST_RECEIVED' && event.data.payload && event.data.payload.timestamp === messagePayload.payload.timestamp) {
                 if (intervalId) clearInterval(intervalId);
-                Logger.info('IVP.ipc', `[SUCCESS] - 收到 IVP 窗口的接收確認。`);
+                Log.info('Feature.IVP', `收到 IVP 窗口的接收確認。`);
                 window.removeEventListener('message', confirmationListener);
             }
         };
@@ -2498,19 +3026,19 @@ async function clickTemplateOptionByTitle(templateTitle) {
      */
     async function autoQueryIVPOnLoad() {
         if (!GM_getValue('autoIVPQueryEnabled', DEFAULTS.autoIVPQueryEnabled)) {
-            Logger.warn('IVP.autoQuery', `[SKIP] - 未啟用自動 IVP 查詢功能。`);
+            Log.warn('Feature.IVP', `未啟用自動 IVP 查詢功能。`);
             return;
         }
         if (!foundTrackingNumber) {
             return;
         }
-        Logger.info('IVP.autoQuery', `[START] - 檢測到追踪號: ${foundTrackingNumber}，觸發自動查詢。`);
+        Log.info('Feature.IVP', `檢測到追踪號: ${foundTrackingNumber}，觸發自動查詢。`);
         try {
             if (!ivpWindowHandle || ivpWindowHandle.closed) {
                 ivpWindowHandle = window.open('https://ivp.inside.ups.com/internal-visibility-portal', 'ivp_window');
             }
             if (!ivpWindowHandle) {
-                Logger.error('IVP.ipc', `[FAIL] - 打開 IVP 窗口失敗，可能已被瀏覽器攔截。`);
+                Log.error('Feature.IVP', `打開 IVP 窗口失敗，可能已被瀏覽器攔截。`);
                 alert('CEC 功能強化：打開 IVP 窗口失敗，可能已被瀏覽器攔截。請為此網站允許彈窗。');
                 return;
             }
@@ -2522,12 +3050,12 @@ async function clickTemplateOptionByTitle(templateTitle) {
                 }
             };
             sendMessageWithRetries(ivpWindowHandle, messagePayload, 'https://ivp.inside.ups.com');
-            Logger.info('IVP.ipc', `[SUCCESS] - 查詢請求已發送至 IVP 窗口。`);
+            Log.info('Feature.IVP', `查詢請求已發送至 IVP 窗口。`);
             if (GM_getValue('autoSwitchEnabled', DEFAULTS.autoSwitchEnabled)) {
                 ivpWindowHandle.focus();
             }
         } catch (err) {
-            // 錯誤已在內部處理
+            Log.error('Feature.IVP', `自動查詢IVP時發生未知錯誤: ${err.message}`);
         }
     }
 
@@ -2544,7 +3072,7 @@ async function clickTemplateOptionByTitle(templateTitle) {
                 textarea.style.height = desiredHeight;
                 textarea.style.resize = 'vertical';
                 textarea.dataset.heightAdjusted = 'true';
-                Logger.info('UI.heightAdjust', `[SUCCESS] - 界面元素高度已根據設置調整 (描述框/歷史列表/編輯器)。`);
+                Log.info('UI.HeightAdjust', `Case 描述框高度已調整為 ${desiredHeight}。`);
                 return;
             }
         }
@@ -2561,7 +3089,7 @@ async function clickTemplateOptionByTitle(templateTitle) {
                         valueContainer.style.height = desiredHeight;
                         valueContainer.style.overflowY = 'auto';
                         valueContainer.dataset.heightAdjusted = 'true';
-                        Logger.info('UI.heightAdjust', `[SUCCESS] - 界面元素高度已根據設置調整 (描述框/歷史列表/編輯器)。`);
+                        Log.info('UI.HeightAdjust', `Case 描述顯示區域高度已調整為 ${desiredHeight}。`);
                         return;
                     }
                 }
@@ -2584,7 +3112,7 @@ async function clickTemplateOptionByTitle(templateTitle) {
         const now = Date.now();
         const currentUrl = location.href;
         const allLogs = GM_getValue(PREFERRED_LOG_KEY, {});
-        const CACHE_TTL = 30 * 60 * 1000; // 30分鐘: 聯繫人 Preferred 狀態的緩存有效期，避免重複DOM查詢。
+        const CACHE_TTL = 30 * 60 * 1000; // 30分鐘: 聯繫人 Preferred 狀態的緩存有效期。
         const cleanedLog = Object.fromEntries(Object.entries(allLogs).filter(([_, data]) => now - data.timestamp < CACHE_TTL));
         if (cleanedLog[currentUrl]) {
             const cachedIsPreferred = cleanedLog[currentUrl].isPreferred;
@@ -2595,7 +3123,7 @@ async function clickTemplateOptionByTitle(templateTitle) {
                     div.style.setProperty('background-color', 'moccasin', 'important');
                 });
             }
-            Logger.info('UI.contactCard', `[SUCCESS] - 聯繫人卡片高亮規則已應用 (模式: ${highlightMode}, Preferred: ${cachedIsPreferred}, 結果: ${shouldHighlight ? '高亮' : '不高亮'})。`);
+            Log.info('UI.ContactCard', `聯繫人卡片高亮規則已應用 (模式: ${highlightMode}, Preferred: ${cachedIsPreferred}, 結果: ${shouldHighlight ? '高亮' : '不高亮'})。`);
             return;
         }
         const container = card.closest('div.cCEC_ContactPersonAccount');
@@ -2640,7 +3168,7 @@ async function clickTemplateOptionByTitle(templateTitle) {
             // 忽略異常
         }
         if (!preferredValueFound) {
-            Logger.warn('UI.contactCard', `[FAIL] - 未能找到聯繫人 "Preferred" 狀態值，高亮功能可能不準確。`);
+            Log.warn('UI.ContactCard', `未能找到聯繫人 "Preferred" 狀態值，高亮功能可能不準確。`);
         }
         cleanedLog[currentUrl] = {
             isPreferred: isPreferred,
@@ -2654,7 +3182,7 @@ async function clickTemplateOptionByTitle(templateTitle) {
                 div.style.setProperty('background-color', 'moccasin', 'important');
             });
         }
-        Logger.info('UI.contactCard', `[SUCCESS] - 聯繫人卡片高亮規則已應用 (模式: ${highlightMode}, Preferred: ${isPreferred}, 結果: ${shouldHighlight ? '高亮' : '不高亮'})。`);
+        Log.info('UI.ContactCard', `聯繫人卡片高亮規則已應用 (模式: ${highlightMode}, Preferred: ${isPreferred}, 結果: ${shouldHighlight ? '高亮' : '不高亮'})。`);
     }
 
     /**
@@ -2713,7 +3241,7 @@ async function clickTemplateOptionByTitle(templateTitle) {
                         }
                     } else {
                         ivpState.parent.appendChild(ivpState.iframe);
-                        Logger.info('IVP.blocker', `[SUCCESS] - 已恢復被攔截的 IVP 內容。`);
+                        Log.info('Feature.IVP', `已恢復被攔截的 IVP 內容。`);
                     }
                 }
             }, true);
@@ -2737,7 +3265,7 @@ async function clickTemplateOptionByTitle(templateTitle) {
                 ivpState.parent = iframe.parentElement;
                 ivpState.isReady = true;
                 iframe.remove();
-                Logger.info('IVP.blocker', `[SUCCESS] - 原生 IVP 卡片已被成功攔截並隱藏。`);
+                Log.info('Feature.IVP', `原生 IVP 卡片已被成功攔截並隱藏。`);
                 return true;
             }
             return false;
@@ -2751,7 +3279,7 @@ async function clickTemplateOptionByTitle(templateTitle) {
         const timeoutHandle = setTimeout(() => {
             localObserver.disconnect();
             if (!findAndStoreTask()) {
-                Logger.warn('IVP.blocker', `[TIMEOUT] - 攔截 IVP 卡片時，等待 iframe 超時。`);
+                Log.warn('Feature.IVP', `攔截 IVP 卡片時，等待 iframe 超時。`);
             }
         }, 15000); // 15000ms: 等待 iframe 出現的超時。
         localObserver.observe(cardElement, {
@@ -2766,7 +3294,6 @@ async function clickTemplateOptionByTitle(templateTitle) {
 
     /**
      * @description 執行自動指派的核心邏輯，包括所有者驗證、緩存檢查和點擊操作。
-     *              [V49.3 延時修復版] 根據用戶要求，在指派成功4秒後，重新執行高亮檢查。
      * @param {string} caseUrl - 當前 Case 的 URL，用作緩存鍵。
      * @param {boolean} [isCachedCase=false] - 是否為緩存命中模式，此模式下僅應用視覺反饋。
      */
@@ -2806,10 +3333,10 @@ async function clickTemplateOptionByTitle(templateTitle) {
                 }
                 return;
             }
-            Logger.info('AutoAssign.execute', `[START] - 自動指派流程啟動。`);
+            Log.info('Feature.AutoAssign', `自動指派流程啟動。`);
             const targetUser = GM_getValue('autoAssignUser', DEFAULTS.autoAssignUser);
             if (!targetUser) {
-                Logger.warn('AutoAssign.preCheck', `[SKIP] - 未設置目標用戶名，自動指派功能已禁用。`);
+                Log.warn('Feature.AutoAssign', `未設置目標用戶名，自動指派功能已禁用。`);
                 return;
             }
             let ownerBlock;
@@ -2820,29 +3347,29 @@ async function clickTemplateOptionByTitle(templateTitle) {
             }
             let ownerElement, currentOwner;
             try {
-               const preciseOwnerSelector = 'force-owner-lookup .owner-name span';
-                ownerElement = await waitForElementWithObserver(ownerBlock, preciseOwnerSelector, 10000); // 15000ms: 等待所有者姓名元素出現的超時。
+                const preciseOwnerSelector = 'force-owner-lookup .owner-name span';
+                ownerElement = await waitForElementWithObserver(ownerBlock, preciseOwnerSelector, 10000); // 10000ms: 等待所有者姓名元素出現的超時。
                 currentOwner = ownerElement?.innerText?.trim() || '';
             } catch (err) {
-                Logger.error('AutoAssign.execute', `[FAIL] - 查找 "Case Owner" 姓名元素時發生錯誤或超時。`);
+                Log.error('Feature.AutoAssign', `查找 "Case Owner" 姓名元素時發生錯誤或超時。`);
                 return;
             }
             if (!currentOwner) {
                 return;
             }
             if (currentOwner.toLowerCase() !== targetUser.toLowerCase()) {
-                Logger.info('AutoAssign.preCheck', `[SKIP] - Owner "${currentOwner}" 與目標用戶 "${targetUser}" 不匹配。`);
+                Log.info('Feature.AutoAssign', `Owner "${currentOwner}" 與目標用戶 "${targetUser}" 不匹配。`);
                 return;
             }
             let assignButton;
             try {
-                assignButton = await waitForElementWithObserver(document.body, 'button[title="Assign Case to Me"]', 100000); // 20000ms: 等待指派按鈕出現的超時。
+                assignButton = await waitForElementWithObserver(document.body, 'button[title="Assign Case to Me"]', 100000); // 100000ms: 等待指派按鈕出現的超時。
             } catch (err) {
-                Logger.error('AutoAssign.execute', `[FAIL] - 查找 "Assign Case to Me" 按鈕時發生錯誤或超時。`);
+                Log.error('Feature.AutoAssign', `查找 "Assign Case to Me" 按鈕時發生錯誤或超時。`);
                 return;
             }
             if (assignButton && !assignButton.disabled) {
-                await new Promise(resolve => setTimeout(resolve, 300)); // 300ms: 點擊前的短暫延遲，確保UI穩定，避免點擊失效。
+                await new Promise(resolve => setTimeout(resolve, 300)); // 300ms: 點擊前的短暫延遲，確保UI穩定。
                 assignButton.click();
                 assignButton.style.setProperty('background-color', '#0070d2', 'important');
                 assignButton.style.setProperty('color', '#fff', 'important');
@@ -2852,22 +3379,17 @@ async function clickTemplateOptionByTitle(templateTitle) {
                     timestamp: Date.now()
                 };
                 GM_setValue(ASSIGNMENT_CACHE_KEY, cache);
-                Logger.info('AutoAssign.execute', `[SUCCESS] - 自動指派成功，已點擊 "Assign Case to Me" 按鈕並更新緩存。`);
+                Log.info('Feature.AutoAssign', `自動指派成功，已點擊 "Assign Case to Me" 按鈕並更新緩存。`);
 
-                // =================================================================================
-                // SECTION: [新增修復] 延時4秒後，重新執行高亮檢查
-                // =================================================================================
                 setTimeout(() => {
-                    Logger.info('AutoAssign.reColor', `[DELAYED CHECK] - 4秒後執行高亮狀態重新檢查。`);
+                    Log.info('Feature.AutoAssign', `8秒後執行高亮狀態重新檢查。`);
                     checkAndColorComposeButton();
-                }, 8000); // 按照您要求的4秒延遲
-                // =================================================================================
-
+                }, 8000); // 8000ms: 指派成功後，等待足夠時間讓後端和UI更新，然後重新檢查計時器狀態。
             } else {
-                Logger.warn('AutoAssign.execute', `[SKIP] - "Assign Case to Me" 按鈕不存在或處於禁用狀態。`);
+                Log.warn('Feature.AutoAssign', `"Assign Case to Me" 按鈕不存在或處於禁用狀態。`);
             }
         } catch (outerErr) {
-            // 忽略外部錯誤
+            Log.error('Feature.AutoAssign', `執行自動指派時發生未知外部錯誤: ${outerErr.message}`);
         }
     }
 
@@ -2921,7 +3443,7 @@ async function clickTemplateOptionByTitle(templateTitle) {
                     const accountValue = accountCell.getAttribute('data-cell-value') || accountCell.textContent.trim();
                     if (accountValue && accountValue.replace(/^0+/, '') === extractedValue.replace(/^0+/, '')) {
                         accountCell.style.backgroundColor = 'yellow';
-                        Logger.info('UI.contactHighlight', `[SUCCESS] - "Associate Contact" 彈窗中匹配賬號 "${accountValue}" 的行已高亮。`);
+                        Log.info('UI.ContactModal', `"Associate Contact" 彈窗中匹配賬號 "${accountValue}" 的行已高亮。`);
                     }
                 }
             };
@@ -2946,7 +3468,7 @@ async function clickTemplateOptionByTitle(templateTitle) {
                 reorderRow(headerRow, true);
                 Array.from(tableBody.querySelectorAll('tr')).forEach(row => reorderRow(row));
                 table.dataset.reordered = 'true';
-                Logger.info('UI.contactReorder', `[SUCCESS] - "Associate Contact" 彈窗表格已按預設順序重新排列。`);
+                Log.info('UI.ContactModal', `"Associate Contact" 彈窗表格已按預設順序重新排列。`);
             }
             const obs = new MutationObserver((mutations) => {
                 if (isScriptPaused) return;
@@ -2965,7 +3487,7 @@ async function clickTemplateOptionByTitle(templateTitle) {
             processedModals.add(modal);
             contactSentinel = deployLinkContactSentinel(modal);
         } catch (error) {
-            Logger.error('UI.contactReorder', `[FAIL] - 處理 "Associate Contact" 彈窗時出錯: ${error.message}`);
+            Log.error('UI.ContactModal', `處理 "Associate Contact" 彈窗時出錯: ${error.message}`);
         } finally {
             requestAnimationFrame(() => {
                 modal.style.visibility = 'visible';
@@ -3016,26 +3538,23 @@ async function clickTemplateOptionByTitle(templateTitle) {
 
     /**
      * @description 檢查計時器狀態，如果案件已超期，則將 "Compose" 按鈕標紅。
-     *              [v45.1 修復版] 增加了內部輪詢機制，以解決計時器與按鈕的異步加載競爭問題。
      */
     function checkAndColorComposeButton() {
-        const MAX_ATTEMPTS = 20;      // 最多嘗試20次
-        const POLL_INTERVAL_MS = 500; // 每500毫秒嘗試一次 (總計最多等待 3 秒)
+        const MAX_ATTEMPTS = 20;
+        const POLL_INTERVAL_MS = 500; // 500ms: 輪詢間隔。
         let attempts = 0;
 
         const poller = setInterval(() => {
             const composeButton = findElementInShadows(document.body, "button.testid__dummy-button-submit-action");
 
-            // 停止條件：找到按鈕 或 達到最大嘗試次數
             if (composeButton || attempts >= MAX_ATTEMPTS) {
-                clearInterval(poller); // 無論結果如何，都停止輪詢
+                clearInterval(poller);
 
                 if (!composeButton) {
-                    Logger.warn('UI.buttonAlert', '[FAIL] - "Compose" 按鈕高亮檢查終止，在 3 秒內未找到按鈕元素。');
+                    Log.warn('UI.ButtonAlert', '"Compose" 按鈕高亮檢查終止，在 10 秒內未找到按鈕元素。');
                     return;
                 }
 
-                // 找到按鈕後，執行原始的高亮邏輯
                 const timerTextEl = findElementInShadows(document.body, ".milestoneTimerText");
                 const isOverdue = timerTextEl && timerTextEl.textContent.includes("overdue");
                 const isAlreadyRed = composeButton.style.backgroundColor === "red";
@@ -3043,9 +3562,8 @@ async function clickTemplateOptionByTitle(templateTitle) {
                 if (isOverdue && !isAlreadyRed) {
                     composeButton.style.backgroundColor = "red";
                     composeButton.style.color = "white";
-                    Logger.info('UI.buttonAlert', `[SUCCESS] - "Compose" 按鈕已因計時器超期標紅。`);
+                    Log.info('UI.ButtonAlert', `"Compose" 按鈕已因計時器超期標紅。`);
                 } else if (!isOverdue && isAlreadyRed) {
-                    // 如果狀態恢復正常，則移除高亮
                     composeButton.style.backgroundColor = "";
                     composeButton.style.color = "";
                 }
@@ -3065,109 +3583,163 @@ async function clickTemplateOptionByTitle(templateTitle) {
         const isAlreadyRed = associateButton.style.backgroundColor === "red";
         if (hasRelatedCases && !isAlreadyRed) {
             associateButton.style.backgroundColor = "red";
-            Logger.info('UI.buttonAlert', `[SUCCESS] - "Associate Contact" 按鈕已因存在關聯案件標紅。`);
+            Log.info('UI.ButtonAlert', `"Associate Contact" 按鈕已因存在關聯案件標紅。`);
         } else if (!hasRelatedCases && isAlreadyRed) {
             associateButton.style.backgroundColor = "";
         }
     }
 
     /**
- * @description 異步確定當前 Case 的狀態（打開、關閉或未知）。
- *              [v45.2 修復版] 採用 "立即檢查，若無則監聽" 模式，以適應SPA導航。
- * @returns {Promise<'ACTIVE_OR_NEW'|'CLOSED'|'UNKNOWN'>} 解析為案件狀態的字符串。
- */
-function determineCaseStatus() {
-    return new Promise((resolve) => {
-        const checkStatus = () => {
-            const highlightItems = findAllElementsInShadows(document.body, 'records-highlights-details-item');
-            for (const item of highlightItems) {
-                const fullText = item.innerText;
-                if (fullText && fullText.includes('Current Status')) {
-                    if (fullText.includes('In Progress') || fullText.includes('New')) {
-                        return 'ACTIVE_OR_NEW';
-                    }
-                    if (fullText.includes('Closed')) {
-                        return 'CLOSED';
+     * @description 異步確定當前 Case 的狀態（打開、關閉或未知）。
+     * @returns {Promise<'ACTIVE_OR_NEW'|'CLOSED'|'UNKNOWN'>} 解析為案件狀態的字符串。
+     */
+    function determineCaseStatus() {
+        return new Promise((resolve) => {
+            const checkStatus = () => {
+                const highlightItems = findAllElementsInShadows(document.body, 'records-highlights-details-item');
+                for (const item of highlightItems) {
+                    const fullText = item.innerText;
+                    if (fullText && fullText.includes('Current Status')) {
+                        if (fullText.includes('In Progress') || fullText.includes('New')) {
+                            return 'ACTIVE_OR_NEW';
+                        }
+                        if (fullText.includes('Closed')) {
+                            return 'CLOSED';
+                        }
                     }
                 }
+                return null;
+            };
+
+            const initialStatus = checkStatus();
+            if (initialStatus) {
+                Log.info('Feature.AutoAssign', `Case 狀態已確定: ${initialStatus}`);
+                resolve(initialStatus);
+                return;
             }
-            return null; // 返回 null 表示未找到
-        };
 
-        // 步驟 1: 立即執行一次檢查
-        const initialStatus = checkStatus();
-        if (initialStatus) {
-            resolve(initialStatus);
-            Logger.info('AutoAssign.preCheck', `[SUCCESS] - 已找到。`);
-            return;
-        }
-
-        // 步驟 2: 如果立即檢查未找到，則啟動觀察器
-        const timeout = 15000; // 15000ms: 等待狀態字段出現的超時。
-        let timeoutHandle = setTimeout(() => {
-            observer.disconnect();
-            Logger.error('AutoAssign.preCheck', `[FAIL] - 確定 Case 狀態時超時或失敗。`);
-            resolve('UNKNOWN');
-        }, timeout);
-
-        const observer = new MutationObserver(() => {
-            if (isScriptPaused) return;
-            const currentStatus = checkStatus();
-            if (currentStatus) {
-                clearTimeout(timeoutHandle);
+            const timeout = 15000; // 15000ms: 等待狀態字段出現的超時。
+            let timeoutHandle = setTimeout(() => {
                 observer.disconnect();
-                resolve(currentStatus);
-            }
-        });
+                Log.error('Feature.AutoAssign', `確定 Case 狀態時超時或失敗。`);
+                resolve('UNKNOWN');
+            }, timeout);
 
-        observer.observe(document.body, {
-            childList: true,
-            subtree: true
+            const observer = new MutationObserver(() => {
+                if (isScriptPaused) return;
+                const currentStatus = checkStatus();
+                if (currentStatus) {
+                    clearTimeout(timeoutHandle);
+                    observer.disconnect();
+                    Log.info('Feature.AutoAssign', `Case 狀態已確定: ${currentStatus}`);
+                    resolve(currentStatus);
+                }
+            });
+
+            observer.observe(document.body, {
+                childList: true,
+                subtree: true
+            });
         });
-    });
-}
+    }
 
     /**
-     * @description 檢查自動指派所需的關鍵字段（Category, Sub Category, Sub-Status）是否為空。
-     * @returns {Promise<boolean>} 如果有任何一個字段為空，則返回 true。
+     * @description 檢查自動指派所需的關鍵字段是否全部為空。
+     * @returns {Promise<boolean>} 如果三個指定字段的值同時為空，則返回 true (表示應中止)。
      */
     async function areRequiredFieldsEmpty() {
-        try {
-            await waitForElementWithObserver(document.body, 'slot[name="secondaryFields"]', 15000); // 15000ms: 等待包含這些字段的容器出現的超時。
-            const highlightItems = findAllElementsInShadows(document.body, 'records-highlights-details-item');
-            if (highlightItems.length === 0) {
-                return false;
-            }
-            let categoryValue = null;
-            let subCategoryValue = null;
-            let subStatusValue = null;
-            for (const item of highlightItems) {
-                const titleElement = findElementInShadows(item, 'p.slds-text-title');
-                if (!titleElement) continue;
-                const title = titleElement.getAttribute('title');
-                const valueElement = findElementInShadows(item, 'lightning-formatted-text');
-                const textContent = valueElement ? valueElement.textContent.trim() : '';
-                switch (title) {
-                    case 'Case Category':
-                        categoryValue = textContent;
-                        break;
-                    case 'Case Sub Category':
-                        subCategoryValue = textContent;
-                        break;
-                    case 'Case Sub-Status':
-                        subStatusValue = textContent;
-                        break;
+        const CHECK_TIMEOUT = 15000; // 15000ms: 檢查超時。
+        const POLL_INTERVAL = 300; // 300ms: 輪詢間隔。
+        const MIN_FIELDS_THRESHOLD = 3;
+        const fieldsToCheck = ['Substatus', 'Case Category', 'Case Sub Category'];
+
+        const dissectAndFindText = (rootNode, fieldTitle) => {
+            let foundText = null;
+            const processedNodes = new Set();
+
+            function traverse(node) {
+                if (!node || processedNodes.has(node) || foundText) return;
+                processedNodes.add(node);
+                if (node.nodeType === Node.TEXT_NODE) {
+                    const text = (node.nodeValue || '').trim();
+                    if (text) {
+                        const parent = node.parentElement;
+                        const isTitleNode = parent && parent.classList && parent.classList.contains('slds-text-title');
+                        if (!isTitleNode && text !== fieldTitle) {
+                            foundText = text;
+                            return;
+                        }
+                    }
+                }
+                if (node.shadowRoot) {
+                    traverse(node.shadowRoot);
+                    if (foundText) return;
+                }
+                if (node.childNodes && node.childNodes.length > 0) {
+                    for (const child of node.childNodes) {
+                        traverse(child);
+                        if (foundText) return;
+                    }
                 }
             }
-            if (categoryValue === null || subCategoryValue === null || subStatusValue === null) {
-                return false;
+            traverse(rootNode);
+            return foundText;
+        };
+
+        try {
+            const fieldItems = await new Promise((resolve, reject) => {
+                const startTime = Date.now();
+                const intervalId = setInterval(() => {
+                    if (Date.now() - startTime > CHECK_TIMEOUT) {
+                        clearInterval(intervalId);
+                        reject(new Error(`等待 'records-highlights-details-item' 渲染超時。`));
+                        return;
+                    }
+                    const items = findAllElementsInShadows(document.body, 'records-highlights-details-item');
+                    if (items.length >= MIN_FIELDS_THRESHOLD) {
+                        clearInterval(intervalId);
+                        resolve(items);
+                    }
+                }, POLL_INTERVAL);
+            });
+
+            const fieldValues = {};
+            fieldsToCheck.forEach(key => {
+                fieldValues[key] = null;
+            });
+
+            for (const item of fieldItems) {
+                const titleElement = findElementInShadows(item, 'p.slds-text-title');
+                if (!titleElement) continue;
+
+                const title = titleElement.getAttribute('title');
+                if (fieldsToCheck.includes(title)) {
+                    let value = null;
+                    const standardValueElement = findElementInShadows(item, 'lightning-formatted-text');
+                    if (standardValueElement && standardValueElement.textContent.trim()) {
+                        value = standardValueElement.textContent.trim();
+                    } else {
+                        value = dissectAndFindText(item, title);
+                    }
+                    fieldValues[title] = value;
+                }
             }
-            if (categoryValue === '' || subCategoryValue === '' || subStatusValue === '') {
+
+            const isSubstatusEmpty = !fieldValues['Substatus'];
+            const isCategoryEmpty = !fieldValues['Case Category'];
+            const isSubCategoryEmpty = !fieldValues['Case Sub Category'];
+
+            if (isSubstatusEmpty && isCategoryEmpty && isSubCategoryEmpty) {
+                Log.info('Feature.AutoAssign', `所有關鍵字段 (Substatus, Category, Sub Category) 同時為空，中止指派。`);
                 return true;
             }
+
+            Log.info('Feature.AutoAssign', `至少有一個關鍵字段有值，繼續執行指派流程。 [Substatus: ${fieldValues['Substatus'] || '空'}, Category: ${fieldValues['Case Category'] || '空'}, SubCategory: ${fieldValues['Case Sub Category'] || '空'}]`);
             return false;
+
         } catch (error) {
-            return false;
+            Log.error('Feature.AutoAssign', `檢查關鍵字段時發生錯誤: ${error.message}。為安全起見，中止指派。`);
+            return true;
         }
     }
 
@@ -3231,7 +3803,7 @@ function determineCaseStatus() {
         handleTabClick(tabLink) {
             if (this.hasExecuted) return;
             this.hasExecuted = true;
-            Logger.info('RelatedCases.init', `[START] - "Related Cases" 標籤頁被點擊，開始數據提取流程。`);
+            Log.info('Feature.RelatedCases', `"Related Cases" 標籤頁被點擊，開始數據提取流程。`);
             const panelId = tabLink.getAttribute('aria-controls');
             if (!panelId) {
                 return;
@@ -3256,7 +3828,7 @@ function determineCaseStatus() {
                 }
                 if (attempts >= maxAttempts) {
                     clearInterval(interval);
-                    Logger.error('RelatedCases.init', `[FAIL] - 等待案件列表容器超時，提取流程終止。`);
+                    Log.error('Feature.RelatedCases', `等待案件列表容器超時，提取流程終止。`);
                 }
             }, 100); // 100ms: 輪詢間隔，快速檢測面板內容是否加載。
         },
@@ -3310,18 +3882,16 @@ function determineCaseStatus() {
          * @description 增強表格頭部，添加新的可排序列表頭。
          * @param {HTMLTableElement} table - 目標表格元素。
          */
-                enhanceTableHeaders(table) {
+        enhanceTableHeaders(table) {
             const headerRow = table.querySelector('thead tr');
             if (!headerRow || headerRow.dataset.enhanced) return;
             table.style.tableLayout = 'fixed';
             table.style.width = '100%';
 
-            // 遍歷所有現有的表頭
             headerRow.querySelectorAll('th').forEach(th => {
                 th.querySelector('.slds-resizable')?.remove();
                 th.classList.remove('slds-is-resizable');
 
-                // [新增修復] 找到內部 div 並重置其寬度，這是移除滾動條的關鍵
                 const innerFixedDiv = th.querySelector('.slds-cell-fixed');
                 if (innerFixedDiv) {
                     innerFixedDiv.style.width = 'auto';
@@ -3341,7 +3911,6 @@ function determineCaseStatus() {
                 header.querySelector('.slds-resizable')?.remove();
                 header.classList.remove('slds-is-resizable');
 
-                // [新增修復] 同樣對克隆出的新表頭應用寬度重置修復
                 const innerFixedDiv = header.querySelector('.slds-cell-fixed');
                 if (innerFixedDiv) {
                     innerFixedDiv.style.width = 'auto';
@@ -3359,7 +3928,7 @@ function determineCaseStatus() {
             const referenceHeader = headerRow.children[4];
             newHeaders.forEach(h => headerRow.insertBefore(h, referenceHeader));
             headerRow.dataset.enhanced = 'true';
-            Logger.info('RelatedCases.enhanceUI', `[SUCCESS] - 表格頭部已增強，添加了 "Case Owner" 和 "Queues" 列。`);
+            Log.info('Feature.RelatedCases', `表格頭部已增強，添加了 "Case Owner" 和 "Queues" 列。`);
         },
 
         /**
@@ -3400,7 +3969,7 @@ function determineCaseStatus() {
             if (activeHeader) {
                 activeHeader.classList.add('sorted', `sorted-${this.currentSort.direction}`);
             }
-            Logger.info('RelatedCases.sort', `[SUCCESS] - 表格已按 "${columnId}" 列 (${this.currentSort.direction}) 排序。`);
+            Log.info('Feature.RelatedCases', `表格已按 "${columnId}" 列 (${this.currentSort.direction}) 排序。`);
         },
 
         /**
@@ -3428,7 +3997,7 @@ function determineCaseStatus() {
                     }
                 });
             }
-            Logger.info('RelatedCases.process', `[SUCCESS] - 成功處理 ${summaryRows.length} 個關聯案件，數據已提取並增強。`);
+            Log.info('Feature.RelatedCases', `成功處理 ${summaryRows.length} 個關聯案件，數據已提取並增強。`);
         },
 
         /**
@@ -3459,14 +4028,13 @@ function determineCaseStatus() {
                 summaryRow.dataset.processed = 'true';
                 return clickTarget;
             } catch (error) {
-                Logger.error('RelatedCases.processRow', `[FAIL] - 處理案件行 #${rowIndex} 時失敗: ${error.message}`);
+                Log.error('Feature.RelatedCases', `處理案件行 #${rowIndex} 時失敗: ${error.message}`);
                 throw new Error(`案件 #${rowIndex}: ${error.message}`);
             }
         },
 
         /**
-         * @description 創建一個新的表格單元格（td）。
-         *              [最終修正版] 為 'Case Owner' 列 (ID: 'owner') 增加了點擊複製功能和交互反饋。
+         * @description 創建一個新的表格單元格（td），並為特定列增加交互功能。
          * @param {string} text - 單元格的文本內容。
          * @param {string} colId - 列的ID。
          * @returns {HTMLTableCellElement} 創建的單元格元素。
@@ -3480,7 +4048,6 @@ function determineCaseStatus() {
             contentDiv.textContent = text;
             contentDiv.title = text;
 
-            // [核心修正] 根據用戶反饋，將目標ID從 'queue' 修正為 'owner'
             if (colId === 'owner') {
                 contentDiv.style.cursor = 'pointer';
                 contentDiv.title = 'Click to copy Case Owner';
@@ -3496,15 +4063,15 @@ function determineCaseStatus() {
                         setTimeout(() => {
                             contentDiv.textContent = originalText;
                             contentDiv.style.color = '';
-                        }, 1500);
+                        }, 1500); // 1500ms: 複製成功提示的顯示時長。
                     }).catch(err => {
-                        Logger.error('RelatedCases.copy', `[FAIL] - 複製 "${text}" 失敗: ${err}`);
+                        Log.error('Feature.RelatedCases', `複製 "${text}" 失敗: ${err}`);
                         const originalText = text;
                         contentDiv.textContent = 'Copy Failed!';
 
                         setTimeout(() => {
                             contentDiv.textContent = originalText;
-                        }, 2000);
+                        }, 2000); // 2000ms: 複製失敗提示的顯示時長。
                     });
                 });
             }
@@ -3571,7 +4138,7 @@ function determineCaseStatus() {
      * @param {string} caseUrl - 當前Case頁面的URL，用於標記處理狀態。
      */
     function startHighFrequencyScanner(caseUrl) {
-        const SCAN_INTERVAL = 300; // 150ms: 掃描器輪詢間隔，用於快速檢測頁面元素。
+        const SCAN_INTERVAL = 300; // 300ms: 掃描器輪詢間隔，用於快速檢測頁面元素。
         const MASTER_TIMEOUT = 15000; // 15000ms: 掃描器的總運行超時，防止無限運行。
         const startTime = Date.now();
 
@@ -3579,19 +4146,17 @@ function determineCaseStatus() {
         if (tasksToRun.length === 0) return;
 
         const processedElements = new WeakSet();
-        Logger.info('Core.Scanner', `[START] - 高頻掃描器啟動，處理 ${tasksToRun.length} 個一次性任務。`);
+        Log.info('Core.Scanner', `高頻掃描器啟動，處理 ${tasksToRun.length} 個一次性任務。`);
 
-        // [核心修改] 將創建的定時器ID賦值給全局句柄 globalScannerId
         globalScannerId = setInterval(() => {
             if (isScriptPaused || tasksToRun.length === 0 || Date.now() - startTime > MASTER_TIMEOUT) {
-                // [核心修改] 使用全局句柄來清理定時器
                 clearInterval(globalScannerId);
-                globalScannerId = null; // [新增] 清理全局句柄狀態，確保其準確性
+                globalScannerId = null;
                 if (tasksToRun.length > 0) {
                     const unfinished = tasksToRun.map(t => t.id).join(', ');
-                    Logger.warn('Core.Scanner', `[TIMEOUT] - 掃描器超時，仍有 ${tasksToRun.length} 個任務未完成: [${unfinished}]。`);
+                    Log.warn('Core.Scanner', `掃描器超時，仍有 ${tasksToRun.length} 個任務未完成: [${unfinished}]。`);
                 } else {
-                    Logger.info('Core.Scanner', `[SUCCESS] - 所有一次性任務完成，掃描器停止。`);
+                    Log.info('Core.Scanner', `所有一次性任務完成，掃描器停止。`);
                     processedCaseUrlsInSession.add(caseUrl);
                 }
                 return;
@@ -3609,7 +4174,7 @@ function determineCaseStatus() {
                         taskCompleted = true;
                         break;
                     } catch (e) {
-                        // 忽略錯誤
+                        // 忽略單個處理程序的錯誤
                     }
                 }
                 if (taskCompleted) {
@@ -3752,7 +4317,7 @@ function determineCaseStatus() {
             if (isPca) newMode = 'pca';
             else if (isDispatch) newMode = 'dispatch';
             GM_setValue('accountHighlightMode', newMode);
-            Logger.info('Core.migration', `[SUCCESS] - 舊版本設置已成功遷移。`);
+            Log.info('Core.Migration', `舊版本設置已成功遷移。`);
         }
         GM_setValue(MIGRATION_KEY, true);
     }
@@ -3811,10 +4376,10 @@ function determineCaseStatus() {
             updatePauseButtonUI();
             if (isScriptPaused) {
                 showGlobalToast('腳本已暫停', 'pause');
-                Logger.warn('Core.togglePause', `[PAUSED] - 腳本已暫停，所有自動化功能停止。`);
+                Log.warn('Core.Control', `腳本已暫停，所有自動化功能停止。`);
             } else {
                 showGlobalToast('腳本已恢復運行', 'check');
-                Logger.info('Core.togglePause', `[SUCCESS] - 腳本已恢復運行，正在重新初始化頁面。`);
+                Log.info('Core.Control', `腳本已恢復運行，正在重新初始化頁面。`);
                 lastUrl = '';
                 monitorUrlChanges();
             }
@@ -3822,7 +4387,7 @@ function determineCaseStatus() {
         logoElement.appendChild(settingsButton);
         logoElement.appendChild(pauseButton);
         updatePauseButtonUI();
-        Logger.info('UI.injectControls', `[SUCCESS] - 頂部控制按鈕 (設置/暫停) 注入成功。`);
+        Log.info('UI.Controls', `頂部控制按鈕 (設置/暫停) 注入成功。`);
     }
 
     /**
@@ -3853,27 +4418,17 @@ function determineCaseStatus() {
         document.body.addEventListener('click', (event) => {
             if (isScriptPaused) return;
 
-            // --- START: 增強部分 (增加 'Write an email...' 觸發點) ---
-            // 檢查點擊的是否為 "Compose", "Reply All", 或 "Write an email..." 按鈕
             const composeButton = event.target.closest('button.testid__dummy-button-submit-action');
             const replyAllButton = event.target.closest('a[title="Reply All"]');
-            const writeEmailButton = event.target.closest('button[title="Write an email..."]'); // 新增的觸發點檢測
+            const writeEmailButton = event.target.closest('button[title="Write an email..."]');
 
-            // 如果是其中任意一個按鈕，則觸發模板按鈕注入流程
             if (composeButton || replyAllButton || writeEmailButton) {
-                let triggerName = '"Unknown"';
-                if (composeButton) triggerName = '"Compose"';
-                if (replyAllButton) triggerName = '"Reply All"';
-                if (writeEmailButton) triggerName = '"Write an email..."';
-
-                Logger.info('UI.templateShortcuts', `[TRIGGER] - 檢測到 ${triggerName} 按鈕點擊，準備注入模板快捷按鈕。`);
-
-                // 使用短暫延遲以確保編輯器容器開始渲染
+                let triggerName = composeButton ? '"Compose"' : (replyAllButton ? '"Reply All"' : '"Write an email..."');
+                Log.info('UI.Enhancement', `檢測到 ${triggerName} 按鈕點擊，準備注入模板快捷按鈕。`);
                 setTimeout(() => {
-                    handleEditorReadyForTemplateButtons(); // 調用統一的可複用函數
-                }, 100);
+                    handleEditorReadyForTemplateButtons();
+                }, 100); // 100ms: 短暫延遲以確保編輯器容器開始渲染。
             }
-            // --- END: 增強部分 ---
 
             const associateButton = event.target.closest('button[title="Associate Contact"], a[title="Associate Contact"]');
             if (associateButton) {
@@ -3900,13 +4455,13 @@ function determineCaseStatus() {
                 if (!trackingNumber) {
                     return;
                 }
-                Logger.info('IVP.manualQuery', `[START] - 手動點擊 IVP 按鈕，查詢追踪號: ${trackingNumber}。`);
+                Log.info('Feature.IVP', `手動點擊 IVP 按鈕，查詢追踪號: ${trackingNumber}。`);
                 try {
                     if (!ivpWindowHandle || ivpWindowHandle.closed) {
                         ivpWindowHandle = window.open('https://ivp.inside.ups.com/internal-visibility-portal', 'ivp_window');
                     }
                     if (!ivpWindowHandle) {
-                        Logger.error('IVP.ipc', `[FAIL] - 打開 IVP 窗口失敗，可能已被瀏覽器攔截。`);
+                        Log.error('Feature.IVP', `打開 IVP 窗口失敗，可能已被瀏覽器攔截。`);
                         alert('CEC 功能強化：打開 IVP 窗口失敗，可能已被瀏覽器攔截。請為此網站允許彈窗。');
                         return;
                     }
@@ -3918,7 +4473,7 @@ function determineCaseStatus() {
                         }
                     };
                     sendMessageWithRetries(ivpWindowHandle, messagePayload, 'https://ivp.inside.ups.com');
-                    Logger.info('IVP.ipc', `[SUCCESS] - 查詢請求已發送至 IVP 窗口。`);
+                    Log.info('Feature.IVP', `查詢請求已發送至 IVP 窗口。`);
                     if (GM_getValue('autoSwitchEnabled', DEFAULTS.autoSwitchEnabled)) {
                         ivpWindowHandle.focus();
                     }
@@ -3954,7 +4509,6 @@ function determineCaseStatus() {
 
     /**
      * @description 監控URL的變化。當URL變化時，重置狀態並根據新的URL觸發相應的頁面初始化邏輯。
-     *              [優化版] 增加了“內容就緒守衛”機制，確保在核心UI渲染後再執行初始化。
      */
     async function monitorUrlChanges() {
         if (isScriptPaused) {
@@ -3962,17 +4516,15 @@ function determineCaseStatus() {
         }
         if (location.href === lastUrl) return;
 
-        // [核心修改] 在處理新頁面前，終止任何可能存在的舊掃描器
         if (globalScannerId) {
             clearInterval(globalScannerId);
-            Logger.info('Core.Scanner', `[CLEANUP] - 上一個頁面的掃描器 (ID: ${globalScannerId}) 已被終止。`);
+            Log.info('Core.Router', `上一個頁面的掃描器 (ID: ${globalScannerId}) 已被終止。`);
             globalScannerId = null;
         }
 
-        Logger.info('Core.Router', `[CHANGE] - URL 變更，開始處理新頁面: ${location.href}`);
+        Log.info('Core.Router', `URL 變更，開始處理新頁面: ${location.href}`);
         lastUrl = location.href;
 
-        // 狀態重置邏輯保持不變
         injectedIWTButtons = {};
         if (assignButtonObserver) assignButtonObserver.disconnect();
         if (iwtModuleObserver) iwtModuleObserver.disconnect();
@@ -3983,69 +4535,76 @@ function determineCaseStatus() {
         window.contactLogicDone = false;
 
         const caseRecordPagePattern = /^https:\/\/upsdrive\.lightning\.force\.com\/lightning\/r\/Case\/[a-zA-Z0-9]{18}\/.*/;
+        const myOpenCasesListPagePattern = /^https:\/\/upsdrive\.lightning\.force\.com\/lightning\/o\/Case\/list\?.*filterName=My_Open_Cases_CEC.*/;
 
         if (caseRecordPagePattern.test(location.href)) {
             const caseUrl = location.href;
-
-            // --- [新增] 內容就緒守衛機制 ---
             const PAGE_READY_SELECTOR = 'c-cec-case-categorization';
-            const PAGE_READY_TIMEOUT = 20000; // 20秒: 等待核心UI出現的超時時間
+            const PAGE_READY_TIMEOUT = 20000; // 20000ms: 等待頁面核心UI渲染的超時。
 
             try {
-                Logger.info('Core.Router', `[GATEKEEPER] - 等待頁面核心元素 "${PAGE_READY_SELECTOR}" 出現...`);
+                Log.info('Core.Router', `等待 Case 詳情頁核心元素 "${PAGE_READY_SELECTOR}" 出現...`);
                 await waitForElementWithObserver(document.body, PAGE_READY_SELECTOR, PAGE_READY_TIMEOUT);
-                Logger.info('Core.Router', `[GATEKEEPER] - 核心元素已出現，開始執行頁面初始化。`);
+                Log.info('Core.Router', `核心元素已出現，開始執行頁面初始化。`);
             } catch (error) {
-                Logger.warn('Core.Router', `[GATEKEEPER] - 等待核心元素超時 (${PAGE_READY_TIMEOUT / 1000}秒)，已中止當前頁面的初始化。這可能是由於頁面加載緩慢或頁面結構發生變化。`);
-                return; // 安全地中止執行，不進行後續操作
+                Log.warn('Core.Router', `等待核心元素超時 (${PAGE_READY_TIMEOUT / 1000}秒)，已中止當前頁面的初始化。`);
+                return;
             }
-            // --- 守衛機制結束 ---
 
+            checkAndNotifyForRecentSend(caseUrl);
 
-            // --- 所有初始化邏輯現在被保護在守衛之後 ---
-            Logger.info('Core.Router', `[SUCCESS] - Case 頁面功能初始化完成。`);
+            Log.info('Core.Router', `Case 詳情頁通用功能初始化開始。`);
             startHighFrequencyScanner(caseUrl);
             initModalButtonObserver();
             extractTrackingNumberAndTriggerIVP();
             initIWantToModuleWatcher();
 
+            if (caseUrl.includes('c__triggeredfrom=reopen')) {
+                Log.info('Feature.AutoAssign', `檢測到 Re-Open Case，已跳過整個自動指派邏輯區塊。`);
+                return;
+            }
+
             const targetUser = GM_getValue('autoAssignUser', DEFAULTS.autoAssignUser);
             if (!targetUser) {
-                Logger.warn('AutoAssign.preCheck', `[SKIP] - 未設置目標用戶名，自動指派功能已禁用。`);
+                Log.warn('Feature.AutoAssign', `未設置目標用戶名，自動指派功能已禁用。`);
                 return;
             }
 
             const ASSIGNMENT_CACHE_KEY = 'assignmentLog';
-            const CACHE_EXPIRATION_MS = 30 * 60 * 1000; // 30分鐘: 指派記錄的緩存有效期。
+            const CACHE_EXPIRATION_MS = 30 * 60 * 1000; // 30分鐘: 緩存有效期。
             const cache = GM_getValue(ASSIGNMENT_CACHE_KEY, {});
             const entry = cache[caseUrl];
 
             if (entry && (Date.now() - entry.timestamp < CACHE_EXPIRATION_MS)) {
-                Logger.info('AutoAssign.preCheck', `[SKIP] - 緩存命中：此 Case 在 30 分鐘內已被指派。`);
+                Log.info('Feature.AutoAssign', `緩存命中：此 Case 在 30 分鐘內已被指派。`);
                 handleAutoAssign(caseUrl, true);
                 return;
             }
 
             const initialStatus = await determineCaseStatus();
             if (initialStatus === 'CLOSED') {
-                Logger.info('AutoAssign.preCheck', `[SKIP] - 初始狀態為 "Closed"，不執行指派。`);
+                Log.info('Feature.AutoAssign', `初始狀態為 "Closed"，不執行指派。`);
                 return;
             }
 
             if (initialStatus !== 'ACTIVE_OR_NEW') {
-                Logger.info('AutoAssign.preCheck', `[SKIP] - 狀態不符合觸發條件 (當前狀態: "${initialStatus}")。`);
+                Log.info('Feature.AutoAssign', `狀態不符合觸發條件 (當前狀態: "${initialStatus}")。`);
                 return;
             }
 
             if (await areRequiredFieldsEmpty()) {
-                Logger.info('AutoAssign.preCheck', `[SKIP] - 關鍵字段 (Category/Sub Category/Sub-Status) 為空。`);
+                Log.info('Feature.AutoAssign', `關鍵字段 (Category/Sub Category/Sub-Status) 為空。`);
                 return;
             }
 
             handleAutoAssign(caseUrl, false);
 
+        } else if (myOpenCasesListPagePattern.test(location.href)) {
+            Log.info('Core.Router', `"My Open Cases CEC" 列表頁已識別，準備啟動列表監控器。`);
+            initCaseListMonitor();
+
         } else {
-            Logger.info('Core.Router', `[SKIP] - 非 Case 頁面，跳過核心功能初始化。`);
+            Log.info('Core.Router', `非目標頁面 (詳情頁/指定列表頁)，跳過核心功能初始化。`);
         }
     }
 
@@ -4088,22 +4647,57 @@ function determineCaseStatus() {
      * @description 腳本的總入口函數，執行所有初始化操作。
      */
     function start() {
-        Logger.info('Core.start', `[START] - 腳本啟動 (Version: ${GM_info.script.version})。`);
+        Log.info('Core.Init', `腳本啟動 (Version: ${GM_info.script.version})。`);
         handleSettingsMigration();
         initHeaderObserver();
         if (isScriptPaused) {
-            Logger.warn('Core.start', `[PAUSED] - 腳本處於暫停狀態，核心功能未啟動。`);
+            Log.warn('Core.Init', `腳本處於暫停狀態，核心功能未啟動。`);
             return;
         }
         injectStyleOverrides();
         toggleCleanModeStyles();
         injectGlobalCustomStyles();
-        Logger.info('UI.applyStyles', `[SUCCESS] - 所有自定義樣式 (全局/高度/組件屏蔽) 已應用。`);
+        Log.info('UI.Init', `所有自定義樣式 (全局/高度/組件屏蔽) 已應用。`);
+
+        const CACHE_KEYS = {
+            ASSIGNMENT: 'assignmentLog',
+            REPLIED: 'sendButtonClickLog',
+            TRACKING: 'trackingNumberLog',
+            PREFERRED: 'preferredLog'
+        };
+
+        GM_registerMenuCommand("清理所有緩存", () => {
+            if (!confirm("您確定要清理所有腳本緩存嗎？\n\n這將重置「自動指派」、「聯繫人高亮」和「近期已回复」的歷史記錄。")) {
+                Log.info('Core.Cache', '用戶取消了清理緩存操作。');
+                return;
+            }
+
+            try {
+                const allCacheKeys = Object.values(CACHE_KEYS);
+                let clearedCount = 0;
+
+                allCacheKeys.forEach(key => {
+                    if (GM_getValue(key) !== undefined) {
+                        GM_deleteValue(key);
+                        clearedCount++;
+                    }
+                });
+
+                const message = `成功清理了 ${clearedCount} 個緩存項。`;
+                showGlobalToast(message, 'check');
+                Log.info('Core.Cache', `用戶手動清理緩存，共清理 ${clearedCount} 個項目: [${allCacheKeys.join(', ')}]`);
+
+            } catch (error) {
+                const errorMessage = "清理緩存時發生錯誤。";
+                showGlobalToast(errorMessage, 'error');
+                Log.error('Core.Cache', `清理緩存時發生錯誤: ${error.message}`);
+            }
+        });
         GM_registerMenuCommand("設置", openSettingsModal);
         initGlobalClickListener();
         startUrlMonitoring();
         monitorUrlChanges();
-        Logger.info('Core.start', `[SUCCESS] - 核心功能初始化完成。`);
+        Log.info('Core.Init', `核心功能初始化完成。`);
     }
 
     start();
