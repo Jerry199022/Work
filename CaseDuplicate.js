@@ -35,7 +35,7 @@
                 REORDER_TOP_BUTTON: "全部置頂",
                 REORDER_INPLACE_BUTTON: "原地聚合",
                 CANCEL_BUTTON: "不作排序",
-                // V7 新增
+                
                 ACCOUNT_SETTINGS_TITLE: "設置要查找的賬號列表",
                 ACCOUNT_SETTINGS_PROMPT: "請每行輸入一個賬號（1Z後的6位，可帶*號）。",
                 ACCOUNT_SETTINGS_SAVE: "保存設置",
@@ -69,18 +69,18 @@
                 COPY_SUCCESS_MSG: 1500,
                 NOTIFICATION: 3500,
                 LOAD_MORE_TIMEOUT: 5000,
-                LONG_PRESS_DURATION: 1000 // V7 新增
+                LONG_PRESS_DURATION: 1000 
             },
-            STORAGE_KEY: 'salesforce_target_accounts' // V7 新增
+            STORAGE_KEY: 'salesforce_target_accounts' 
         };
 
         constructor() {
             this.originalRowOrder = null;
             this.isLoading = false;
             this.buttons = {};
-            this.targetAccounts = this.loadTargetAccounts(); // V7 新增
-            this.longPressTimer = null; // V7 新增
-            this.isLongPress = false; // V7 新增
+            this.targetAccounts = this.loadTargetAccounts(); 
+            this.longPressTimer = null; 
+            this.isLongPress = false; 
             this.init();
         }
 
@@ -180,7 +180,7 @@
         restoreOriginalOrder() { if (!this.originalRowOrder) { this.showNotification("錯誤：沒有可恢復的排序。", 'error'); return; } this.clearHighlights(); const tableBody = this.findElementInShadowDom(this.constructor.CONFIG.SELECTORS.TABLE_BODY); if (tableBody) { const fragment = document.createDocumentFragment(); this.originalRowOrder.forEach(row => fragment.appendChild(row)); tableBody.innerHTML = ''; tableBody.appendChild(fragment); this.buttons.restoreSort.setAttribute('disabled', 'true'); this.showNotification("已恢復原始排序。", 'success'); } }
 
         // =================================================================================
-        // V7 新增：指定賬號的設置與存儲
+        ：指定賬號的設置與存儲
         // =================================================================================
         loadTargetAccounts() {
             const storedData = localStorage.getItem(this.constructor.CONFIG.STORAGE_KEY);
@@ -472,7 +472,7 @@
         }
 
         // =================================================================================
-        // V7 新增：通用的高亮與對話框顯示器
+        ：通用的高亮與對話框顯示器
         // =================================================================================
         applyHighlightsAndShowDialog(table, groups, summary, map, title, summaryText, showCopyButton) {
             const C = this.constructor.CONFIG;
@@ -630,7 +630,7 @@
             return listItem;
         }
 
-        // V7 新增：長按事件處理器
+        ：長按事件處理器
         addLongPressHandler(element, longPressCallback) {
             element.addEventListener('mousedown', (e) => {
                 if (e.button !== 0) return; // 只響應左鍵
