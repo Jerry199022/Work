@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CEC功能強化
 // @namespace    CEC Enhanced
-// @version      V53
+// @version      V54
 // @description  快捷操作按鈕、自動指派、IVP快速查詢、聯繫人彈窗優化、按鈕警示色、賬戶檢測、組件屏蔽、設置菜單、自動IVP查詢、URL精準匹配、快捷按鈕可編輯、(Related Cases)數據提取與增強排序功能、關聯案件提取器、回覆case快捷按鈕、已跟進case提示、全局暫停/恢復功能。
 // @author       Jerry Law
 // @match        https://upsdrive.lightning.force.com/*
@@ -9,18 +9,18 @@
 // @grant        GM_getValue
 // @grant        GM_registerMenuCommand
 // @grant        GM_addStyle
+// @grant        GM_deleteValue
 // @run-at       document-idle
 // @updateURL    https://raw.githubusercontent.com/Jerry199022/Work/refs/heads/main/CEC.js
 // @downloadURL  https://raw.githubusercontent.com/Jerry199022/Work/refs/heads/main/CEC.js
 // ==/UserScript==
 
 /*
-V49 > V53
+V53 > V54
 更新內容：
--添加"I Want To..."自動化按鈕評論文本設置
-可在設置面板添加多個文本，多于（空白或得一個文本）按鈕為直接點擊，一個文本按鈕會變成下拉選單，選擇對應文本進行自動化操作。
--添加對已回覆的case的緩存，緩存時間為10小時。當日再次處理同一case會有提示。可在控制面板開關此功能（默認關閉）。
--修復Auto Assign Bug
+-優化提示已回覆過的 Case 功能
+-優化腳本對new case性能損耗
+-優化Close this Case (auto)
 */
 
 (function() {
@@ -57,7 +57,7 @@ V49 > V53
                 const timestamp = new Date().toLocaleTimeString('en-US', {
                     hour12: false
                 });
-                logFn(`[${timestamp}] [${levelStr}] [CEC Enhanced|${module}] ${message}`);
+                logFn(`[${timestamp}] [${levelStr}] [CEC Enhanced] [${module}] ${message}`);
             }
         },
 
@@ -65,10 +65,10 @@ V49 > V53
             this._log(this.levels.DEBUG, 'DEBUG', module, message, console.log);
         },
         info(module, message) {
-            this._log(this.levels.INFO, 'INFO ', module, message, console.info);
+            this._log(this.levels.INFO, 'INFO', module, message, console.info);
         },
         warn(module, message) {
-            this._log(this.levels.WARN, 'WARN ', module, message, console.warn);
+            this._log(this.levels.WARN, 'WARN', module, message, console.warn);
         },
         error(module, message) {
             this._log(this.levels.ERROR, 'ERROR', module, message, console.error);
@@ -478,7 +478,6 @@ V49 > V53
     async function selectComboboxOption(container, buttonSelector, optionValue) {
         const comboboxButton = await waitForElementWithObserver(container, buttonSelector, 5000); // 5000ms: 等待下拉框按鈕出現的超時。
         comboboxButton.click();
-        await new Promise(resolve => setTimeout(resolve, 300)); // 300ms: 等待下拉菜單動畫完成，確保後續操作的元素可見。
         const optionSelector = `lightning-base-combobox-item[data-value="${optionValue}"]`;
         const optionElement = await waitForElementWithObserver(document.body, optionSelector, 5000); // 5000ms: 等待選項出現的超時。
         optionElement.click();
@@ -640,29 +639,25 @@ V49 > V53
 
     /**
      * @description 在頁面中央顯示一個可自定義尺寸的全局通知。
+     *              [修正版] 重構了關閉邏輯，確保點擊遮罩層可提前關閉通知的功能正常生效。
      * @param {string} message - 要顯示的通知消息。
      * @param {object} [options={}] - 一個包含自定義選項的對象。
-     * @param {string} [options.theme='success'] - SLDS 主題 ('success', 'warning', 'error')。
-     * @param {string} [options.fontSize='30px'] - 提示文字的字體大小。
-     * @param {string} [options.boxWidth='auto'] - 提示框的寬度。
-     * @param {string} [options.minWidth='450px'] - 提示框的最小寬度。
      */
     function showGlobalCompletionNotification(message, options = {}) {
         const {
             theme = 'success',
-                fontSize = '30px',
-                boxWidth = 'auto',
-                minWidth = '450px'
+            fontSize = '30px',
+            boxWidth = 'auto',
+            minWidth = '450px'
         } = options;
 
         const NOTIFICATION_ID = 'cec-global-completion-notification';
-        let overlay = document.getElementById(NOTIFICATION_ID);
-
-        if (overlay) {
-            overlay.remove();
+        let existingOverlay = document.getElementById(NOTIFICATION_ID);
+        if (existingOverlay) {
+            existingOverlay.remove();
         }
 
-        overlay = document.createElement('div');
+        const overlay = document.createElement('div');
         overlay.id = NOTIFICATION_ID;
         overlay.className = 'cec-global-completion-overlay';
         overlay.innerHTML = `
@@ -672,20 +667,37 @@ V49 > V53
                 </div>
             </div>
         `;
-        document.body.appendChild(overlay);
 
-        requestAnimationFrame(() => {
-            overlay.classList.add('show');
-        });
+        let autoDismissTimer = null;
+        let isDismissed = false;
 
-        setTimeout(() => {
+        // 定義一個統一的、只執行一次的關閉函數
+        const dismissNotification = () => {
+            if (isDismissed) return; // 防止重複執行
+            isDismissed = true;
+
+            // 清理資源：定時器和事件監聽器
+            clearTimeout(autoDismissTimer);
+            overlay.removeEventListener('click', dismissNotification);
+
+            // 執行關閉動畫和 DOM 移除
             overlay.classList.remove('show');
             setTimeout(() => {
                 if (overlay.parentNode) {
                     overlay.parentNode.removeChild(overlay);
                 }
-            }, 300); // 300ms: 等待淡出動畫完成後再移除元素。
-        }, 1800); // 1800ms: 通知顯示的總時長。
+            }, 300); // 300ms: 等待淡出動畫完成。
+        };
+
+        // 綁定定時器和點擊事件
+        autoDismissTimer = setTimeout(dismissNotification, 1800); // 1800ms: 通知顯示的總時長。
+        overlay.addEventListener('click', dismissNotification);
+
+        document.body.appendChild(overlay);
+
+        requestAnimationFrame(() => {
+            overlay.classList.add('show');
+        });
     }
 
 
@@ -695,6 +707,7 @@ V49 > V53
 
     /**
      * @description 向頁面注入腳本所需的全局自定義CSS樣式。
+     *              [修正版] 移除了 .cec-global-completion-overlay 的 pointer-events: none 樣式，以允許點擊關閉。
      */
     function injectGlobalCustomStyles() {
         const styleId = 'cec-global-custom-styles';
@@ -736,7 +749,7 @@ V49 > V53
                 align-items: center;
                 opacity: 0;
                 transition: opacity 0.3s ease;
-                pointer-events: none;
+                /* [核心修正] 已移除 pointer-events: none; */
             }
             .cec-global-completion-overlay.show {
                 opacity: 1;
@@ -2045,11 +2058,13 @@ V49 > V53
 
     /**
      * @description 處理 Case 列表頁的表格行，為已回覆的 Case 添加時間注釋。
+     *              [修正版] 增加了冪等性處理，在添加新提示前會先移除舊提示，防止重複顯示。
      * @param {HTMLTableSectionElement} tableBody - 要處理的表格 tbody 元素。
      */
     function processCaseListRows(tableBody) {
         const SEND_BUTTON_CACHE_KEY = 'sendButtonClickLog';
         const CACHE_TTL_MS = 10 * 60 * 60 * 1000; // 10小時: 已回覆記錄的緩存有效期。
+        const ANNOTATION_CLASS = 'cec-replied-annotation'; // 用於識別和清除的專用類名
         const cache = GM_getValue(SEND_BUTTON_CACHE_KEY, {});
 
         const rows = tableBody.querySelectorAll('tr[data-row-key-value]:not([data-cec-processed="true"])');
@@ -2067,19 +2082,26 @@ V49 > V53
                 if (caseNumberCell) {
                     const caseNumberLink = findElementInShadows(caseNumberCell, `a[href*="${caseId}"]`);
                     if (caseNumberLink) {
+                        const injectionTarget = caseNumberLink.parentElement;
+                        if (!injectionTarget) return;
+
+                        // [核心修正] 先清除已存在的舊提示
+                        const existingAnnotation = injectionTarget.querySelector(`.${ANNOTATION_CLASS}`);
+                        if (existingAnnotation) {
+                            existingAnnotation.remove();
+                        }
+
+                        // [核心修正] 再添加新的提示
                         const annotationSpan = document.createElement('span');
+                        annotationSpan.className = ANNOTATION_CLASS; // 添加專用類名
                         annotationSpan.textContent = ` ${formatTimeAgoSimple(entry.timestamp)}`;
                         annotationSpan.style.color = '#000000';
                         annotationSpan.style.fontSize = 'inherit';
                         annotationSpan.style.fontWeight = 'normal';
                         annotationSpan.style.marginLeft = '8px';
 
-                        const injectionTarget = caseNumberLink.parentElement;
-                        if (injectionTarget) {
-                            injectionTarget.appendChild(annotationSpan);
-                        } else {
-                            caseNumberLink.insertAdjacentElement('afterend', annotationSpan);
-                        }
+                        injectionTarget.appendChild(annotationSpan);
+
                     } else {
                         Log.warn('Feature.CaseList', `在 Case ID ${caseId} 的行中，已定位到 Case Number 單元格，但在其內部未找到對應的 a 標籤錨點。`);
                     }
@@ -2092,6 +2114,7 @@ V49 > V53
 
     /**
      * @description 初始化對 Case 列表頁的監控，以便在列表更新時處理新的行。
+     *              [強化版] 增加了狀態重置機制，確保每次進入頁面都進行一次完整的重新掃描。
      */
     async function initCaseListMonitor() {
         if (!GM_getValue('notifyOnRepliedCaseEnabled', DEFAULTS.notifyOnRepliedCaseEnabled)) {
@@ -2117,6 +2140,14 @@ V49 > V53
                 }, 300); // 300ms: 輪詢間隔。
             });
             Log.info('Feature.CaseList', '表格 tbody 元素已找到，準備處理行數據。');
+
+            // [新增強化] 狀態重置：在處理前，移除所有舊的 "processed" 標記。
+            // 這確保了即使在 SPA 導航中 DOM 被重用，也能進行一次全新的掃描。
+            const previouslyProcessedRows = tableBody.querySelectorAll('tr[data-cec-processed="true"]');
+            if (previouslyProcessedRows.length > 0) {
+                previouslyProcessedRows.forEach(row => row.removeAttribute('data-cec-processed'));
+                Log.info('Feature.CaseList', `狀態已重置，清除了 ${previouslyProcessedRows.length} 個舊的處理標記。`);
+            }
 
             processCaseListRows(tableBody);
             Log.info('Feature.CaseList', '首次行數據處理完成。');
@@ -2521,14 +2552,18 @@ V49 > V53
     async function extractTrackingNumberAndTriggerIVP() {
         const TRACKING_CACHE_KEY = 'trackingNumberLog';
         const CACHE_TTL_MS = 30 * 60 * 1000; // 30分鐘: 追踪號緩存有效期。
-        const currentUrl = location.href;
+        const caseId = getCaseIdFromUrl(location.href);
+        if (!caseId) {
+            Log.warn('Feature.IVP', `無法從當前 URL 提取 Case ID，追踪號緩存功能跳過。`);
+            return;
+        }
 
         const cache = GM_getValue(TRACKING_CACHE_KEY, {});
-        const entry = cache[currentUrl];
+        const entry = cache[caseId];
 
         if (entry && (Date.now() - entry.timestamp < CACHE_TTL_MS)) {
             foundTrackingNumber = entry.trackingNumber;
-            Log.info('Feature.IVP', `從緩存中成功讀取追踪號: ${foundTrackingNumber}`);
+            Log.info('Feature.IVP', `從緩存中成功讀取追踪號 (Case ID: ${caseId}): ${foundTrackingNumber}`);
             autoQueryIVPOnLoad();
             return;
         }
@@ -2543,13 +2578,12 @@ V49 > V53
                     const extractedNumber = match[0];
                     Log.info('Feature.IVP', `成功提取追踪號: ${extractedNumber}`);
                     foundTrackingNumber = extractedNumber;
-
-                    cache[currentUrl] = {
+                    cache[caseId] = {
                         trackingNumber: extractedNumber,
                         timestamp: Date.now()
                     };
                     GM_setValue(TRACKING_CACHE_KEY, cache);
-                    Log.info('Feature.IVP', `追踪號已寫入緩存，有效期30分鐘。`);
+                    Log.info('Feature.IVP', `追踪號已為 Case ID ${caseId} 寫入緩存，有效期30分鐘。`);
 
                     autoQueryIVPOnLoad();
                 }
@@ -2608,17 +2642,23 @@ V49 > V53
 
     /**
      * @description 處理 "Close this Case" 自動化流程的第二階段。
+     *              [重構版] 增加 mode 參數，支持 'normal' (500ms 延時) 和 'fast' (50ms 延時) 兩種執行速度。
      * @param {string} comment - 要填寫的評論。
+     * @param {'normal'|'fast'} [mode='normal'] - 執行模式，決定了操作間的延時。
      */
-    async function handleStageTwoCloseCase(comment) {
+    async function handleStageTwoCloseCase(comment, mode = 'normal') {
+        // 根據模式確定延時時間
+        const delay = mode === 'fast' ? 10 : 500;
+        Log.info('Feature.IWT.CloseCase', `以 "${mode}" 模式執行 Close Case，延時: ${delay}ms。`);
+
         const closeCaseComponent = await waitForElementWithObserver(document.body, 'c-cec-close-case', 5000);
-        await new Promise(resolve => setTimeout(resolve, 500));
+        await new Promise(resolve => setTimeout(resolve, delay));
         await selectComboboxOption(closeCaseComponent, 'button[aria-label="Case Sub Status"]', 'Request Completed');
         if (comment) {
             const commentBox = await waitForElementWithObserver(closeCaseComponent, 'textarea.slds-textarea', 5000);
             simulateTyping(commentBox, comment);
         }
-        await new Promise(resolve => setTimeout(resolve, 500));
+        await new Promise(resolve => setTimeout(resolve, delay));
         const finalSubmitButton = await waitForElementWithObserver(closeCaseComponent, '.slds-card__footer button.slds-button_brand', 5000);
         finalSubmitButton.click();
         showCompletionToast(closeCaseComponent, 'Close Case: 操作成功！請等待網頁更新！');
@@ -2687,6 +2727,7 @@ V49 > V53
 
     /**
      * @description 向 "I Want To..." 組件下方注入自定義的、帶有下拉選項的自動化操作按鈕。
+     *              [最終版] 為 "Close this Case (Auto)" 按鈕及其下拉選項，都增加了長按2秒觸發快速模式的功能。
      * @param {HTMLElement} anchorElement - 用於定位的錨點元素。
      */
     function injectIWantToButtons(anchorElement) {
@@ -2717,6 +2758,53 @@ V49 > V53
             }
         };
 
+        // 抽離出可複用的長按事件綁定邏輯
+        const applyLongPressHandler = (element, config, comment) => {
+            let pressTimer = null;
+            let longPressTriggered = false;
+
+            const startPress = (event) => {
+                if (event.button !== 0) return;
+                longPressTriggered = false;
+                pressTimer = setTimeout(() => {
+                    longPressTriggered = true;
+                    Log.info('Feature.IWT.LongPress', '長按觸發快速模式。');
+                    automateIWantToAction({
+                        searchText: config.searchText,
+                        stageTwoHandler: (c) => config.handler(c, 'fast'),
+                        finalComment: comment
+                    });
+                    // 如果是下拉菜單項，觸發後需要關閉菜單
+                    const dropdownMenu = element.closest('.cec-iwt-dropdown-menu');
+                    if (dropdownMenu) {
+                        dropdownMenu.classList.remove('show');
+                    }
+                }, 1500);
+            };
+
+            const cancelPress = () => {
+                clearTimeout(pressTimer);
+            };
+
+            const endPress = (event) => {
+                if (event.button !== 0) return;
+                clearTimeout(pressTimer);
+                if (!longPressTriggered) {
+                    Log.info('Feature.IWT.LongPress', '單擊觸發普通模式。');
+                    automateIWantToAction({
+                        searchText: config.searchText,
+                        stageTwoHandler: (c) => config.handler(c, 'normal'),
+                        finalComment: comment
+                    });
+                }
+            };
+
+            element.addEventListener('mousedown', startPress);
+            element.addEventListener('mouseup', endPress);
+            element.addEventListener('mouseleave', cancelPress);
+        };
+
+
         const buttonConfigs = [{
             name: 'Re-Open Case (Auto)',
             title: '自動執行 "Re-Open Case"',
@@ -2725,7 +2813,7 @@ V49 > V53
             handler: handleStageTwoReOpen
         }, {
             name: 'Close this Case (Auto)',
-            title: '自動執行 "Close this Case"',
+            title: '單擊: 普通模式 | 長按2秒: 極速模式',
             actionKey: 'closeCase',
             searchText: 'Close this Case',
             handler: handleStageTwoCloseCase
@@ -2742,21 +2830,29 @@ V49 > V53
             layoutItem.className = 'slds-var-p-right_xx-small slds-size_4-of-12';
             const commentOptions = autoFillTexts[config.actionKey] || [];
 
+            // 分支 1: 單一按鈕模式
             if (commentOptions.length === 1) {
                 const directButton = document.createElement('button');
                 directButton.title = config.title;
                 directButton.className = 'slds-button slds-button_stretch cec-iwt-button-override';
                 directButton.textContent = config.name;
-                directButton.addEventListener('click', () => {
-                    automateIWantToAction({
-                        searchText: config.searchText,
-                        stageTwoHandler: config.handler,
-                        finalComment: commentOptions[0]
+
+                if (config.actionKey === 'closeCase') {
+                    applyLongPressHandler(directButton, config, commentOptions[0]);
+                } else {
+                    directButton.addEventListener('click', () => {
+                        automateIWantToAction({
+                            searchText: config.searchText,
+                            stageTwoHandler: config.handler,
+                            finalComment: commentOptions[0]
+                        });
                     });
-                });
+                }
+
                 layoutItem.appendChild(directButton);
                 injectedIWTButtons[config.name] = directButton;
 
+            // 分支 2: 下拉菜單模式
             } else {
                 const dropdownTrigger = document.createElement('div');
                 dropdownTrigger.className = 'cec-iwt-dropdown-trigger';
@@ -2774,17 +2870,25 @@ V49 > V53
                         const item = document.createElement('li');
                         item.className = 'cec-iwt-dropdown-item';
                         item.textContent = comment;
-                        item.addEventListener('click', () => {
-                            automateIWantToAction({
-                                searchText: config.searchText,
-                                stageTwoHandler: config.handler,
-                                finalComment: comment
+
+                        // [核心修正] 為下拉菜單中的 "Close Case" 選項應用長按邏輯
+                        if (config.actionKey === 'closeCase') {
+                            // 阻止默認的 mousedown 行為，防止觸發菜單關閉
+                            item.addEventListener('mousedown', (e) => e.stopPropagation());
+                            applyLongPressHandler(item, config, comment);
+                        } else {
+                            item.addEventListener('click', () => {
+                                automateIWantToAction({
+                                    searchText: config.searchText,
+                                    stageTwoHandler: config.handler,
+                                    finalComment: comment
+                                });
+                                dropdownMenu.classList.remove('show');
                             });
-                            dropdownMenu.classList.remove('show');
-                        });
+                        }
                         dropdownMenu.appendChild(item);
                     });
-                } else {
+                } else { // 零選項的情況
                     const disabledItem = document.createElement('li');
                     disabledItem.className = 'cec-iwt-dropdown-item';
                     disabledItem.textContent = '無可用評論';
@@ -2796,9 +2900,7 @@ V49 > V53
                 mainButton.addEventListener('click', (e) => {
                     e.stopPropagation();
                     document.querySelectorAll('.cec-iwt-dropdown-menu.show').forEach(menu => {
-                        if (menu !== dropdownMenu) {
-                            menu.classList.remove('show');
-                        }
+                        if (menu !== dropdownMenu) menu.classList.remove('show');
                     });
                     dropdownMenu.classList.toggle('show');
                     if (dropdownMenu.classList.contains('show')) {
@@ -2824,7 +2926,7 @@ V49 > V53
 
         anchorElement.insertAdjacentElement('afterend', buttonContainer);
         anchorElement.dataset.customButtonsInjected = 'true';
-        Log.info('Feature.IWT', `"I Want To..." 帶下拉選項的自動化按鈕注入成功。`);
+        Log.info('Feature.IWT', `"I Want To..." 自動化按鈕注入成功（Close Case 已全面支持長按）。`);
         initAssignButtonMonitor();
     }
 
@@ -3110,12 +3212,19 @@ V49 > V53
         const isDispatchModeOn = (highlightMode === 'dispatch');
         const PREFERRED_LOG_KEY = 'preferredLog';
         const now = Date.now();
-        const currentUrl = location.href;
+        const caseId = getCaseIdFromUrl(location.href);
+
+        if (!caseId) {
+            Log.warn('UI.ContactCard', `無法從當前 URL 提取 Case ID，聯繫人狀態緩存功能跳過。`);
+            return;
+        }
+
         const allLogs = GM_getValue(PREFERRED_LOG_KEY, {});
         const CACHE_TTL = 30 * 60 * 1000; // 30分鐘: 聯繫人 Preferred 狀態的緩存有效期。
         const cleanedLog = Object.fromEntries(Object.entries(allLogs).filter(([_, data]) => now - data.timestamp < CACHE_TTL));
-        if (cleanedLog[currentUrl]) {
-            const cachedIsPreferred = cleanedLog[currentUrl].isPreferred;
+
+        if (cleanedLog[caseId]) {
+            const cachedIsPreferred = cleanedLog[caseId].isPreferred;
             const shouldHighlight = (isPcaModeOn && !cachedIsPreferred) || (isDispatchModeOn && cachedIsPreferred);
             if (shouldHighlight) {
                 card.style.setProperty('background-color', 'moccasin', 'important');
@@ -3123,9 +3232,10 @@ V49 > V53
                     div.style.setProperty('background-color', 'moccasin', 'important');
                 });
             }
-            Log.info('UI.ContactCard', `聯繫人卡片高亮規則已應用 (模式: ${highlightMode}, Preferred: ${cachedIsPreferred}, 結果: ${shouldHighlight ? '高亮' : '不高亮'})。`);
+            Log.info('UI.ContactCard', `[緩存命中] 聯繫人卡片高亮規則已應用 (Case ID: ${caseId}, 模式: ${highlightMode}, Cached Preferred: ${cachedIsPreferred}, 結果: ${shouldHighlight ? '高亮' : '不高亮'})。`);
             return;
         }
+
         const container = card.closest('div.cCEC_ContactPersonAccount');
         if (container) {
             const hiddenContainer = findElementInShadows_Aggressive(container, '.slds-grid.slds-wrap.slds-hide');
@@ -3165,12 +3275,12 @@ V49 > V53
                 }
             }
         } catch (e) {
-            // 忽略異常
         }
         if (!preferredValueFound) {
             Log.warn('UI.ContactCard', `未能找到聯繫人 "Preferred" 狀態值，高亮功能可能不準確。`);
         }
-        cleanedLog[currentUrl] = {
+
+        cleanedLog[caseId] = {
             isPreferred: isPreferred,
             timestamp: now
         };
@@ -3182,7 +3292,7 @@ V49 > V53
                 div.style.setProperty('background-color', 'moccasin', 'important');
             });
         }
-        Log.info('UI.ContactCard', `聯繫人卡片高亮規則已應用 (模式: ${highlightMode}, Preferred: ${isPreferred}, 結果: ${shouldHighlight ? '高亮' : '不高亮'})。`);
+        Log.info('UI.ContactCard', `[首次加載] 聯繫人卡片高亮規則已應用 (Case ID: ${caseId}, 模式: ${highlightMode}, Preferred: ${isPreferred}, 結果: ${shouldHighlight ? '高亮' : '不高亮'})。`);
     }
 
     /**
@@ -3294,11 +3404,16 @@ V49 > V53
 
     /**
      * @description 執行自動指派的核心邏輯，包括所有者驗證、緩存檢查和點擊操作。
-     * @param {string} caseUrl - 當前 Case 的 URL，用作緩存鍵。
+     * @param {string} 當前用Case ID作緩存鍵。
      * @param {boolean} [isCachedCase=false] - 是否為緩存命中模式，此模式下僅應用視覺反饋。
      */
     async function handleAutoAssign(caseUrl, isCachedCase = false) {
         const ASSIGNMENT_CACHE_KEY = 'assignmentLog';
+        const caseId = getCaseIdFromUrl(caseUrl);
+        if (!caseId) {
+            Log.error('Feature.AutoAssign', `無法從 URL (${caseUrl}) 提取 Case ID，自動指派緩存操作已中止。`);
+            return;
+        }
         const findOwnerBlockWithRetry = (timeout = 15000) => { // 15000ms: 等待 "Case Owner" 信息塊出現的超時。
             return new Promise((resolve, reject) => {
                 const startTime = Date.now();
@@ -3375,11 +3490,12 @@ V49 > V53
                 assignButton.style.setProperty('color', '#fff', 'important');
                 const cache = GM_getValue(ASSIGNMENT_CACHE_KEY, {});
                 const CACHE_TTL = 30 * 60 * 1000; // 30分鐘: 指派成功記錄的緩存有效期。
-                cache[caseUrl] = {
+                // [修改] 使用 caseId 作為緩存 key
+                cache[caseId] = {
                     timestamp: Date.now()
                 };
                 GM_setValue(ASSIGNMENT_CACHE_KEY, cache);
-                Log.info('Feature.AutoAssign', `自動指派成功，已點擊 "Assign Case to Me" 按鈕並更新緩存。`);
+                Log.info('Feature.AutoAssign', `自動指派成功 (Case ID: ${caseId})，已點擊 "Assign Case to Me" 按鈕並更新緩存。`);
 
                 setTimeout(() => {
                     Log.info('Feature.AutoAssign', `8秒後執行高亮狀態重新檢查。`);
@@ -4509,6 +4625,7 @@ V49 > V53
 
     /**
      * @description 監控URL的變化。當URL變化時，重置狀態並根據新的URL觸發相應的頁面初始化邏輯。
+     *              [重構版] 增加了“前置守衛”機制。在執行數據依賴型任務前，首先檢查Case的完整性。
      */
     async function monitorUrlChanges() {
         if (isScriptPaused) {
@@ -4525,6 +4642,7 @@ V49 > V53
         Log.info('Core.Router', `URL 變更，開始處理新頁面: ${location.href}`);
         lastUrl = location.href;
 
+        // --- 狀態重置 ---
         injectedIWTButtons = {};
         if (assignButtonObserver) assignButtonObserver.disconnect();
         if (iwtModuleObserver) iwtModuleObserver.disconnect();
@@ -4534,14 +4652,19 @@ V49 > V53
         foundTrackingNumber = null;
         window.contactLogicDone = false;
 
+        // --- 路由匹配 ---
         const caseRecordPagePattern = /^https:\/\/upsdrive\.lightning\.force\.com\/lightning\/r\/Case\/[a-zA-Z0-9]{18}\/.*/;
         const myOpenCasesListPagePattern = /^https:\/\/upsdrive\.lightning\.force\.com\/lightning\/o\/Case\/list\?.*filterName=My_Open_Cases_CEC.*/;
 
+        // =================================================================================
+        // 分支 1: Case 詳情頁邏輯
+        // =================================================================================
         if (caseRecordPagePattern.test(location.href)) {
             const caseUrl = location.href;
-            const PAGE_READY_SELECTOR = 'c-cec-case-categorization';
-            const PAGE_READY_TIMEOUT = 20000; // 20000ms: 等待頁面核心UI渲染的超時。
 
+            // --- 步驟 1: 等待頁面核心 UI 渲染完成 ---
+            const PAGE_READY_SELECTOR = 'c-cec-case-categorization';
+            const PAGE_READY_TIMEOUT = 20000;
             try {
                 Log.info('Core.Router', `等待 Case 詳情頁核心元素 "${PAGE_READY_SELECTOR}" 出現...`);
                 await waitForElementWithObserver(document.body, PAGE_READY_SELECTOR, PAGE_READY_TIMEOUT);
@@ -4551,16 +4674,26 @@ V49 > V53
                 return;
             }
 
+            // --- 步驟 2: 執行不依賴 Case 內部數據的基礎任務 ---
+            Log.info('Core.Router', `正在執行基礎 UI 初始化...`);
             checkAndNotifyForRecentSend(caseUrl);
-
-            Log.info('Core.Router', `Case 詳情頁通用功能初始化開始。`);
-            startHighFrequencyScanner(caseUrl);
             initModalButtonObserver();
-            extractTrackingNumberAndTriggerIVP();
             initIWantToModuleWatcher();
 
+            // --- 步驟 3: [核心] 執行“前置守衛”檢查 ---
+            if (await areRequiredFieldsEmpty()) {
+                Log.warn('Core.Router', `[前置守衛] 檢測到關鍵字段為空的 Case，已中止所有數據依賴型任務（如追踪號提取、掃描器、自動指派）。`);
+                return; // 中止後續所有操作
+            }
+
+            // --- 步驟 4: 只有在 Case 數據完整時，才執行數據依賴型任務 ---
+            Log.info('Core.Router', `[前置守衛] Case 數據完整，繼續執行數據依賴型任務。`);
+            startHighFrequencyScanner(caseUrl);
+            extractTrackingNumberAndTriggerIVP();
+
+            // --- 步驟 5: 執行自動指派邏輯 (現在無需重複檢查字段是否為空) ---
             if (caseUrl.includes('c__triggeredfrom=reopen')) {
-                Log.info('Feature.AutoAssign', `檢測到 Re-Open Case，已跳過整個自動指派邏輯區塊。`);
+                Log.info('Feature.AutoAssign', `檢測到 Re-Open Case，已跳過自動指派邏輯。`);
                 return;
             }
 
@@ -4571,12 +4704,13 @@ V49 > V53
             }
 
             const ASSIGNMENT_CACHE_KEY = 'assignmentLog';
-            const CACHE_EXPIRATION_MS = 30 * 60 * 1000; // 30分鐘: 緩存有效期。
+            const CACHE_EXPIRATION_MS = 30 * 60 * 1000;
             const cache = GM_getValue(ASSIGNMENT_CACHE_KEY, {});
-            const entry = cache[caseUrl];
+            const caseId = getCaseIdFromUrl(caseUrl);
+            const entry = caseId ? cache[caseId] : null;
 
             if (entry && (Date.now() - entry.timestamp < CACHE_EXPIRATION_MS)) {
-                Log.info('Feature.AutoAssign', `緩存命中：此 Case 在 30 分鐘內已被指派。`);
+                Log.info('Feature.AutoAssign', `緩存命中：此 Case (ID: ${caseId}) 在 30 分鐘內已被指派。`);
                 handleAutoAssign(caseUrl, true);
                 return;
             }
@@ -4592,17 +4726,19 @@ V49 > V53
                 return;
             }
 
-            if (await areRequiredFieldsEmpty()) {
-                Log.info('Feature.AutoAssign', `關鍵字段 (Category/Sub Category/Sub-Status) 為空。`);
-                return;
-            }
-
+            // 此處不再需要 areRequiredFieldsEmpty() 檢查，因為已前置
             handleAutoAssign(caseUrl, false);
 
+        // =================================================================================
+        // 分支 2: "My Open Cases CEC" 列表頁邏輯
+        // =================================================================================
         } else if (myOpenCasesListPagePattern.test(location.href)) {
             Log.info('Core.Router', `"My Open Cases CEC" 列表頁已識別，準備啟動列表監控器。`);
             initCaseListMonitor();
 
+        // =================================================================================
+        // 分支 3: 其他所有頁面
+        // =================================================================================
         } else {
             Log.info('Core.Router', `非目標頁面 (詳情頁/指定列表頁)，跳過核心功能初始化。`);
         }
