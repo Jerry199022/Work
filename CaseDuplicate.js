@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         Case查重與查找
+// @name         Case查重與賬號查找
 // @namespace    Case duplicate and find A/C
 // @version      V7
 // @description  自動加載所有Case，支持排序恢復，提供強大的查重與指定賬號查找功能，並採用多層次加載終止判斷機制。
@@ -606,13 +606,13 @@
             const listItem = document.createElement('li');
             listItem.className = 'slds-button slds-button--neutral slds-button_neutral';
             listItem.id = id;
-            listItem.style.cssText = `min-width: 10px; text-align: center; margin-left: var(--lwc-spacingXxSmall, 0.25rem);`;
+            listItem.style.cssText = `width: 130px; text-align: center; margin-left: var(--lwc-spacingXxSmall, 0.25rem);`;
             const link = document.createElement('a');
             link.href = 'javascript:void(0);';
             link.title = text;
             link.className = 'forceActionLink';
             link.setAttribute('role', 'button');
-            link.style.cssText = "padding: 0 1rem; line-height: 2rem; color: var(--slds-c-button-text-color);";
+            link.style.cssText = "display: flex; justify-content: center; align-items: center; height: 2rem; padding: 0 1rem; color: var(--slds-c-button-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;";
             const div = document.createElement('div');
             div.title = text;
             div.textContent = text;
