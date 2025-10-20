@@ -180,7 +180,7 @@
         restoreOriginalOrder() { if (!this.originalRowOrder) { this.showNotification("錯誤：沒有可恢復的排序。", 'error'); return; } this.clearHighlights(); const tableBody = this.findElementInShadowDom(this.constructor.CONFIG.SELECTORS.TABLE_BODY); if (tableBody) { const fragment = document.createDocumentFragment(); this.originalRowOrder.forEach(row => fragment.appendChild(row)); tableBody.innerHTML = ''; tableBody.appendChild(fragment); this.buttons.restoreSort.setAttribute('disabled', 'true'); this.showNotification("已恢復原始排序。", 'success'); } }
 
         // =================================================================================
-        ：指定賬號的設置與存儲
+        // 指定賬號的設置與存儲
         // =================================================================================
         loadTargetAccounts() {
             const storedData = localStorage.getItem(this.constructor.CONFIG.STORAGE_KEY);
@@ -472,7 +472,7 @@
         }
 
         // =================================================================================
-        ：通用的高亮與對話框顯示器
+        //通用的高亮與對話框顯示器
         // =================================================================================
         applyHighlightsAndShowDialog(table, groups, summary, map, title, summaryText, showCopyButton) {
             const C = this.constructor.CONFIG;
@@ -630,7 +630,7 @@
             return listItem;
         }
 
-        ：長按事件處理器
+        //長按事件處理器
         addLongPressHandler(element, longPressCallback) {
             element.addEventListener('mousedown', (e) => {
                 if (e.button !== 0) return; // 只響應左鍵
