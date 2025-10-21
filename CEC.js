@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CEC功能強化
 // @namespace    CEC Enhanced
-// @version      V54
+// @version      V55
 // @description  快捷操作按鈕、自動指派、IVP快速查詢、聯繫人彈窗優化、按鈕警示色、賬戶檢測、組件屏蔽、設置菜單、自動IVP查詢、URL精準匹配、快捷按鈕可編輯、(Related Cases)數據提取與增強排序功能、關聯案件提取器、回覆case快捷按鈕、已跟進case提示、全局暫停/恢復功能。
 // @author       Jerry Law
 // @match        https://upsdrive.lightning.force.com/*
@@ -16,6 +16,10 @@
 // ==/UserScript==
 
 /*
+V54 > V55
+更新內容：
+-設置面板添加 選擇模版插入位置 選項
+
 V53 > V54
 更新內容：
 -優化提示已回覆過的 Case 功能
@@ -84,7 +88,7 @@ V53 > V54
      * @description 存儲腳本所有功能的默認配置。
      *              當 GM 存儲中沒有對應值時，將使用此處的默認值。
      */
-    const DEFAULTS = {
+        const DEFAULTS = {
         notifyOnRepliedCaseEnabled: false,
         autoSwitchEnabled: true,
         autoAssignUser: '',
@@ -107,6 +111,7 @@ V53 > V54
             marginRight: '0px',
         },
         postInsertionEnhancementsEnabled: false,
+        templateInsertionMode: 'logo', // [新增] 模板插入模式，'logo' 或 'cursor'
         cursorPositionBrIndex: 5,
         actionButtons: [{
             id: "btn-1",
@@ -936,7 +941,7 @@ V53 > V54
     /**
      * @description 創建並向頁面注入腳本的設置菜單UI（HTML和CSS）。
      */
-    function createSettingsUI() {
+        function createSettingsUI() {
         if (document.getElementById('cec-settings-modal')) return;
 
         const modalHTML = `
@@ -1048,6 +1053,15 @@ V53 > V54
                                         <label class="cec-settings-switch"><input type="checkbox" id="postInsertionEnhancementsToggle"><span class="cec-settings-slider"></span></label>
                                     </div>
                                     <p class="cec-settings-description">啟用後，將自動附加智能粘貼、精準定位光標並應用視覺偏移。</p>
+                                </div>
+                                <div class="cec-settings-option">
+                                    <label class="cec-settings-label" style="margin-bottom: 8px;">模板插入位置策略</label>
+                                    <div class="cec-settings-radio-group" id="templateInsertionModeGroup">
+                                        <label><input type="radio" name="insertionMode" value="logo"> UPS Logo 圖標下方插入</label>
+                                        <p class="cec-settings-description">自動將模板插入到簽名檔下方，確保位置統一（推薦）。</p>
+                                        <label><input type="radio" name="insertionMode" value="cursor"> 隨光標位置插入</label>
+                                        <p class="cec-settings-description">將模板插入到您當前光標所在的位置。</p>
+                                    </div>
                                 </div>
                                 <div class="cec-settings-option">
                                     <label for="cursorPositionInput" class="cec-settings-label">光標定位於第 N 個換行符前</label>
@@ -1523,7 +1537,7 @@ V53 > V54
     /**
      * @description 打開設置菜單，並初始化所有UI元素的事件監聽器和數據綁定。
      */
-    function openSettingsModal() {
+        function openSettingsModal() {
         if (!document.getElementById('cec-settings-modal')) {
             createSettingsUI();
         }
@@ -1613,6 +1627,18 @@ V53 > V54
             Log.info('UI.Settings', `設置已保存: postInsertionEnhancementsEnabled = ${value}`);
             showToast();
         };
+
+        const insertionModeGroup = document.getElementById('templateInsertionModeGroup');
+        const currentInsertionMode = GM_getValue('templateInsertionMode', DEFAULTS.templateInsertionMode);
+        insertionModeGroup.querySelector(`input[value="${currentInsertionMode}"]`).checked = true;
+        insertionModeGroup.addEventListener('change', (e) => {
+            if (e.target.name === 'insertionMode') {
+                const value = e.target.value;
+                GM_setValue('templateInsertionMode', value);
+                Log.info('UI.Settings', `設置已保存: templateInsertionMode = ${value}`);
+                showToast();
+            }
+        });
 
         const cursorPositionInput = document.getElementById('cursorPositionInput');
         cursorPositionInput.value = GM_getValue('cursorPositionBrIndex', DEFAULTS.cursorPositionBrIndex);
@@ -2291,40 +2317,81 @@ V53 > V54
      * @description 根據模板標題自動點擊對應的模板選項，並執行插入後的光標定位和粘貼優化。
      * @param {string} templateTitle - 要點擊的模板的完整標題。
      */
-    async function clickTemplateOptionByTitle(templateTitle) {
-        let VIEW_ADJUSTMENT_OFFSET_PX = -80;
+        async function clickTemplateOptionByTitle(templateTitle) {
+        let VIEW_ADJUSTMENT_OFFSET_PX = 0;
         const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
         const BUTTON_ICON_SELECTOR = 'lightning-icon[icon-name="utility:insert_template"]';
         const MENU_ITEM_SELECTOR = `li.uiMenuItem a[role="menuitem"][title="${templateTitle}"]`;
         const EDITOR_IFRAME_SELECTOR = 'iframe.tox-edit-area__iframe';
-        const TIMEOUT = 5000; // 5000ms: 通用操作超時。
+        const TIMEOUT = 5000;
         let clickableButton = null;
 
-        try {
+        const insertionMode = GM_getValue('templateInsertionMode', DEFAULTS.templateInsertionMode);
+        if (insertionMode === 'logo') {
+            Log.info('UI.Enhancement', `模板插入策略: "UPS Logo 圖標下方插入"，執行預定位。`);
             try {
                 const iframe = await waitForElementWithObserver(document.body, EDITOR_IFRAME_SELECTOR, TIMEOUT);
-                await delay(100); // 100ms: 等待 iframe 內部內容穩定，這是關鍵的時序修正。
+                await delay(100);
 
                 if (iframe && iframe.contentDocument) {
                     iframe.contentWindow.focus();
                     const editorDoc = iframe.contentDocument;
                     const editorBody = editorDoc.body;
-                    let targetElement = null;
 
-                    if (editorBody && editorBody.children && editorBody.children.length >= 3) {
-                        targetElement = editorBody.children[2];
-                        Log.info('UI.Enhancement', '檢測到回覆郵件場景，光標將定位於引用內容前。');
-                    } else if (editorBody && editorBody.firstElementChild) {
-                        targetElement = editorBody.firstElementChild;
-                        Log.info('UI.Enhancement', '檢測到新郵件場景，光標將定位於編輯器頂部。');
-                    }
+                    const logoTable = editorBody.querySelector('table.mce-item-table');
 
-                    if (targetElement) {
-                        const tagName = targetElement.tagName;
-                        if (tagName && ['P', 'DIV', 'TABLE', 'UL', 'OL', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6'].includes(tagName)) {
+                    if (logoTable) {
+                        const targetLineNumber = 8;
+                        let linesFound = 0;
+                        let targetNode = null;
+
+                        const nodeFilter = {
+                            acceptNode: function(node) {
+                                const nodeName = node.nodeName.toUpperCase();
+                                if (nodeName === 'BR' || ['DIV', 'P', 'TABLE', 'H1', 'H2', 'H3'].includes(nodeName)) {
+                                    return NodeFilter.FILTER_ACCEPT;
+                                }
+                                return NodeFilter.FILTER_SKIP;
+                            }
+                        };
+
+                        const walker = editorDoc.createTreeWalker(editorBody, NodeFilter.SHOW_ELEMENT, nodeFilter, false);
+                        walker.currentNode = logoTable;
+
+                        while (linesFound < targetLineNumber && (targetNode = walker.nextNode())) {
+                            linesFound++;
+                        }
+
+                        if (targetNode) {
                             const selection = iframe.contentWindow.getSelection();
                             const range = editorDoc.createRange();
-                            range.setStart(targetElement, 0);
+                            range.setStartBefore(targetNode);
+                            range.collapse(true);
+                            selection.removeAllRanges();
+                            selection.addRange(range);
+                            Log.info('UI.Enhancement', `[定位] TreeWalker 成功定位到圖標後的第 ${targetLineNumber} 行。`);
+                        } else {
+                            Log.warn('UI.Enhancement', `[定位] 圖標後不足 ${targetLineNumber} 行，定位到內容末尾。`);
+                            const selection = iframe.contentWindow.getSelection();
+                            const range = editorDoc.createRange();
+                            range.selectNodeContents(editorBody);
+                            range.collapse(false);
+                            selection.removeAllRanges();
+                            selection.addRange(range);
+                        }
+
+                    } else {
+                        Log.warn('UI.Enhancement', '[定位] 未找到 UPS 圖標表格，啟用原始回退邏輯。');
+                        let fallbackTarget = null;
+                        if (editorBody && editorBody.children && editorBody.children.length >= 3) {
+                            fallbackTarget = editorBody.children[2];
+                        } else if (editorBody && editorBody.firstElementChild) {
+                            fallbackTarget = editorBody.firstElementChild;
+                        }
+                        if (fallbackTarget) {
+                            const selection = iframe.contentWindow.getSelection();
+                            const range = editorDoc.createRange();
+                            range.setStartBefore(fallbackTarget);
                             range.collapse(true);
                             selection.removeAllRanges();
                             selection.addRange(range);
@@ -2334,7 +2401,11 @@ V53 > V54
             } catch (cursorError) {
                 Log.error('UI.Enhancement', `嘗試預定位光標時發生錯誤: ${cursorError.message}`);
             }
+        } else {
+            Log.info('UI.Enhancement', `模板插入策略: "隨光標位置插入"，已跳過預定位。`);
+        }
 
+        try {
             const iconElement = await waitForElementWithObserver(document.body, BUTTON_ICON_SELECTOR, TIMEOUT);
             clickableButton = iconElement.closest('a[role="button"]');
             if (!clickableButton) throw new Error('未能找到 "插入模板" 按鈕。');
@@ -2352,7 +2423,7 @@ V53 > V54
 
             if (targetOption) {
                 targetOption.click();
-                await delay(100); // 100ms: 等待模板內容完全注入，這是另一個關鍵的時序修正。
+                await delay(100);
 
                 if (!GM_getValue('postInsertionEnhancementsEnabled', DEFAULTS.postInsertionEnhancementsEnabled)) {
                     Log.info('UI.Enhancement', '模板插入後增強處理功能未啟用。');
@@ -2432,9 +2503,13 @@ V53 > V54
                             behavior: 'auto',
                             block: 'center'
                         });
-                        if (GM_getValue('visualOffsetEnabled', DEFAULTS.visualOffsetEnabled)) {
-                            iframeWindow.scrollBy(0, VIEW_ADJUSTMENT_OFFSET_PX);
-                        }
+
+                        requestAnimationFrame(() => {
+                            setTimeout(() => {
+                                window.scrollBy(0, VIEW_ADJUSTMENT_OFFSET_PX);
+                                Log.info('UI.Enhancement', `主窗口已應用視覺偏移: ${VIEW_ADJUSTMENT_OFFSET_PX}px`);
+                            }, 50); // 50ms 的延遲足以讓 scrollIntoView 穩定下來
+                        });
                     }
 
                     iframeWindow.focus();
