@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Case查重與賬號查找
 // @namespace    Case duplicate and find A/C
-// @version      V7
+// @version      V7.2
 // @description  自動加載所有Case，支持排序恢復，提供強大的查重與指定賬號查找功能，並採用多層次加載終止判斷機制。
 // @author       Jerry Law
 // @match        https://upsdrive.lightning.force.com/lightning/*
@@ -18,7 +18,7 @@
     class SalesforceCaseOptimizer {
 
         // =================================================================================
-        // V7 更新：CONFIG 配置擴展
+        // V7 配置
         // =================================================================================
         static CONFIG = {
             TEXT: {
@@ -35,7 +35,7 @@
                 REORDER_TOP_BUTTON: "全部置頂",
                 REORDER_INPLACE_BUTTON: "原地聚合",
                 CANCEL_BUTTON: "不作排序",
-                
+
                 ACCOUNT_SETTINGS_TITLE: "設置要查找的賬號列表",
                 ACCOUNT_SETTINGS_PROMPT: "請每行輸入一個賬號（1Z後的6位，可帶*號）。",
                 ACCOUNT_SETTINGS_SAVE: "保存設置",
@@ -45,7 +45,7 @@
             },
             SELECTORS: {
                 BUTTON_CONTAINERS: [
-                    'div.actionsWrapper > ul.forceActionsContainer', 'div.actionsWrapper', 'lst-list-view-manager-button-bar', 'div[class*="Header"] .slds-button-group-list'
+                    'div.actionsWrapper', 'lst-list-view-manager-button-bar', 'div[class*="Header"] .slds-button-group-list'
                 ],
                 TABLE: 'table.slds-table',
                 TABLE_BODY: 'table.slds-table > tbody',
@@ -65,29 +65,79 @@
                 STICKY_HEADER_CLASS: 'sticky-header-active'
             },
             TIMEOUTS: {
-                WAIT_FOR_ELEMENT: 30000,
                 COPY_SUCCESS_MSG: 1500,
                 NOTIFICATION: 3500,
                 LOAD_MORE_TIMEOUT: 5000,
-                LONG_PRESS_DURATION: 1000 
+                LONG_PRESS_DURATION: 1000,
+                DEBOUNCE_DELAY: 300
             },
-            STORAGE_KEY: 'salesforce_target_accounts' 
+            STORAGE_KEY: 'salesforce_target_accounts'
         };
 
         constructor() {
             this.originalRowOrder = null;
             this.isLoading = false;
             this.buttons = {};
-            this.targetAccounts = this.loadTargetAccounts(); 
-            this.longPressTimer = null; 
-            this.isLongPress = false; 
+            this.targetAccounts = this.loadTargetAccounts();
+            this.longPressTimer = null;
+            this.isLongPress = false;
+            this._mainObserver = null; // 持有觀察器實例
             this.init();
         }
 
+        // =================================================================================
+        // V7.2 新增：高性能 Debounce (防抖) 輔助函數
+        // =================================================================================
+        debounce(func, delay) {
+            let timeout;
+            return function(...args) {
+                const context = this;
+                clearTimeout(timeout);
+                timeout = setTimeout(() => func.apply(context, args), delay);
+            };
+        }
+
+        // =================================================================================
+        // V7.2 核心重構：引入 Debounce 機制，替換原有 init()
+        // =================================================================================
         init() {
             this.addStyles();
-            console.log('[查重查找腳本 V7]：腳本已啟動。');
-            this.waitForAnyElement(this.constructor.CONFIG.SELECTORS.BUTTON_CONTAINERS, this.addCustomButtons.bind(this));
+            console.log('[查重查找腳本 V7.2]：腳本已啟動，已啟用高性能防抖監控。');
+
+            const checkAndInject = () => {
+                // 遍歷所有可能的按鈕容器選擇器
+                for (const selector of this.constructor.CONFIG.SELECTORS.BUTTON_CONTAINERS) {
+                    const container = this.findElementInShadowDom(selector);
+
+                    // 如果找到了一個容器
+                    if (container) {
+                        // 冪等性檢查：通過檢查第一個按鈕的ID，判斷是否已經注入過
+                        if (container.querySelector('#duplicateCheckButton')) {
+                            return; // 按鈕已存在，無需任何操作
+                        }
+
+                        // 如果按鈕不存在，則執行注入
+                        console.log(`[查重查找腳本 V7.2]：檢測到新的按鈕容器 (${selector})，正在注入按鈕...`);
+                        this.addCustomButtons(container);
+                        return; // 注入完成後，結束本次檢查
+                    }
+                }
+            };
+
+            // 創建一個被 Debounce 包裹的檢查函數
+            const debouncedCheckAndInject = this.debounce(checkAndInject, this.constructor.CONFIG.TIMEOUTS.DEBOUNCE_DELAY);
+
+            // 創建一個持久化的 MutationObserver，其回調是防抖的
+            this._mainObserver = new MutationObserver(debouncedCheckAndInject);
+
+            // 配置觀察器以監控整個文檔的子節點變化
+            this._mainObserver.observe(document.body, {
+                childList: true,
+                subtree: true
+            });
+
+            // 立即執行一次檢查，以應對腳本加載時容器已存在的情況
+            checkAndInject();
         }
 
         addStyles() {
@@ -137,7 +187,6 @@
         findAllElementsInShadowDom(selector, root = document) { let r = Array.from(root.querySelectorAll(selector)); root.querySelectorAll('*').forEach(el => el.shadowRoot && (r = r.concat(this.findAllElementsInShadowDom(selector, el.shadowRoot)))); return r; }
         findElementInShadowDom(selector, root = document) { return this.findAllElementsInShadowDom(selector, root)[0] || null; }
         delay(ms) { return new Promise(res => setTimeout(res, ms)); }
-        waitForAnyElement(selectors, callback) { console.log(`[查重查找腳本 V7]：正在等待按鈕容器...`); let t = !1; const e = setTimeout(() => { t = !0, console.error(`[查重查找腳本 V7]：錯誤：等待按鈕容器超時。`), o.disconnect() }, this.constructor.CONFIG.TIMEOUTS.WAIT_FOR_ELEMENT); const o = new MutationObserver(() => { if (t) return; for (const t of selectors) { const r = this.findElementInShadowDom(t); if (r) return console.log(`[查重查找腳本 V7]：成功找到按鈕容器。`), clearTimeout(e), o.disconnect(), void callback(r) } }); o.observe(document.body, { childList: !0, subtree: !0 }) }
         clearHighlights() { const e = this.findElementInShadowDom(this.constructor.CONFIG.SELECTORS.TABLE); e && e.querySelectorAll(this.constructor.CONFIG.SELECTORS.TABLE_ROW).forEach(e => { e.style.backgroundColor = "", e.removeAttribute("data-highlighted-by-script") }) }
 
         // =================================================================================
@@ -176,7 +225,7 @@
         // =================================================================================
         // 排序備份與恢復
         // =================================================================================
-        snapshotOriginalOrder() { if (this.originalRowOrder) return; const tableBody = this.findElementInShadowDom(this.constructor.CONFIG.SELECTORS.TABLE_BODY); if (tableBody) { this.originalRowOrder = Array.from(tableBody.querySelectorAll(this.constructor.CONFIG.SELECTORS.TABLE_ROW)); console.log(`[查重查找腳本 V7]：已成功備份 ${this.originalRowOrder.length} 行的原始順序。`); } }
+        snapshotOriginalOrder() { if (this.originalRowOrder) return; const tableBody = this.findElementInShadowDom(this.constructor.CONFIG.SELECTORS.TABLE_BODY); if (tableBody) { this.originalRowOrder = Array.from(tableBody.querySelectorAll(this.constructor.CONFIG.SELECTORS.TABLE_ROW)); console.log(`[查重查找腳本 V7.2]：已成功備份 ${this.originalRowOrder.length} 行的原始順序。`); } }
         restoreOriginalOrder() { if (!this.originalRowOrder) { this.showNotification("錯誤：沒有可恢復的排序。", 'error'); return; } this.clearHighlights(); const tableBody = this.findElementInShadowDom(this.constructor.CONFIG.SELECTORS.TABLE_BODY); if (tableBody) { const fragment = document.createDocumentFragment(); this.originalRowOrder.forEach(row => fragment.appendChild(row)); tableBody.innerHTML = ''; tableBody.appendChild(fragment); this.buttons.restoreSort.setAttribute('disabled', 'true'); this.showNotification("已恢復原始排序。", 'success'); } }
 
         // =================================================================================
@@ -277,7 +326,7 @@
                             const match = statusTextContent.match(this.constructor.CONFIG.REGEX.ITEMS_COUNT);
                             const finalCount = match ? parseInt(match[1], 10) : parseInt(statusTextContent, 10);
                             if (!isNaN(finalCount) && currentRowCount >= finalCount) {
-                                console.log(`[查重查找腳本 V7]：終止條件1滿足 - '+'號消失且行數匹配 (${currentRowCount}/${finalCount})。`);
+                                console.log(`[查重查找腳本 V7.2]：終止條件1滿足 - '+'號消失且行數匹配 (${currentRowCount}/${finalCount})。`);
                                 isLoadComplete = true;
                             }
                         }
@@ -286,7 +335,7 @@
                             if (match && match[1]) {
                                 const totalCount = parseInt(match[1], 10);
                                 if (currentRowCount >= totalCount) {
-                                    console.log(`[查重查找腳本 V7]：終止條件2滿足 - 已加載行數達到總數 (${currentRowCount}/${totalCount})。`);
+                                    console.log(`[查重查找腳本 V7.2]：終止條件2滿足 - 已加載行數達到總數 (${currentRowCount}/${totalCount})。`);
                                     isLoadComplete = true;
                                 }
                             }
@@ -299,7 +348,7 @@
                     }
 
                     if (lastRowCount === currentRowCount && currentRowCount > 0) {
-                         console.log('[查重查找腳本 V7]：終止條件3滿足 - 行數未增加，判斷為加載完畢。');
+                         console.log('[查重查找腳本 V7.2]：終止條件3滿足 - 行數未增加，判斷為加載完畢。');
                          break;
                     }
 
@@ -310,7 +359,7 @@
                     try {
                         await this.waitForNewRows(tableBody, this.constructor.CONFIG.TIMEOUTS.LOAD_MORE_TIMEOUT);
                     } catch (error) {
-                        console.warn(`[查重查找腳本 V7]：終止條件3滿足 - ${error.message}`);
+                        console.warn(`[查重查找腳本 V7.2]：終止條件3滿足 - ${error.message}`);
                         break;
                     }
                 }
@@ -321,7 +370,7 @@
                 processor();
 
             } catch (err) {
-                console.error('[查重查找腳本 V7]：自動加載過程中發生錯誤:', err);
+                console.error('[查重查找腳本 V7.2]：自動加載過程中發生錯誤:', err);
                 this.showNotification('自動加載失敗，請檢查控制台日誌。', 'error');
             } finally {
                 document.body.removeChild(overlay);
@@ -514,7 +563,7 @@
                 button.textContent = this.constructor.CONFIG.TEXT.COPY_SUCCESS_BUTTON;
                 button.disabled = true;
                 setTimeout(() => { button.textContent = originalText; button.disabled = false; }, this.constructor.CONFIG.TIMEOUTS.COPY_SUCCESS_MSG);
-            } catch (err) { console.error('[查重查找腳本 V7]：複製到剪貼簿失敗：', err); this.showNotification('複製失敗！請檢查瀏覽器權限設置。', 'error'); }
+            } catch (err) { console.error('[查重查找腳本 V7.2]：複製到剪貼簿失敗：', err); this.showNotification('複製失敗！請檢查瀏覽器權限設置。', 'error'); }
         }
 
         showActionDialog(summary, groups, map, table, titleText, summaryHtml, showCopyButton) {
@@ -584,7 +633,7 @@
             const restoreSortButton = this.createButton('restoreSortButton', this.constructor.CONFIG.TEXT.RESTORE_SORT_BUTTON, this.restoreOriginalOrder.bind(this));
             restoreSortButton.setAttribute('disabled', 'true');
 
-            // V7: 為“查找指定賬號”按鈕添加長按事件
+            // 為“查找指定賬號”按鈕添加長按事件
             this.addLongPressHandler(findAccountButton, this.showAccountSettingsDialog.bind(this));
 
             this.buttons = {
@@ -595,11 +644,11 @@
             };
 
             container.insertBefore(this.buttons.restoreSort, container.firstChild);
-            container.insertBefore(this.buttons.findAccount, container.firstChild); // 新按鈕位置
+            container.insertBefore(this.buttons.findAccount, container.firstChild);
             container.insertBefore(this.buttons.rangeSelect, container.firstChild);
             container.insertBefore(this.buttons.duplicateCheck, container.firstChild);
 
-            console.log(`[查重查找腳本 V7]：成功新增所有自訂按鈕！`);
+            console.log(`[查重查找腳本 V7.2]：成功新增所有自訂按鈕！`);
         }
 
         createButton(id, text, clickHandler) {
@@ -652,6 +701,7 @@
         setButtonsDisabled(disabled) {
             Object.values(this.buttons).forEach(button => {
                 if (button.id === 'restoreSortButton' && !disabled) {
+                    // 恢復按鈕的禁用狀態由 restoreOriginalOrder 和 reorder* 函數獨立控制
                     return;
                 }
                 if (disabled) {
