@@ -25,6 +25,9 @@
     // 注釋數據
     // ================================================================
     const annotationsText = `
+#PAPER INSPEC|需要提供更多清關文件
+#OUT OF TERR|UPS目前未提供該目的地的服務
+#PHON LFT MSG|已給收件人留言
 #REROUTE|改變原定的運送路線
 #INCOMPL DOC|清關文件不完整
 #NOT CLR ABND|棄件
@@ -106,18 +109,18 @@
 #LOST PKG|包裹丟失
 #NO EVENT|無下一個預期物流事件
 #MISLOAD|送錯站點
-#REROUTED|已重新安排送往正確站點
+#REROUTED|已重新中轉至目的地
 #NO UPS AP|無可用UPS自提點
 #SEIZED CUSTM|海關扣押
 #RESCHEDULED|重新安排派送
-#PLD DN ALLOW|未收到或PLD資料不符合要求
+#PLD DN ALLOW|缺少PLD或PLD檢查未通過
 #P/EFFECT DOC|需要提交個人物品申報表
 #MISSING CI|缺少發票
 #WAREHOUSE|包裹進入倉需要補充資料
 #MISS/INV TEL|缺少收件人電話
 #RTS CUSTOMS|退回給寄件人
 #IMP RESTRICT|包裹含限制進口物品
-#REDIRECT|更正已顯示的記錄
+#REDIRECT|安排送至目的地
 #ONSITE BROKR|由第三方機構清關UPS派送
 #REG INSPECT|需要檢查包裹
 #WT ADJUSTMNT|調整計費重量
@@ -138,7 +141,7 @@
 #ADDL HANDLE|帳單調整，額外處理
 #ADDL HOLD|存在額外的停留原因
 #ADDR CORRCTN|位址更正，重新安排送達
-#ADDR ERRORS|標籤地址多次錯誤，未送達
+#ADDR ERRORS|地址有多處錯誤，未送達
 #ADR DG HOLD ADR|危險品包裹被扣押
 #ADR RESUMED ADR|危險品包裹恢復運輸
 #ADV WEATHER|惡劣天氣條件
@@ -251,7 +254,7 @@
 #CONTACT REQD|收件人要求清關前聯繫
 #CONTACT SNDR|UPS 將聯繫寄件人提供詳細資訊
 #CONTENT INSP|政府檢查潛在的仿冒品
-#COULDN'T ADL|無法將 ADL 派送至 UPS 存取點
+#COULDN'T ADL|無法派送至UPS自提點
 #COUNTERFEIT|疑似仿冒品已識別
 #COURIER SDWC|快遞員自取之當日自取服務
 #CPAD N/A|寄件人 CPaD 限制
@@ -353,7 +356,7 @@
 #EXP PRC COMP|出口處理完成
 #EXP RESTRICT|貨件受出口限制
 #EXPIRED EXCP|已過期 - 無法解決異常
-#EXPORT DOCS|缺少出口報文件
+#EXPORT DOCS|缺少出口報關文件
 #EXPORT ENTRY|原產地需要正式出口報關
 #EXPORT HOLD|出口扣留
 #EXPT LIC REQ|需要出口許可證
@@ -381,7 +384,7 @@
 #FLT DEPARTED|飛機已起飛 - 貨物已裝機
 #FLT DLAY MEC|UPS飛機故障
 #FLT MECH|飛機機械故障，不影響服務
-#FORMAL ENTRY|等地清關行放行以進行正式報關
+#FORMAL ENTRY|等待清關行放行以進行正式報關
 #FRAUD FLAG|貨件已被標記為詐欺
 #FRAUD HOLD|詐欺風險扣留調查/處置
 #FRAUD INSPT|政府機構檢查潛在詐欺
@@ -576,7 +579,7 @@
 #CO|哥倫比亞
 #CG|剛果
 #CK|科克群島
-#CR|哥斯大黎加
+#CR|哥斯達黎加
 #CI|象牙海岸
 #HR|克羅埃西亞
 #CY|賽普勒斯
@@ -594,8 +597,8 @@
 #FJ|斐濟群島
 #FI|芬蘭
 #FR|法國
-#GF|法屬圭那
-#PF|法屬波利尼西亞
+#GF|圭亞那
+#PF|法屬 波利尼西亞
 #GA|加蓬
 #GM|甘比亞
 #GE|格魯吉亞
@@ -789,9 +792,9 @@
 #CHILE|智利 - CL
 #CHINA|中國 - CN
 #COLOMBIA|哥倫比亞 - CO
-#CONGO|剛果 - CG
+#DEMOCRATIC REPUBLIC OF THE CONGO|剛果 - CG
 #COOK ISLANDS|科克群島 - CK
-#COSTA RICA|哥斯大黎加 - CR
+#COSTA RICA|哥斯達黎加 - CR
 #COTE D IVOIRE|象牙海岸 - CI
 #CROATIA|克羅埃西亞 - HR
 #CYPRUS|賽普勒斯 - CY
@@ -809,8 +812,9 @@
 #FIJI|斐濟群島 - FJ
 #FINLAND|芬蘭 - FI
 #FRANCE|法國 - FR
-#FRENCH GUIANA|法屬圭亞那 - GF
-#FRENCH POLYNESIA|法屬波利尼西亞 - PF
+#FRENCH GUIANA|圭亞那 - GF
+#GUYANA|圭亞那 - GF
+#FRENCH POLYNESIA|法屬 波利尼西亞 - PF
 #GABON|加蓬 - GA
 #GAMBIA|甘比亞 - GM
 #GEORGIA|格魯吉亞 - GE
@@ -823,7 +827,6 @@
 #GUATEMALA|危地馬拉 - GT
 #GUERNSEY|根西 - GG
 #GUINEA REPUBLIC|幾內亞 - GN
-#GUYANA|圭亞那 - GY
 #HAITI|海地 - HT
 #HONDURAS|洪都拉斯 - HN
 #HUNGARY|匈牙利 - HU
@@ -982,6 +985,7 @@ User ID
 UPS ACCESS POINT
 ERN CLOSED
 PACKAGE WAS DRIVER RELEASED
+
 `;
 
     const annotations = annotationsText.trim().split('\n').filter(line => line.trim());
