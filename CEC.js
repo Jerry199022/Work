@@ -2723,7 +2723,7 @@ V53 > V54
      */
     async function handleStageTwoCloseCase(comment, mode = 'normal') {
         // 根據模式確定延時時間
-        const delay = mode === 'fast' ? 10 : 500;
+        const delay = mode === 'fast' ? 10 : 600;
         Log.info('Feature.IWT.CloseCase', `以 "${mode}" 模式執行 Close Case，延時: ${delay}ms。`);
 
         const closeCaseComponent = await waitForElementWithObserver(document.body, 'c-cec-close-case', 5000);
