@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IVP顯示注釋
 // @namespace    IVP顯示注釋
-// @version      V7.1
+// @version      V7.2
 // @description  IVP顯示注釋、一眼模式、定義字體顏色。
 // @author       Jerry Law
 // @match        *://ivp.inside.ups.com/*
@@ -25,6 +25,7 @@
     // 注釋數據
     // ================================================================
     const annotationsText = `
+#AP DEL TMRW|無法派送至UPS自提點
 #PAPER INSPEC|需要提供更多清關文件
 #OUT OF TERR|UPS目前未提供該目的地的服務
 #PHON LFT MSG|已給收件人留言
@@ -1448,16 +1449,20 @@ PACKAGE WAS DRIVER RELEASED
         node.parentNode.replaceChild(wrapper, node);
     }
 
-    function processElement(rootElement) {
+        function processElement(rootElement) {
         if (!rootElement || !rootElement.nodeType) return;
         if (rootElement.nodeName === "INPUT" || rootElement.nodeName === "TEXTAREA" || rootElement.isContentEditable) return;
-
+        const forbiddenAncestorsSelector = 'INPUT, TEXTAREA, BUTTON, SELECT, OPTION, SCRIPT, STYLE, [contenteditable="true"]';
         const walker = document.createTreeWalker(rootElement, NodeFilter.SHOW_TEXT, null);
         const nodes = [];
         let node;
         while ((node = walker.nextNode())) {
             const p = node.parentNode;
-            if (p && (p.nodeName === "SCRIPT" || p.nodeName === "STYLE" || p.isContentEditable)) continue;
+
+            if (p && p.closest(forbiddenAncestorsSelector)) {
+                continue;
+            }
+
             if (!processedNodes.has(node)) {
                 nodes.push(node);
             }
