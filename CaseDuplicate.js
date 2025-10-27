@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Case查重與賬號查找
 // @namespace    Case duplicate and find A/C
-// @version      V7.2
+// @version      V7.3
 // @description  自動加載所有Case，支持排序恢復，提供強大的查重與指定賬號查找功能，並採用多層次加載終止判斷機制。
 // @author       Jerry Law
 // @match        https://upsdrive.lightning.force.com/lightning/*
@@ -45,7 +45,7 @@
             },
             SELECTORS: {
                 BUTTON_CONTAINERS: [
-                    'div.actionsWrapper', 'lst-list-view-manager-button-bar', 'div[class*="Header"] .slds-button-group-list'
+                    'div.actionsWrapper', 'div[class*="Header"] .slds-button-group-list'
                 ],
                 TABLE: 'table.slds-table',
                 TABLE_BODY: 'table.slds-table > tbody',
