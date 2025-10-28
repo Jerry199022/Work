@@ -1,10 +1,12 @@
 // ==UserScript==
 // @name         CEC功能強化
 // @namespace    CEC Enhanced
-// @version      V55.1
+// @version      V55.2
 // @description  快捷操作按鈕、自動指派、IVP快速查詢、聯繫人彈窗優化、按鈕警示色、賬戶檢測、組件屏蔽、設置菜單、自動IVP查詢、URL精準匹配、快捷按鈕可編輯、(Related Cases)數據提取與增強排序功能、關聯案件提取器、回覆case快捷按鈕、已跟進case提示、全局暫停/恢復功能。
 // @author       Jerry Law
 // @match        https://upsdrive.lightning.force.com/*
+// @exclude      https://upsdrive.lightning.force.com/lightning/r/Contact/*
+// @exclude      https://upsdrive.lightning.force.com/lightning/r/Dashboard/*
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_registerMenuCommand
@@ -2723,7 +2725,7 @@ V53 > V54
      */
     async function handleStageTwoCloseCase(comment, mode = 'normal') {
         // 根據模式確定延時時間
-        const delay = mode === 'fast' ? 10 : 900;
+        const delay = mode === 'fast' ? 10 : 800;
         Log.info('Feature.IWT.CloseCase', `以 "${mode}" 模式執行 Close Case，延時: ${delay}ms。`);
 
         const closeCaseComponent = await waitForElementWithObserver(document.body, 'c-cec-close-case', 5000);
