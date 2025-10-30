@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CEC功能強化
 // @namespace    CEC Enhanced
-// @version      V55.2
+// @version      V55.3
 // @description  快捷操作按鈕、自動指派、IVP快速查詢、聯繫人彈窗優化、按鈕警示色、賬戶檢測、組件屏蔽、設置菜單、自動IVP查詢、URL精準匹配、快捷按鈕可編輯、(Related Cases)數據提取與增強排序功能、關聯案件提取器、回覆case快捷按鈕、已跟進case提示、全局暫停/恢復功能。
 // @author       Jerry Law
 // @match        https://upsdrive.lightning.force.com/*
@@ -2628,7 +2628,7 @@ V53 > V54
      */
     async function extractTrackingNumberAndTriggerIVP() {
         const TRACKING_CACHE_KEY = 'trackingNumberLog';
-        const CACHE_TTL_MS = 30 * 60 * 1000; // 30分鐘: 追踪號緩存有效期。
+        const CACHE_TTL_MS = 60 * 60 * 1000; // 60分鐘: 追踪號緩存有效期。
         const caseId = getCaseIdFromUrl(location.href);
         if (!caseId) {
             Log.warn('Feature.IVP', `無法從當前 URL 提取 Case ID，追踪號緩存功能跳過。`);
@@ -3297,7 +3297,7 @@ V53 > V54
         }
 
         const allLogs = GM_getValue(PREFERRED_LOG_KEY, {});
-        const CACHE_TTL = 30 * 60 * 1000; // 30分鐘: 聯繫人 Preferred 狀態的緩存有效期。
+        const CACHE_TTL = 60 * 60 * 1000; // 60分鐘: 聯繫人 Preferred 狀態的緩存有效期。
         const cleanedLog = Object.fromEntries(Object.entries(allLogs).filter(([_, data]) => now - data.timestamp < CACHE_TTL));
 
         if (cleanedLog[caseId]) {
@@ -3566,7 +3566,7 @@ V53 > V54
                 assignButton.style.setProperty('background-color', '#0070d2', 'important');
                 assignButton.style.setProperty('color', '#fff', 'important');
                 const cache = GM_getValue(ASSIGNMENT_CACHE_KEY, {});
-                const CACHE_TTL = 30 * 60 * 1000; // 30分鐘: 指派成功記錄的緩存有效期。
+                const CACHE_TTL = 60 * 60 * 1000; // 60分鐘: 指派成功記錄的緩存有效期。
                 // [修改] 使用 caseId 作為緩存 key
                 cache[caseId] = {
                     timestamp: Date.now()
@@ -4332,7 +4332,7 @@ V53 > V54
      */
     function startHighFrequencyScanner(caseUrl) {
         const SCAN_INTERVAL = 300; // 300ms: 掃描器輪詢間隔，用於快速檢測頁面元素。
-        const MASTER_TIMEOUT = 15000; // 15000ms: 掃描器的總運行超時，防止無限運行。
+        const MASTER_TIMEOUT = 20000; // 20000ms: 掃描器的總運行超時，防止無限運行。
         const startTime = Date.now();
 
         let tasksToRun = CASE_PAGE_CHECKS_CONFIG.filter(task => task.once);
@@ -4781,7 +4781,7 @@ V53 > V54
             }
 
             const ASSIGNMENT_CACHE_KEY = 'assignmentLog';
-            const CACHE_EXPIRATION_MS = 30 * 60 * 1000;
+            const CACHE_EXPIRATION_MS = 60 * 60 * 1000; // 60分鐘: 自動指派緩存有效期。
             const cache = GM_getValue(ASSIGNMENT_CACHE_KEY, {});
             const caseId = getCaseIdFromUrl(caseUrl);
             const entry = caseId ? cache[caseId] : null;
