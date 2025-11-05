@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CEC功能強化
 // @namespace    CEC Enhanced
-// @version      V55.3
+// @version      V55.4
 // @description  快捷操作按鈕、自動指派、IVP快速查詢、聯繫人彈窗優化、按鈕警示色、賬戶檢測、組件屏蔽、設置菜單、自動IVP查詢、URL精準匹配、快捷按鈕可編輯、(Related Cases)數據提取與增強排序功能、關聯案件提取器、回覆case快捷按鈕、已跟進case提示、全局暫停/恢復功能。
 // @author       Jerry Law
 // @match        https://upsdrive.lightning.force.com/*
@@ -2747,7 +2747,7 @@ V53 > V54
      */
     async function handleStageTwoDocumentContact(comment) {
         const docContactComponent = await waitForElementWithObserver(document.body, 'c-cec-document-customer-contact', 5000);
-        await new Promise(resolve => setTimeout(resolve, 500));
+        await new Promise(resolve => setTimeout(resolve, 100));
         const radioButtonSelector = 'input[value="Spoke with customer"]';
         const radioButton = await waitForElementWithObserver(docContactComponent, radioButtonSelector, 5000);
         await new Promise(resolve => setTimeout(resolve, 100)); // 100ms: 點擊前短暫延時，確保事件監聽器已激活。
@@ -2760,7 +2760,7 @@ V53 > V54
                 // 忽略錯誤，某些情況下可能沒有評論框
             }
         }
-        await new Promise(resolve => setTimeout(resolve, 500));
+        await new Promise(resolve => setTimeout(resolve, 100));
         const finalSubmitButton = await waitForElementWithObserver(docContactComponent, '.slds-card__footer button.slds-button_brand', 5000);
         finalSubmitButton.click();
         showCompletionToast(docContactComponent, 'Document Contact: 操作成功！請等待網頁更新！');
