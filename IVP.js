@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IVP顯示注釋
 // @namespace    IVP顯示注釋
-// @version      V7.2
+// @version      V7.3
 // @description  IVP顯示注釋、一眼模式、定義字體顏色。
 // @author       Jerry Law
 // @match        *://ivp.inside.ups.com/*
@@ -25,6 +25,15 @@
     // 注釋數據
     // ================================================================
     const annotationsText = `
+#REC BY UPS|包裹已由UPS接收
+#OTHER DF|其他司機跟進中
+## PCS NOT =|文件記錄的數量與實際不符
+#STOP VISIBTY|停止顯示後續狀態給客戶
+#Arrived at Facility|已到達設施
+#NEED DIRECT|需要收件地址的路線指引
+#PKG NOT RCVD|運輸過程中出現中斷，目前尚未收到包裹
+#INCOR TARIFF|貨物因關稅代碼錯誤而被扣留
+#NI1 ALT DEL|嘗試派送但客戶不在，包裹已送至UPS自提點供自取。
 #AP DEL TMRW|無法派送至UPS自提點
 #PAPER INSPEC|需要提供更多清關文件
 #OUT OF TERR|UPS目前未提供該目的地的服務
@@ -344,8 +353,8 @@
 #EMERGENCY|緊急狀態，超出UPS控制
 #END MESSAGE|訊息結束-無意義
 #EPA HOLD|環境保護署扣留
-#ERN CLOSED|異常解決通知 - 已關閉
-#ERN OPEN|異常解決通知 - 開啟
+#ERN CLOSED|異常通知 - 關閉
+#ERN OPEN|異常通知 - 開啟
 #EURO T-1|歐盟包裹 - 未在自由流通
 #EURTNL DISRP|歐洲隧道中斷導致延誤
 #EXCEED VALUE|貨到付款/保價貨到付款 UPS 存取點金額超出限制
@@ -385,7 +394,7 @@
 #FLT DEPARTED|飛機已起飛 - 貨物已裝機
 #FLT DLAY MEC|UPS飛機故障
 #FLT MECH|飛機機械故障，不影響服務
-#FORMAL ENTRY|等待清關行放行以進行正式報關
+#FORMAL ENTRY|等待正式報關
 #FRAUD FLAG|貨件已被標記為詐欺
 #FRAUD HOLD|詐欺風險扣留調查/處置
 #FRAUD INSPT|政府機構檢查潛在詐欺
@@ -475,7 +484,7 @@
 #REF DAMAGED|貨物破損，收件人拒收
 #REF DIDN WAN|收件人不想要貨物，拒收
 #REF DUTY/VAT|收件人拒付關稅
-#REF NO COD|收件人決絕付款
+#REF NO COD|收件人拒絕付款
 #REF NO INVCE|沒有發票，收件人拒收
 #REF TOO $$$|運費太貴，收件人拒收
 #REF TOO LATE|派送太晚，收件人拒收
@@ -650,7 +659,7 @@
 #MN|蒙古
 #ME|黑山
 #MA|摩洛哥
-#MZ|莫三比克
+#MZ|莫桑比克
 #MM|緬甸
 #NA|納米比亞
 #NP|尼泊爾
@@ -791,7 +800,7 @@
 #CANARY ISLANDS|加那利群島 - IC
 #CAYMAN ISLANDS|開曼群島 - KY
 #CHILE|智利 - CL
-#CHINA|中國 - CN
+#HONG KONG SAR, CHINA|香港 - HK
 #COLOMBIA|哥倫比亞 - CO
 #DEMOCRATIC REPUBLIC OF THE CONGO|剛果 - CG
 #COOK ISLANDS|科克群島 - CK
@@ -864,7 +873,7 @@
 #MONGOLIA|蒙古 - MN
 #MONTENEGRO|黑山 - ME
 #MOROCCO|摩洛哥 - MA
-#MOZAMBIQUE|莫三比克 - MZ
+#MOZAMBIQUE|莫桑比克 - MZ
 #MYANMAR|緬甸 - MM
 #NAMIBIA|納米比亞 - NA
 #NEPAL|尼泊爾 - NP
@@ -984,7 +993,6 @@ UNAUTHORIZED ANIMAL DESTROY
 Ship To WAREHOUSE
 User ID
 UPS ACCESS POINT
-ERN CLOSED
 PACKAGE WAS DRIVER RELEASED
 
 `;
