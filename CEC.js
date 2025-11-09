@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CEC功能強化
 // @namespace    CEC Enhanced
-// @version      V55.4
+// @version      V56
 // @description  快捷操作按鈕、自動指派、IVP快速查詢、聯繫人彈窗優化、按鈕警示色、賬戶檢測、組件屏蔽、設置菜單、自動IVP查詢、URL精準匹配、快捷按鈕可編輯、(Related Cases)數據提取與增強排序功能、關聯案件提取器、回覆case快捷按鈕、已跟進case提示、全局暫停/恢復功能。
 // @author       Jerry Law
 // @match        https://upsdrive.lightning.force.com/*
@@ -18,6 +18,12 @@
 // ==/UserScript==
 
 /*
+V55 > V56
+更新內容：
+-添加Suspended A/C识别
+-添加回覆case繁简自动切换
+-优化脚本执行逻辑
+
 V54 > V55
 更新內容：
 -設置面板添加 選擇模版插入位置 選項
@@ -47,7 +53,7 @@ V53 > V54
             ERROR: 3,
             NONE: 4
         },
-        level: 1, // 默認日誌級別：INFO。設為 0 可查看 DEBUG 信息。
+        level: 0, // 默認日誌級別：INFO。設為 0 可查看 DEBUG 信息。
 
         /**
          * @private
@@ -363,6 +369,66 @@ V53 > V54
             timeout = setTimeout(() => func.apply(context, args), wait);
         };
     }
+
+    /**
+     * @description [新增] 繁簡轉換的核心引擎，採用高效的字符串索引映射。
+     */
+    const ChineseConverter = {
+        s_chars: null,
+        t_chars: null,
+        s2t_map: null,
+        t2s_map: null,
+
+        // 初始化數據，採用 chinese-s2t 的高效字符串索引映射方式
+        init: function() {
+            this.s_chars = '万与丑专业丛东丝丢两严丧个丬丰临为丽举么义乌乐乔习乡书买乱争于亏云亘亚产亩亲亵亸亿仅从仑仓仪们价众优伙会伛伞伟传伤伥伦伧伪伫体余佣佥侠侣侥侦侧侨侩侪侬俣俦俨俩俪俭债倾偬偻偾偿傥傧储傩儿兑兖党兰关兴兹养兽冁内冈册写军农冢冯冲决况冻净凄凉凌减凑凛几凤凫凭凯击凼凿刍划刘则刚创删别刬刭刽刿剀剂剐剑剥剧劝办务劢动励劲劳势勋勐勚匀匦匮区医华协单卖卢卤卧卫却卺厂厅历厉压厌厍厕厢厣厦厨厩厮县参叆叇双发变叙叠叶号叹叽吁后吓吕吗吣吨听启吴呒呓呕呖呗员呙呛呜咏咔咙咛咝咤咴咸哌响哑哒哓哔哕哗哙哜哝哟唛唝唠唡唢唣唤唿啧啬啭啮啰啴啸喷喽喾嗫呵嗳嘘嘤嘱噜噼嚣嚯团园囱围囵国图圆圣圹场坂坏块坚坛坜坝坞坟坠垄垅垆垒垦垧垩垫垭垯垱垲垴埘埙埚埝埯堑堕塆墙壮声壳壶壸处备复够头夸夹夺奁奂奋奖奥妆妇妈妩妪妫姗姜娄娅娆娇娈娱娲娴婳婴婵婶媪嫒嫔嫱嬷孙学孪宁宝实宠审宪宫宽宾寝对寻导寿将尔尘尧尴尸尽层屃屉届属屡屦屿岁岂岖岗岘岙岚岛岭岳岽岿峃峄峡峣峤峥峦崂崃崄崭嵘嵚嵛嵝嵴巅巩巯币帅师帏帐帘帜带帧帮帱帻帼幂幞干并广庄庆庐庑库应庙庞废庼廪开异弃张弥弪弯弹强归当录彟彦彻径徕御忆忏忧忾怀态怂怃怄怅怆怜总怼怿恋恳恶恸恹恺恻恼恽悦悫悬悭悯惊惧惨惩惫惬惭惮惯愍愠愤愦愿慑慭憷懑懒懔戆戋戏戗战戬户扎扑扦执扩扪扫扬扰抚抛抟抠抡抢护报担拟拢拣拥拦拧拨择挂挚挛挜挝挞挟挠挡挢挣挤挥挦捞损捡换捣据捻掳掴掷掸掺掼揸揽揿搀搁搂搅携摄摅摆摇摈摊撄撑撵撷撸撺擞攒敌敛数斋斓斗斩断无旧时旷旸昙昼昽显晋晒晓晔晕晖暂暧札术朴机杀杂权条来杨杩杰极构枞枢枣枥枧枨枪枫枭柜柠柽栀栅标栈栉栊栋栌栎栏树栖样栾桊桠桡桢档桤桥桦桧桨桩梦梼梾检棂椁椟椠椤椭楼榄榇榈榉槚槛槟槠横樯樱橥橱橹橼檐檩欢欤欧歼殁殇残殒殓殚殡殴毁毂毕毙毡毵氇气氢氩氲汇汉污汤汹沓沟没沣沤沥沦沧沨沩沪沵泞泪泶泷泸泺泻泼泽泾洁洒洼浃浅浆浇浈浉浊测浍济浏浐浑浒浓浔浕涂涌涛涝涞涟涠涡涢涣涤润涧涨涩淀渊渌渍渎渐渑渔渖渗温游湾湿溃溅溆溇滗滚滞滟滠满滢滤滥滦滨滩滪漤潆潇潋潍潜潴澜濑濒灏灭灯灵灾灿炀炉炖炜炝点炼炽烁烂烃烛烟烦烧烨烩烫烬热焕焖焘煅煳熘爱爷牍牦牵牺犊犟状犷犸犹狈狍狝狞独狭狮狯狰狱狲猃猎猕猡猪猫猬献獭玑玙玚玛玮环现玱玺珉珏珐珑珰珲琎琏琐琼瑶瑷璇璎瓒瓮瓯电画畅畲畴疖疗疟疠疡疬疮疯疱疴痈痉痒痖痨痪痫痴瘅瘆瘗瘘瘪瘫瘾瘿癞癣癫癯皑皱皲盏盐监盖盗盘眍眦眬着睁睐睑瞒瞩矫矶矾矿砀码砖砗砚砜砺砻砾础硁硅硕硖硗硙硚确硷碍碛碜碱碹磙礼祎祢祯祷祸禀禄禅离秃秆种积称秽秾稆税稣稳穑穷窃窍窑窜窝窥窦窭竖竞笃笋笔笕笺笼笾筑筚筛筜筝筹签简箓箦箧箨箩箪箫篑篓篮篱簖籁籴类籼粜粝粤粪粮糁糇紧絷纟纠纡红纣纤纥约级纨纩纪纫纬纭纮纯纰纱纲纳纴纵纶纷纸纹纺纻纼纽纾线绀绁绂练组绅细织终绉绊绋绌绍绎经绐绑绒结绔绕绖绗绘给绚绛络绝绞统绠绡绢绣绤绥绦继绨绩绪绫绬续绮绯绰绱绲绳维绵绶绷绸绹绺绻综绽绾绿缀缁缂缃缄缅缆缇缈缉缊缋缌缍缎缏缐缑缒缓缔缕编缗缘缙缚缛缜缝缞缟缠缡缢缣缤缥缦缧缨缩缪缫缬缭缮缯缰缱缲缳缴缵罂网罗罚罢罴羁羟羡翘翙翚耢耧耸耻聂聋职聍联聩聪肃肠肤肷肾肿胀胁胆胜胧胨胪胫胶脉脍脏脐脑脓脔脚脱脶脸腊腌腘腭腻腼腽腾膑臜舆舣舰舱舻艰艳艹艺节芈芗芜芦苁苇苈苋苌苍苎苏苘苹茎茏茑茔茕茧荆荐荙荚荛荜荞荟荠荡荣荤荥荦荧荨荩荪荫荬荭荮药莅莜莱莲莳莴莶获莸莹莺莼萚萝萤营萦萧萨葱蒇蒉蒋蒌蓝蓟蓠蓣蓥蓦蔷蔹蔺蔼蕲蕴薮藁藓虏虑虚虫虬虮虽虾虿蚀蚁蚂蚕蚝蚬蛊蛎蛏蛮蛰蛱蛲蛳蛴蜕蜗蜡蝇蝈蝉蝎蝼蝾螀螨蟏衅衔补衬衮袄袅袆袜袭袯装裆裈裢裣裤裥褛褴襁襕见观觃规觅视觇览觉觊觋觌觍觎觏觐觑觞触觯詟誉誊讠计订讣认讥讦讧讨让讪讫训议讯记讱讲讳讴讵讶讷许讹论讻讼讽设访诀证诂诃评诅识诇诈诉诊诋诌词诎诏诐译诒诓诔试诖诗诘诙诚诛诜话诞诟诠诡询诣诤该详诧诨诩诪诫诬语诮误诰诱诲诳说诵诶请诸诹诺读诼诽课诿谀谁谂调谄谅谆谇谈谊谋谌谍谎谏谐谑谒谓谔谕谖谗谘谙谚谛谜谝谞谟谠谡谢谣谤谥谦谧谨谩谪谫谬谭谮谯谰谱谲谳谴谵谶谷豮贝贞负贠贡财责贤败账货质贩贪贫贬购贮贯贰贱贲贳贴贵贶贷贸费贺贻贼贽贾贿赀赁赂赃资赅赆赇赈赉赊赋赌赍赎赏赐赑赒赓赔赕赖赗赘赙赚赛赜赝赞赟赠赡赢赣赪赵赶趋趱趸跃跄跖跞践跶跷跸跹跻踊踌踪踬踯蹑蹒蹰蹿躏躜躯车轧轨轩轪轫转轭轮软轰轱轲轳轴轵轶轷轸轹轺轻轼载轾轿辀辁辂较辄辅辆辇辈辉辊辋辌辍辎辏辐辑辒输辔辕辖辗辘辙辚辞辩辫边辽达迁过迈运还这进远违连迟迩迳迹适选逊递逦逻遗遥邓邝邬邮邹邺邻郁郄郏郐郑郓郦郧郸酝酦酱酽酾酿释里鉅鉴銮錾钆钇针钉钊钋钌钍钎钏钐钑钒钓钔钕钖钗钘钙钚钛钝钞钟钠钡钢钣钤钥钦钧钨钩钪钫钬钭钮钯钰钱钲钳钴钵钶钷钸钹钺钻钼钽钾钿铀铁铂铃铄铅铆铈铉铊铋铍铎铏铐铑铒铕铗铘铙铚铛铜铝铞铟铠铡铢铣铤铥铦铧铨铪铫铬铭铮铯铰铱铲铳铴铵银铷铸铹铺铻铼铽链铿销锁锂锃锄锅锆锇锈锉锊锋锌锍锎锏锐锑锒锓锔锕锖锗错锚锜锞锟锠锡锢锣锤锥锦锨锩锫锬锭键锯锰锱锲锳锴锵锶锷锸锹锺锻锼锽锾锿镀镁镂镃镆镇镈镉镊镌镍镎镏镐镑镒镕镖镗镙镚镛镜镝镞镟镠镡镢镣镤镥镦镧镨镩镪镫镬镭镮镯镰镱镲镳镴镶长门闩闪闫闬闭问闯闰闱闲闳间闵闶闷闸闹闺闻闼闽闾闿阀阁阂阃阄阅阆阇阈阉阊阋阌阍阎阏阐阑阒阓阔阕阖阗阘阙阚阛队阳阴阵阶际陆陇陈陉陕陧陨险随隐隶隽难雏雠雳雾霁霉霭靓静靥鞑鞒鞯鞴韦韧韨韩韪韫韬韵页顶顷顸项顺须顼顽顾顿颀颁颂颃预颅领颇颈颉颊颋颌颍颎颏颐频颒颓颔颕颖颗题颙颚颛颜额颞颟颠颡颢颣颤颥颦颧风飏飐飑飒飓飔飕飖飗飘飙飚飞飨餍饤饥饦饧饨饩饪饫饬饭饮饯饰饱饲饳饴饵饶饷饸饹饺饻饼饽饾饿馀馁馂馃馄馅馆馇馈馉馊馋馌馍馎馏馐馑馒馓馔馕马驭驮驯驰驱驲驳驴驵驶驷驸驹驺驻驼驽驾驿骀骁骂骃骄骅骆骇骈骉骊骋验骍骎骏骐骑骒骓骔骕骖骗骘骙骚骛骜骝骞骟骠骡骢骣骤骥骦骧髅髋髌鬓魇魉鱼鱽鱾鱿鲀鲁鲂鲄鲅鲆鲇鲈鲉鲊鲋鲌鲍鲎鲏鲐鲑鲒鲓鲔鲕鲖鲗鲘鲙鲚鲛鲜鲝鲞鲟鲠鲡鲢鲣鲤鲥鲦鲧鲨鲩鲪鲫鲬鲭鲮鲯鲰鲱鲲鲳鲴鲵鲶鲷鲸鲹鲺鲻鲼鲽鲾鲿鳀鳁鳂鳃鳄鳅鳆鳇鳈鳉鳊鳋鳌鳍鳎鳏鳐鳑鳒鳓鳔鳕鳖鳗鳘鳙鳛鳜鳝鳞鳟鳠鳡鳢鳣鸟鸠鸡鸢鸣鸤鸥鸦鸧鸨鸩鸪鸫鸬鸭鸮鸯鸰鸱鸲鸳鸴鸵鸶鸷鸸鸹鸺鸻鸼鸽鸾鸿鹀鹁鹂鹃鹄鹅鹆鹇鹈鹉鹊鹋鹌鹍鹎鹏鹐鹑鹒鹓鹔鹕鹖鹗鹘鹚鹛鹜鹝鹞鹟鹠鹡鹢鹣鹤鹥鹦鹧鹨鹩鹪鹫鹬鹭鹯鹰鹱鹲鹳鹴鹾麦麸黄黉黡黩黪黾鼋鼌鼍鼗鼹齄齐齑齿龀龁龂龃龄龅龆龇龈龉龊龋龌龙龚龛龟志制咨只里系范松没尝尝闹面准钟别闲乾尽脏拼';
+            this.t_chars = '萬與醜專業叢東絲丟兩嚴喪個丬豐臨爲麗舉麼義烏樂喬習鄉書買亂爭於虧雲亙亞產畝親褻嚲億僅從侖倉儀們價衆優夥會傴傘偉傳傷倀倫傖僞佇體餘傭僉俠侶僥偵側僑儈儕儂俁儔儼倆儷儉債傾傯僂僨償儻儐儲儺兒兌兗黨蘭關興茲養獸囅內岡冊寫軍農冢馮沖決況凍淨淒涼凌減湊凜幾鳳鳧憑凱擊凼鑿芻劃劉則剛創刪別剗剄劊劌剴劑剮劍剝劇勸辦務勱動勵勁勞勢勳勐勩勻匭匱區醫華協單賣盧滷臥衛卻巹廠廳歷厲壓厭厙廁廂厴廈廚廄廝縣參靉靆雙發變敘疊葉號嘆嘰籲後嚇呂嗎唚噸聽啓吳嘸囈嘔嚦唄員咼嗆嗚詠咔嚨嚀噝吒咴鹹哌響啞噠嘵嗶噦譁噲嚌噥喲嘜嗊嘮啢嗩唣喚唿嘖嗇囀齧囉嘽嘯噴嘍嚳囁呵噯噓嚶囑嚕噼囂嚯團園囪圍圇國圖圓聖壙場阪壞塊堅壇壢壩塢墳墜壟壠壚壘墾垧堊墊埡墶壋塏堖塒壎堝埝垵塹墮壪牆壯聲殼壺壼處備復夠頭誇夾奪奩奐奮獎奧妝婦媽嫵嫗嬀姍姜婁婭嬈嬌孌娛媧嫺嫿嬰嬋嬸媼嬡嬪嬙嬤孫學孿寧寶實寵審憲宮寬賓寢對尋導壽將爾塵堯尷屍盡層屓屜屆屬屢屨嶼歲豈嶇崗峴嶴嵐島嶺嶽崬巋嶨嶧峽嶢嶠崢巒嶗崍嶮嶄嶸嶔嵛嶁嵴巔鞏巰幣帥師幃帳簾幟帶幀幫幬幘幗冪襆幹並廣莊慶廬廡庫應廟龐廢廎廩開異棄張彌弳彎彈強歸當錄彠彥徹徑徠御憶懺憂愾懷態慫憮慪悵愴憐總懟懌戀懇惡慟懨愷惻惱惲悅愨懸慳憫驚懼慘懲憊愜慚憚慣愍慍憤憒願懾憖憷懣懶懍戇戔戲戧戰戩戶扎撲扦執擴捫掃揚擾撫拋摶摳掄搶護報擔擬攏揀擁攔擰撥擇掛摯攣掗撾撻挾撓擋撟掙擠揮撏撈損撿換搗據捻擄摑擲撣摻摜揸攬撳攙擱摟攪攜攝攄擺搖擯攤攖撐攆擷擼攛擻攢敵斂數齋斕鬥斬斷無舊時曠暘曇晝曨顯晉曬曉曄暈暉暫曖札術樸機殺雜權條來楊榪傑極構樅樞棗櫪梘棖槍楓梟櫃檸檉梔柵標棧櫛櫳棟櫨櫟欄樹棲樣欒桊椏橈楨檔榿橋樺檜槳樁夢檮棶檢櫺槨櫝槧欏橢樓欖櫬櫚櫸檟檻檳櫧橫檣櫻櫫櫥櫓櫞檐檁歡歟歐殲歿殤殘殞殮殫殯毆毀轂畢斃氈毿氌氣氫氬氳匯漢污湯洶沓溝沒灃漚瀝淪滄渢潙滬沵濘淚澩瀧瀘濼瀉潑澤涇潔灑窪浹淺漿澆湞溮濁測澮濟瀏滻渾滸濃潯濜塗涌濤澇淶漣潿渦溳渙滌潤澗漲澀澱淵淥漬瀆漸澠漁瀋滲溫遊灣溼潰濺漵漊潷滾滯灩灄滿瀅濾濫灤濱灘澦漤瀠瀟瀲濰潛瀦瀾瀨瀕灝滅燈靈災燦煬爐燉煒熗點煉熾爍爛烴燭煙煩燒燁燴燙燼熱煥燜燾煅煳熘愛爺牘犛牽犧犢犟狀獷獁猶狽狍獮獰獨狹獅獪猙獄猻獫獵獼玀豬貓蝟獻獺璣璵瑒瑪瑋環現瑲璽珉珏琺瓏璫琿璡璉瑣瓊瑤璦璇瓔瓚甕甌電畫暢畲疇癤療瘧癘瘍癧瘡瘋皰痾癰痙癢瘂癆瘓癇癡癉瘮瘞瘻癟癱癮癭癩癬癲癯皚皺皸盞鹽監蓋盜盤瞘眥矓着睜睞瞼瞞矚矯磯礬礦碭碼磚硨硯碸礪礱礫礎硜硅碩硤磽磑礄確礆礙磧磣鹼碹磙禮禕禰禎禱禍稟祿禪離禿稈種積稱穢穠穭稅穌穩穡窮竊竅窯竄窩窺竇窶豎競篤筍筆筧箋籠籩築篳篩簹箏籌籤簡籙簀篋籜籮簞簫簣簍籃籬籪籟糴類秈糶糲粵糞糧糝餱緊縶糹糾紆紅紂纖紇約級紈纊紀紉緯紜紘純紕紗綱納紝縱綸紛紙紋紡紵紖紐紓線紺紲紱練組紳細織終縐絆紼絀紹繹經紿綁絨結絝繞絰絎繪給絢絳絡絕絞統綆綃絹繡綌綏絛繼綈績緒綾緓續綺緋綽鞝緄繩維綿綬繃綢綯綹綣綜綻綰綠綴緇緙緗緘緬纜緹緲緝縕繢緦綞緞緶線緱縋緩締縷編緡緣縉縛縟縝縫縗縞纏縭縊縑繽縹縵縲纓縮繆繅纈繚繕繒繮繾繰繯繳纘罌網羅罰罷羆羈羥羨翹翽翬耮耬聳恥聶聾職聹聯聵聰肅腸膚肷腎腫脹脅膽勝朧腖臚脛膠脈膾髒臍腦膿臠腳脫腡臉臘醃膕齶膩靦膃騰臏臢輿艤艦艙艫艱豔艹藝節羋薌蕪蘆蓯葦藶莧萇蒼苧蘇檾蘋莖蘢蔦塋煢繭荊薦薘莢蕘蓽蕎薈薺蕩榮葷滎犖熒蕁藎蓀蔭蕒葒葤藥蒞莜萊蓮蒔萵薟獲蕕瑩鶯蓴蘀蘿螢營縈蕭薩蔥蕆蕢蔣蔞藍薊蘺蕷鎣驀薔蘞藺藹蘄蘊藪藁蘚虜慮虛蟲虯蟣雖蝦蠆蝕蟻螞蠶蠔蜆蠱蠣蟶蠻蟄蛺蟯螄蠐蛻蝸蠟蠅蟈蟬蠍螻蠑螿蟎蠨釁銜補襯袞襖嫋褘襪襲襏裝襠褌褳襝褲襉褸襤襁襴見觀覎規覓視覘覽覺覬覡覿覥覦覯覲覷觴觸觶讋譽謄訁計訂訃認譏訐訌討讓訕訖訓議訊記訒講諱謳詎訝訥許訛論訩訟諷設訪訣證詁訶評詛識詗詐訴診詆謅詞詘詔詖譯詒誆誄試詿詩詰詼誠誅詵話誕詬詮詭詢詣諍該詳詫諢詡譸誡誣語誚誤誥誘誨誑說誦誒請諸諏諾讀諑誹課諉諛誰諗調諂諒諄誶談誼謀諶諜謊諫諧謔謁謂諤諭諼讒諮諳諺諦謎諞諝謨讜謖謝謠謗諡謙謐謹謾謫譾謬譚譖譙讕譜譎讞譴譫讖谷豶貝貞負貟貢財責賢敗賬貨質販貪貧貶購貯貫貳賤賁貰貼貴貺貸貿費賀貽賊贄賈賄貲賃賂贓資賅贐賕賑賚賒賦賭齎贖賞賜贔賙賡賠賧賴賵贅賻賺賽賾贗贊贇贈贍贏贛赬趙趕趨趲躉躍蹌跖躒踐躂蹺蹕躚躋踊躊蹤躓躑躡蹣躕躥躪躦軀車軋軌軒軑軔轉軛輪軟轟軲軻轤軸軹軼軤軫轢軺輕軾載輊轎輈輇輅較輒輔輛輦輩輝輥輞輬輟輜輳輻輯轀輸轡轅轄輾轆轍轔辭辯辮邊遼達遷過邁運還這進遠違連遲邇逕跡適選遜遞邐邏遺遙鄧鄺鄔郵鄒鄴鄰鬱郄郟鄶鄭鄆酈鄖鄲醞醱醬釅釃釀釋裏鉅鑑鑾鏨釓釔針釘釗釙釕釷釺釧釤鈒釩釣鍆釹鍚釵鈃鈣鈈鈦鈍鈔鍾鈉鋇鋼鈑鈐鑰欽鈞鎢鉤鈧鈁鈥鈄鈕鈀鈺錢鉦鉗鈷鉢鈳鉕鈽鈸鉞鑽鉬鉭鉀鈿鈾鐵鉑鈴鑠鉛鉚鈰鉉鉈鉍鈹鐸鉶銬銠鉺銪鋏鋣鐃銍鐺銅鋁銱銦鎧鍘銖銑鋌銩銛鏵銓鉿銚鉻銘錚銫鉸銥鏟銃鐋銨銀銣鑄鐒鋪鋙錸鋱鏈鏗銷鎖鋰鋥鋤鍋鋯鋨鏽銼鋝鋒鋅鋶鐦鐗銳銻鋃鋟鋦錒錆鍺錯錨錡錁錕錩錫錮鑼錘錐錦杴錈錇錟錠鍵鋸錳錙鍥鍈鍇鏘鍶鍔鍤鍬鍾鍛鎪鍠鍰鎄鍍鎂鏤鎡鏌鎮鎛鎘鑷鐫鎳鎿鎦鎬鎊鎰鎔鏢鏜鏍鏰鏞鏡鏑鏃鏇鏐鐔钁鐐鏷鑥鐓鑭鐠鑹鏹鐙鑊鐳鐶鐲鐮鐿鑔鑣鑞鑲長門閂閃閆閈閉問闖閏闈閒閎間閔閌悶閘鬧閨聞闥閩閭闓閥閣閡閫鬮閱閬闍閾閹閶鬩閿閽閻閼闡闌闃闠闊闋闔闐闒闕闞闤隊陽陰陣階際陸隴陳陘陝隉隕險隨隱隸雋難雛讎靂霧霽黴靄靚靜靨韃鞽韉鞴韋韌韍韓韙韞韜韻頁頂頃頇項順須頊頑顧頓頎頒頌頏預顱領頗頸頡頰頲頜潁熲頦頤頻頮頹頷頴穎顆題顒顎顓顏額顳顢顛顙顥纇顫顬顰顴風颺颭颮颯颶颸颼颻飀飄飆飈飛饗饜飣飢飥餳飩餼飪飫飭飯飲餞飾飽飼飿飴餌饒餉餄餎餃餏餅餑餖餓餘餒餕餜餛餡館餷饋餶餿饞饁饃餺餾饈饉饅饊饌饢馬馭馱馴馳驅馹駁驢駔駛駟駙駒騶駐駝駑駕驛駘驍罵駰驕驊駱駭駢驫驪騁驗騂駸駿騏騎騍騅騌驌驂騙騭騤騷騖驁騮騫騸驃騾驄驏驟驥驦驤髏髖髕鬢魘魎魚魛魢魷魨魯魴魺鮁鮃鮎鱸鮋鮓鮒鮊鮑鱟鮍鮐鮭鮚鮳鮪鮞鮦鰂鮜鱠鱭鮫鮮鮺鯗鱘鯁鱺鰱鰹鯉鰣鰷鯀鯊鯇鮶鯽鯒鯖鯪鯕鯫鯡鯤鯧鯝鯢鮎鯛鯨鰺鯴鯔鱝鰈鰏鱨鯷鰮鰃鰓鱷鰍鰒鰉鰁鱂鯿鰠鰲鰭鰨鰥鰩鰟鰜鰳鰾鱈鱉鰻鰵鱅鰼鱖鱔鱗鱒鱯鱤鱧鱣鳥鳩雞鳶鳴鳲鷗鴉鶬鴇鴆鴣鶇鸕鴨鴞鴦鴒鴟鴝鴛鷽鴕鷥鷙鴯鴰鵂鴴鵃鴿鸞鴻鵐鵓鸝鵑鵠鵝鵒鷳鵜鵡鵲鶓鵪鵾鵯鵬鵮鶉鶊鵷鷫鶘鶡鶚鶻鶿鶥鶩鷊鷂鶲鶹鶺鷁鶼鶴鷖鸚鷓鷚鷯鷦鷲鷸鷺鸇鷹鸌鸏鸛鸘鹺麥麩黃黌黶黷黲黽黿鼂鼉鞀鼴齇齊齏齒齔齕齗齟齡齙齠齜齦齬齪齲齷龍龔龕龜志制諮只裏系範鬆沒嚐嚐鬧面準鍾別閒乾盡髒拼';
+
+            // 延遲生成映射表，僅在首次使用時創建
+            this.s2t_map = null;
+            this.t2s_map = null;
+        },
+
+        getS2TMap: function() {
+            if (!this.s2t_map) {
+                this.s2t_map = {};
+                for (let i = 0; i < this.s_chars.length; i++) {
+                    this.s2t_map[this.s_chars[i]] = this.t_chars[i];
+                }
+            }
+            return this.s2t_map;
+        },
+
+        getT2SMap: function() {
+            if (!this.t2s_map) {
+                this.t2s_map = {};
+                for (let i = 0; i < this.t_chars.length; i++) {
+                    this.t2s_map[this.t_chars[i]] = this.s_chars[i];
+                }
+            }
+            return this.t2s_map;
+        },
+
+        /**
+         * 執行文本轉換
+         * @param {string} text - 需要轉換的文本.
+         * @param {'s2t'|'t2s'} mode - 轉換模式.
+         * @returns {string} 轉換後的文本.
+         */
+        convert: function(text, mode) {
+            if (!text) return '';
+            const map = (mode === 's2t') ? this.getS2TMap() : this.getT2SMap();
+            let result = '';
+            for (let i = 0; i < text.length; i++) {
+                const char = text[i];
+                result += map[char] || char;
+            }
+            return result;
+        }
+    };
+
+    // [新增] 初始化繁簡轉換引擎
+    ChineseConverter.init();
 
     /**
      * @description 使用 MutationObserver 等待一個元素出現，比輪詢更高效。
@@ -2319,7 +2385,7 @@ V53 > V54
      * @description 根據模板標題自動點擊對應的模板選項，並執行插入後的光標定位和粘貼優化。
      * @param {string} templateTitle - 要點擊的模板的完整標題。
      */
-        async function clickTemplateOptionByTitle(templateTitle) {
+        async function clickTemplateOptionByTitle(templateTitle, buttonText) {
         let VIEW_ADJUSTMENT_OFFSET_PX = 0;
         const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
         const BUTTON_ICON_SELECTOR = 'lightning-icon[icon-name="utility:insert_template"]';
@@ -2448,37 +2514,128 @@ V53 > V54
                         throw new Error('在編輯器中未找到預期的模板結構 (包含<br>的span)。');
                     }
 
+                    let conversionMode = 'off';
+                    if (buttonText) {
+                        if (buttonText.includes('繁') || buttonText.includes('繁')) {
+                            conversionMode = 's2t';
+                        } else if (buttonText.includes('簡') || buttonText.includes('简')) {
+                            conversionMode = 't2s';
+                        }
+                    }
+
+                    // [核心修改] 使用 MutationObserver 替代 input 事件
+                    if (conversionMode !== 'off' && !targetContainerSpan.dataset.converterAttached) {
+                        Log.info('UI.Enhancement', `為模板 "${buttonText}" 啟用繁簡轉換模式: ${conversionMode} (使用 MutationObserver)`);
+
+                        const conversionHandler = () => {
+                            const selection = iframeWindow.getSelection();
+                            if (!selection || selection.rangeCount === 0) {
+                                Log.warn('Converter', '無有效選區，跳過轉換。');
+                                return;
+                            }
+
+                            // 暫時停止觀察，避免在我們自己修改DOM時觸發無限循環
+                            observer.disconnect();
+
+                            const range = selection.getRangeAt(0);
+                            const preSelectionRange = range.cloneRange();
+                            preSelectionRange.selectNodeContents(targetContainerSpan);
+                            preSelectionRange.setEnd(range.startContainer, range.startOffset);
+                            const startOffset = preSelectionRange.toString().length;
+                            Log.debug('Converter', `保存光標位置: ${startOffset}`);
+
+                            const originalText = targetContainerSpan.innerText;
+                            const convertedText = ChineseConverter.convert(originalText, conversionMode);
+                            Log.debug('Converter', `轉換前: "${originalText.substring(0, 20)}..."`);
+                            Log.debug('Converter', `轉換後: "${convertedText.substring(0, 20)}..."`);
+
+                            if (originalText !== convertedText) {
+                                const lines = convertedText.split('\n');
+                                targetContainerSpan.innerHTML = '';
+                                lines.forEach((line, index) => {
+                                    targetContainerSpan.appendChild(iframeDocument.createTextNode(line));
+                                    if (index < lines.length - 1) {
+                                        targetContainerSpan.appendChild(iframeDocument.createElement('br'));
+                                    }
+                                });
+
+                                let charCount = 0;
+                                let endNode = null;
+                                let endOffsetInNode = 0;
+                                const treeWalker = iframeDocument.createTreeWalker(targetContainerSpan, NodeFilter.SHOW_TEXT, null, false);
+                                while (treeWalker.nextNode()) {
+                                    const node = treeWalker.currentNode;
+                                    const nextCharCount = charCount + node.length;
+                                    if (startOffset <= nextCharCount) {
+                                        endNode = node;
+                                        endOffsetInNode = startOffset - charCount;
+                                        break;
+                                    }
+                                    charCount = nextCharCount;
+                                }
+
+                                if (endNode) {
+                                    const newRange = iframeDocument.createRange();
+                                    newRange.setStart(endNode, endOffsetInNode);
+                                    newRange.collapse(true);
+                                    selection.removeAllRanges();
+                                    selection.addRange(newRange);
+                                    Log.debug('Converter', `恢復光標位置成功。`);
+                                } else {
+                                    const newRange = iframeDocument.createRange();
+                                    newRange.selectNodeContents(targetContainerSpan);
+                                    newRange.collapse(false);
+                                    selection.removeAllRanges();
+                                    selection.addRange(newRange);
+                                    Log.warn('Converter', '恢復光標位置失敗，已置於末尾。');
+                                }
+                                Log.info('Converter', '文本轉換並更新成功。');
+                            }
+                            // 重新開始觀察
+                            observer.observe(targetContainerSpan, {
+                                childList: true,
+                                subtree: true,
+                                characterData: true
+                            });
+                        };
+
+                        const debouncedConversionHandler = debounce(conversionHandler, 350);
+
+                        const observer = new MutationObserver(debouncedConversionHandler);
+
+                        observer.observe(targetContainerSpan, {
+                            childList: true, // 監聽子節點的添加或刪除（如<br>）
+                            subtree: true, // 監聽所有後代節點
+                            characterData: true // 監聽文本節點的內容變化
+                        });
+
+                        targetContainerSpan.dataset.converterAttached = 'true';
+                    }
+
+
                     if (!targetContainerSpan.dataset.pasteHandlerAttached) {
                         targetContainerSpan.addEventListener('paste', (event) => {
                             event.preventDefault();
-                            const text = (event.clipboardData || iframeWindow.clipboardData).getData('text/plain');
+                            const textToPaste = (event.clipboardData || iframeWindow.clipboardData).getData('text/plain');
                             const selection = iframeWindow.getSelection();
                             if (!selection.rangeCount) return;
-
                             const range = selection.getRangeAt(0);
                             range.deleteContents();
-
-                            const fontWrapper = iframeDocument.createElement('span');
-                            fontWrapper.style.fontFamily = 'Arial, sans-serif';
-
                             const fragment = iframeDocument.createDocumentFragment();
-                            const lines = text.split('\n');
-
+                            const lines = textToPaste.split('\n');
                             lines.forEach((line, index) => {
                                 fragment.appendChild(iframeDocument.createTextNode(line));
                                 if (index < lines.length - 1) {
                                     fragment.appendChild(iframeDocument.createElement('br'));
                                 }
                             });
-
-                            fontWrapper.appendChild(fragment);
-                            range.insertNode(fontWrapper);
+                            range.insertNode(fragment);
                             range.collapse(false);
                             selection.removeAllRanges();
                             selection.addRange(range);
                         });
                         targetContainerSpan.dataset.pasteHandlerAttached = 'true';
-                        Log.info('UI.Enhancement', '已成功為模板區域附加「粘貼為純文本(保留換行)並強制Arial字體」處理器。');
+                        Log.info('UI.Enhancement', '已成功為模板區域附加「智能粘貼」處理器。');
                     }
 
                     const userBrPosition = GM_getValue('cursorPositionBrIndex', DEFAULTS.cursorPositionBrIndex);
@@ -2509,8 +2666,7 @@ V53 > V54
                         requestAnimationFrame(() => {
                             setTimeout(() => {
                                 window.scrollBy(0, VIEW_ADJUSTMENT_OFFSET_PX);
-                                Log.info('UI.Enhancement', `主窗口已應用視覺偏移: ${VIEW_ADJUSTMENT_OFFSET_PX}px`);
-                            }, 50); // 50ms 的延遲足以讓 scrollIntoView 穩定下來
+                            }, 50);
                         });
                     }
 
@@ -2563,7 +2719,8 @@ V53 > V54
             const button = newLi.querySelector('button');
             button.classList.add('cec-template-shortcut-button');
             button.innerHTML = '';
-            button.textContent = templateTitle.substring(0, 10);
+            const buttonText = templateTitle.substring(0, 10); // [修改] 將按鈕文本存儲到變量中
+            button.textContent = buttonText;
             button.title = `Insert Template: ${templateTitle}`;
 
             const isFirstButton = (index === templatesToShow.length - 1);
@@ -2584,8 +2741,9 @@ V53 > V54
                 borderRadius: '0px'
             });
 
+            // [核心修改] 將 buttonText 作為第二個參數傳遞
             button.addEventListener('click', () => {
-                clickTemplateOptionByTitle(templateTitle);
+                clickTemplateOptionByTitle(templateTitle, buttonText);
             });
 
             parentList.insertBefore(newLi, anchorLiElement.nextSibling);
@@ -3276,14 +3434,14 @@ V53 > V54
         }
     }
 
-    /**
-     * @description 處理聯繫人卡片，根據賬戶的 "Preferred" 狀態和用戶設置的高亮模式對其進行高亮。
+     /**
+     * @description [增強版] 處理聯繫人卡片，根據賬戶的 "Preferred" 狀態進行高亮，
+     *              並新增邏輯：檢查 "Account Status"，如果為 "SUSPENDED"，則禁用 "Schedule a Pickup" 按鈕。
      * @param {HTMLElement} card - 聯繫人卡片元素。
      */
     function processContactCard(card) {
         const highlightMode = GM_getValue('accountHighlightMode', 'pca');
         if (highlightMode === 'off') {
-            return;
         }
         const isPcaModeOn = (highlightMode === 'pca');
         const isDispatchModeOn = (highlightMode === 'dispatch');
@@ -3297,19 +3455,55 @@ V53 > V54
         }
 
         const allLogs = GM_getValue(PREFERRED_LOG_KEY, {});
-        const CACHE_TTL = 60 * 60 * 1000; // 60分鐘: 聯繫人 Preferred 狀態的緩存有效期。
+        const CACHE_TTL = 60 * 60 * 1000;
         const cleanedLog = Object.fromEntries(Object.entries(allLogs).filter(([_, data]) => now - data.timestamp < CACHE_TTL));
 
+        // --- [修改] findAndDisablePickupButton 函數，增加延遲和輪詢 ---
+        const findAndDisablePickupButton = () => {
+            const POLLING_INTERVAL_MS = 500;
+            const TIMEOUT_MS = 5000; // 最多等待 5 秒
+            const startTime = Date.now();
+            let buttonFound = false;
+
+            const intervalId = setInterval(() => {
+                if (Date.now() - startTime > TIMEOUT_MS) {
+                    clearInterval(intervalId);
+                    if (!buttonFound) {
+                        Log.warn('UI.ContactCard', `檢測到 SUSPENDED 狀態，但在 10 秒內未能找到 "Schedule a Pickup" 按鈕。`);
+                    }
+                    return;
+                }
+
+                const pickupButton = findElementInShadows(document.body, 'button[title="Schedule a Pickup"]');
+                if (pickupButton) {
+                    buttonFound = true;
+                    clearInterval(intervalId);
+                    if (!pickupButton.disabled) {
+                        pickupButton.style.backgroundColor = 'red';
+                        pickupButton.style.color = 'white';
+                        pickupButton.disabled = true;
+                        Log.info('UI.ContactCard', `檢測到賬戶狀態為 "SUSPENDED"，已高亮並禁用 "Schedule a Pickup" 按鈕。`);
+                    }
+                }
+            }, POLLING_INTERVAL_MS);
+        };
+
         if (cleanedLog[caseId]) {
-            const cachedIsPreferred = cleanedLog[caseId].isPreferred;
+            const cachedData = cleanedLog[caseId];
+            const cachedIsPreferred = cachedData.isPreferred;
             const shouldHighlight = (isPcaModeOn && !cachedIsPreferred) || (isDispatchModeOn && cachedIsPreferred);
-            if (shouldHighlight) {
+
+            if (highlightMode !== 'off' && shouldHighlight) {
                 card.style.setProperty('background-color', 'moccasin', 'important');
                 findAllElementsInShadows(card, 'div').forEach(div => {
                     div.style.setProperty('background-color', 'moccasin', 'important');
                 });
             }
-            Log.info('UI.ContactCard', `[緩存命中] 聯繫人卡片高亮規則已應用 (Case ID: ${caseId}, 模式: ${highlightMode}, Cached Preferred: ${cachedIsPreferred}, 結果: ${shouldHighlight ? '高亮' : '不高亮'})。`);
+            Log.info('UI.ContactCard', `[緩存命中] 聯繫人卡片高亮規則已應用。`);
+
+            if (cachedData.accountStatus === 'SUSPENDED') {
+                findAndDisablePickupButton();
+            }
             return;
         }
 
@@ -3320,56 +3514,59 @@ V53 > V54
                 hiddenContainer.classList.remove('slds-hide');
             }
         }
+
         let isPreferred = true;
-        let preferredValueFound = false;
+        let accountStatus = 'NOT_FOUND';
+
         try {
             const allLabels = findAllElementsInShadows(card, 'span.slds-form-element__label');
-            let preferredLabelElement = null;
             for (const label of allLabels) {
-                if (label.textContent.trim() === 'Preferred') {
-                    preferredLabelElement = label;
-                    break;
-                }
-            }
-            if (preferredLabelElement) {
-                let currentParent = preferredLabelElement.parentElement;
+                const labelText = label.textContent.trim();
+                let currentParent = label.parentElement;
                 let valueElement = null;
                 let searchDepth = 0;
+
                 while (currentParent && searchDepth < 5 && !valueElement) {
                     valueElement = findElementInShadows(currentParent, '.slds-form-element__static');
-                    if (valueElement) {
-                        const preferredValueText = valueElement.textContent.trim();
-                        const lowerCaseValue = preferredValueText.toLowerCase();
-                        if (lowerCaseValue === 'yes' || lowerCaseValue === 'no') {
-                            isPreferred = (lowerCaseValue === 'yes');
-                            preferredValueFound = true;
-                        } else {
-                            valueElement = null;
-                        }
-                    }
                     currentParent = currentParent.parentElement;
                     searchDepth++;
                 }
+
+                if (valueElement) {
+                    const valueText = valueElement.textContent.trim();
+                    if (labelText === 'Preferred') {
+                        const lowerCaseValue = valueText.toLowerCase();
+                        if (lowerCaseValue === 'yes' || lowerCaseValue === 'no') {
+                            isPreferred = (lowerCaseValue === 'yes');
+                        }
+                    } else if (labelText === 'Account Status') {
+                        accountStatus = valueText.toUpperCase();
+                    }
+                }
             }
         } catch (e) {
+            Log.warn('UI.ContactCard', `在 DOM 提取期間發生錯誤: ${e.message}`);
         }
-        if (!preferredValueFound) {
-            Log.warn('UI.ContactCard', `未能找到聯繫人 "Preferred" 狀態值，高亮功能可能不準確。`);
+
+        if (accountStatus === 'SUSPENDED') {
+            findAndDisablePickupButton();
         }
 
         cleanedLog[caseId] = {
             isPreferred: isPreferred,
+            accountStatus: accountStatus,
             timestamp: now
         };
         GM_setValue(PREFERRED_LOG_KEY, cleanedLog);
+
         const shouldHighlight = (isPcaModeOn && !isPreferred) || (isDispatchModeOn && isPreferred);
-        if (shouldHighlight) {
+        if (highlightMode !== 'off' && shouldHighlight) {
             card.style.setProperty('background-color', 'moccasin', 'important');
             findAllElementsInShadows(card, 'div').forEach(div => {
                 div.style.setProperty('background-color', 'moccasin', 'important');
             });
         }
-        Log.info('UI.ContactCard', `[首次加載] 聯繫人卡片高亮規則已應用 (Case ID: ${caseId}, 模式: ${highlightMode}, Preferred: ${isPreferred}, 結果: ${shouldHighlight ? '高亮' : '不高亮'})。`);
+        Log.info('UI.ContactCard', `[首次加載] 聯繫人卡片高亮規則已應用。`);
     }
 
     /**
@@ -4391,7 +4588,7 @@ V53 > V54
                 processContactCard(element);
             }
         }
-    }, {
+    },{
         id: 'initComposeButtonWatcher',
         selector: ".milestoneTimerText, .noPendingMilestoneMessage",
         once: true,
@@ -4702,7 +4899,7 @@ V53 > V54
 
     /**
      * @description 監控URL的變化。當URL變化時，重置狀態並根據新的URL觸發相應的頁面初始化邏輯。
-     *              [重構版] 增加了“前置守衛”機制。在執行數據依賴型任務前，首先檢查Case的完整性。
+     *              [修正版] 修正了 Case 詳情頁 URL 的正則表達式匹配錯誤，並將關鍵字段檢查邏輯移至僅中止自動指派。
      */
     async function monitorUrlChanges() {
         if (isScriptPaused) {
@@ -4730,6 +4927,7 @@ V53 > V54
         window.contactLogicDone = false;
 
         // --- 路由匹配 ---
+        // [核心修正] 使用了正確的正則表達式，確保能匹配帶有查詢參數的 URL
         const caseRecordPagePattern = /^https:\/\/upsdrive\.lightning\.force\.com\/lightning\/r\/Case\/[a-zA-Z0-9]{18}\/.*/;
         const myOpenCasesListPagePattern = /^https:\/\/upsdrive\.lightning\.force\.com\/lightning\/o\/Case\/list\?.*filterName=My_Open_Cases_CEC.*/;
 
@@ -4757,18 +4955,12 @@ V53 > V54
             initModalButtonObserver();
             initIWantToModuleWatcher();
 
-            // --- 步驟 3: [核心] 執行“前置守衛”檢查 ---
-            if (await areRequiredFieldsEmpty()) {
-                Log.warn('Core.Router', `[前置守衛] 檢測到關鍵字段為空的 Case，已中止所有數據依賴型任務（如追踪號提取、掃描器、自動指派）。`);
-                return; // 中止後續所有操作
-            }
-
-            // --- 步驟 4: 只有在 Case 數據完整時，才執行數據依賴型任務 ---
-            Log.info('Core.Router', `[前置守衛] Case 數據完整，繼續執行數據依賴型任務。`);
+            // --- 步驟 3: 直接啟動數據依賴型任務 (前置守衛已移除) ---
+            Log.info('Core.Router', `正在啟動數據依賴型任務（掃描器、追踪號提取）。`);
             startHighFrequencyScanner(caseUrl);
             extractTrackingNumberAndTriggerIVP();
 
-            // --- 步驟 5: 執行自動指派邏輯 (現在無需重複檢查字段是否為空) ---
+            // --- 步驟 4: 執行自動指派邏輯 ---
             if (caseUrl.includes('c__triggeredfrom=reopen')) {
                 Log.info('Feature.AutoAssign', `檢測到 Re-Open Case，已跳過自動指派邏輯。`);
                 return;
@@ -4787,7 +4979,7 @@ V53 > V54
             const entry = caseId ? cache[caseId] : null;
 
             if (entry && (Date.now() - entry.timestamp < CACHE_EXPIRATION_MS)) {
-                Log.info('Feature.AutoAssign', `緩存命中：此 Case (ID: ${caseId}) 在 30 分鐘內已被指派。`);
+                Log.info('Feature.AutoAssign', `緩存命中：此 Case (ID: ${caseId}) 在 60 分鐘內已被指派。`);
                 handleAutoAssign(caseUrl, true);
                 return;
             }
@@ -4803,7 +4995,12 @@ V53 > V54
                 return;
             }
 
-            // 此處不再需要 areRequiredFieldsEmpty() 檢查，因為已前置
+            // --- 步驟 5: 將關鍵字段檢查移至此處，僅中止自動指派 ---
+            if (await areRequiredFieldsEmpty()) {
+                Log.warn('Feature.AutoAssign', `因關鍵字段為空，自動指派流程已中止。其他頁面任務不受影響。`);
+                return; // 僅中止自動指派
+            }
+
             handleAutoAssign(caseUrl, false);
 
         // =================================================================================
