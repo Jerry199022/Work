@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IVP顯示注釋
 // @namespace    IVP顯示注釋
-// @version      V7.3
+// @version      V7.4
 // @description  IVP顯示注釋、一眼模式、定義字體顏色。
 // @author       Jerry Law
 // @match        *://ivp.inside.ups.com/*
@@ -27,6 +27,12 @@
     const annotationsText = `
 #REC BY UPS|包裹已由UPS接收
 #OTHER DF|其他司機跟進中
+#INCORR CITY|城市/城鎮資訊錯誤，未能派送
+#Cancelled Departure|取消轉運離開
+#Updated Arrival|抵達時間已更新
+#PPWK FAIQ|已把清關文件提供給收件人或清關代理進行清關
+#INF HOLD RES|資料問題已經解決
+#MISSED DEST|包裹在目的地遺失
 ## PCS NOT =|文件記錄的數量與實際不符
 #STOP VISIBTY|停止顯示後續狀態給客戶
 #Arrived at Facility|已到達設施
@@ -492,7 +498,7 @@
 #RELEASED|狀態釋放
 #REMOTE AREA|偏遠地區
 #REQ LATE DEL|寄件者請求稍晚派送
-#RES DEL DATE|已重新安排遞送
+#RES DEL DATE|重新安排派送時間
 #RETRN/SHIPPR|包裹退回寄件人
 #SED REQUIRED|缺少出口申報單
 #SEIZED BY AUTHORITIES|被當局查獲 貨件已充公
@@ -993,6 +999,7 @@ UNAUTHORIZED ANIMAL DESTROY
 Ship To WAREHOUSE
 User ID
 UPS ACCESS POINT
+Package ID
 PACKAGE WAS DRIVER RELEASED
 
 `;
