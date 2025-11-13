@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IVP顯示注釋
 // @namespace    IVP顯示注釋
-// @version      V7.4
+// @version      V7.5
 // @description  IVP顯示注釋、一眼模式、定義字體顏色。
 // @author       Jerry Law
 // @match        *://ivp.inside.ups.com/*
@@ -27,6 +27,7 @@
     const annotationsText = `
 #REC BY UPS|包裹已由UPS接收
 #OTHER DF|其他司機跟進中
+#CD NO CNTACT|調查已結束-無法聯絡收件人
 #INCORR CITY|城市/城鎮資訊錯誤，未能派送
 #Cancelled Departure|取消轉運離開
 #Updated Arrival|抵達時間已更新
@@ -552,7 +553,7 @@
 #PENDING REL|等清關放行
 #IMPORT HOLD|海關扣留
 #NOT CLEARED|未進行清關
-#UNEXP ARRIVL|預報關信息未到達海關
+#UNEXP ARRIVL|此包裹不在預清關名單中
 #FWD TO DEST|轉發到目的地
 #UNAUT ANIMAL|未經授權的動物
 #OPSYS HOLD|系统数据暂存
@@ -816,7 +817,7 @@
 #CYPRUS|賽普勒斯 - CY
 #CZECH REPUBLIC|捷克 - CZ
 #DENMARK|丹麥 - DK
-#DOMINICA|多明尼加 - DM
+#DOMINICA|多明尼加 - DO
 #DOMINICAN REPUBLIC|多米尼加共和國 - DO
 #EAST TIMOR|東帝汶 - TL
 #ECUADOR|厄瓜多爾 - EC
