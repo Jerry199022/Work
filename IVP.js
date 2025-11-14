@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IVP顯示注釋
 // @namespace    IVP顯示注釋
-// @version      V7.6
+// @version      V7.7
 // @description  IVP顯示注釋、一眼模式、定義字體顏色。
 // @author       Jerry Law
 // @match        *://ivp.inside.ups.com/*
@@ -29,8 +29,8 @@
 #OTHER DF|其他司機跟進中
 #CD NO CNTACT|調查已結束-無法聯絡收件人
 #INCORR CITY|城市/城鎮資訊錯誤，未能派送
-#Cancelled Departure|取消轉運離開
-#Updated Arrival|抵達時間已更新
+#CANCELLED DEPARTURE|取消轉運離開
+#UPDATED ARRIVAL|抵達時間已更新
 #PPWK FAIQ|已把清關文件提供給收件人或清關代理進行清關
 #INF HOLD RES|資料問題已經解決
 #MISSED DEST|包裹在目的地遺失
@@ -94,14 +94,14 @@
 #RTS PENDING|計劃退回發件人
 #NEED PHONE #|需提供收件人電話號碼
 #INCOMPL ADDR|地址不完整
-#Updated Departure|更新離開記錄
+#UPDATED DEPARTURE|更新離開記錄
 #UPDATED ARRIVAL|更新到達記錄
 #NO CUSTOMS #|無關稅編號
 #IMPT FEE DUE|需支付進口到付費用
 #PENDING FDA|等待食品藥物管理局審查
 #NOT RELEASED|等待海關釋放
 #LATE TO DEST|比預定時間晚到達
-#Processing atUPS Facility|包裹正在中心處理
+#PROCESSING ATUPS FACILITY|包裹正在中心處理
 #NON TRANS|不可運輸
 #UNAUTH PLANT|未經授權的植物
 #VALU DISPUTE|收件人對貨物價值有異議
@@ -274,7 +274,7 @@
 #COULDN'T ADL|無法派送至UPS自提點
 #COUNTERFEIT|疑似仿冒品已識別
 #COURIER SDWC|快遞員自取之當日自取服務
-#CPAD N/A|寄件人 CPaD 限制
+#CPAD N/A|寄件人 CPAD 限制
 #CREATE DCT|已安排損壞檢查
 #CREDIT CHECK|報關前需要信用審核
 #CREW UNAVAIL|飛行員原因導致延誤
@@ -455,10 +455,10 @@
 #MISROUTE GRD|因UPS或者UPS外包商錯誤導致車去了錯誤的地方
 #MISS CONNECT|貨物趕不上飛機計畫出發時間
 #MISS/INC DOC|缺少出口報文件
-#MISSORT|分撥到錯誤的cente
+#MISSORT|分撥到錯誤的CENTE
 #MOVED|收件人搬家
 #NEED APT #|需要公寓號碼
-#need suite|需要完整房間號
+#NEED SUITE|需要完整房間號
 #NEED SUITE #|需要房間號碼
 #NEW TRACK #|已為包裹分配新追蹤編號
 #NO ACCESS|無法進入收件人地址派送, 需收件人自取.
@@ -510,27 +510,27 @@
 #TEMP ADDRESS|收件人要求改派送地址
 #TRANSLATION|發票需要當地語言
 #UNDR CLRNCE|包裹正在清關處理中
-#Unload Scan|卸貨
+#UNLOAD SCAN|卸貨
 #UPS MIGRAT'N|轉交當地派送公司派送
 #VERIFY VALUE|實際總量和發票上重量有差異
-#warehouse Scan|倉庫掃描
+#WAREHOUSE SCAN|倉庫掃描
 #WILL CALL|收件人要求UPS扣貨並自提
 #XRAY INSPECT|包裹經過X光可能導致延誤
 #SEC/SCR REQ|包裹需要做安檢
 #ICOD CHG DUE|交貨時需支付關稅
-#Departed fromFacility|貨物離開轉運地掃描
+#DEPARTED FROMFACILITY|貨物離開轉運地掃描
 #REGISTERED|在清關機構註冊
-#Location Scan|位置掃描
-#TRNSFR NOTIF|ERN Remark更新
+#LOCATION SCAN|位置掃描
+#TRNSFR NOTIF|ERN REMARK更新
 #ICOD PAID|已付關稅
 #OFD-ON ROAD|在派送路上
 #LOADED ON CAR|已裝車
 #EXPORT SCAN|貨物出口掃描
-#Import Scan|貨物進口掃描
-#In Transit|貨物在轉運中的掃描
-#Driver load|貨物被裝車，代表可以派送
-#Destination|貨物可以被派送
-#Out For Delivery|外出派送
+#IMPORT SCAN|貨物進口掃描
+#IN TRANSIT|貨物在轉運中的掃描
+#DRIVER LOAD|貨物被裝車，代表可以派送
+#DESTINATION|貨物可以被派送
+#OUT FOR DELIVERY|外出派送
 #INTL VOL MGT|倉位緊張
 #SEC/SCR PASS|已通過安檢
 #SHORT LANDED|清關文件已到貨未到
@@ -539,7 +539,7 @@
 #SIG OBTAINED|獲得簽名
 #NOT LATE|無遲到
 #DESTINATION SCAN|目的地掃描
-#Warehouse Scan|倉庫掃描
+#WAREHOUSE SCAN|倉庫掃描
 #LITHIUM LIB|包裹內有鋰電池被暫扣檢查
 #NOT READY 1|收件人未準備好收件1
 #NOT READY 2|收件人未準備好收件2
