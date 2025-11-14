@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IVP顯示注釋
 // @namespace    IVP顯示注釋
-// @version      V7.5
+// @version      V7.6
 // @description  IVP顯示注釋、一眼模式、定義字體顏色。
 // @author       Jerry Law
 // @match        *://ivp.inside.ups.com/*
@@ -36,7 +36,7 @@
 #MISSED DEST|包裹在目的地遺失
 ## PCS NOT =|文件記錄的數量與實際不符
 #STOP VISIBTY|停止顯示後續狀態給客戶
-#Arrived at Facility|已到達設施
+#ARRIVED AT FACILITY|已到達設施
 #NEED DIRECT|需要收件地址的路線指引
 #PKG NOT RCVD|運輸過程中出現中斷，目前尚未收到包裹
 #INCOR TARIFF|貨物因關稅代碼錯誤而被扣留
