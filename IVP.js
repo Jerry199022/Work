@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IVP顯示注釋
 // @namespace    IVP顯示注釋
-// @version      V7.7
+// @version      V7.8
 // @description  IVP顯示注釋、一眼模式、定義字體顏色。
 // @author       Jerry Law
 // @match        *://ivp.inside.ups.com/*
@@ -26,6 +26,7 @@
     // ================================================================
     const annotationsText = `
 #REC BY UPS|包裹已由UPS接收
+#RTL NON DEL|無法派送至自提點
 #OTHER DF|其他司機跟進中
 #CD NO CNTACT|調查已結束-無法聯絡收件人
 #INCORR CITY|城市/城鎮資訊錯誤，未能派送
@@ -512,7 +513,7 @@
 #UNDR CLRNCE|包裹正在清關處理中
 #UNLOAD SCAN|卸貨
 #UPS MIGRAT'N|轉交當地派送公司派送
-#VERIFY VALUE|實際總量和發票上重量有差異
+#VERIFY VALUE|貨件被暫扣以核實價值
 #WAREHOUSE SCAN|倉庫掃描
 #WILL CALL|收件人要求UPS扣貨並自提
 #XRAY INSPECT|包裹經過X光可能導致延誤
