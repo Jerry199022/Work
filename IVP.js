@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IVP顯示注釋
 // @namespace    IVP顯示注釋
-// @version      V7.8
+// @version      V7.9
 // @description  IVP顯示注釋、一眼模式、定義字體顏色。
 // @author       Jerry Law
 // @match        *://ivp.inside.ups.com/*
@@ -27,6 +27,7 @@
     const annotationsText = `
 #REC BY UPS|包裹已由UPS接收
 #RTL NON DEL|無法派送至自提點
+#RGL HAZMAT|一般及預先通知的危險品貨件
 #OTHER DF|其他司機跟進中
 #CD NO CNTACT|調查已結束-無法聯絡收件人
 #INCORR CITY|城市/城鎮資訊錯誤，未能派送
@@ -623,6 +624,7 @@
 #DE|德國
 #GH|迦納
 #GR|希臘
+#BM|百慕達
 #GL|格陵蘭
 #GD|格瑞那達
 #GP|瓜德羅普
@@ -702,7 +704,7 @@
 #SA|沙烏地阿拉伯
 #SN|塞內加爾
 #RS|塞爾維亞
-#SL|獅子山
+#SL|塞拉利昂
 #SX|荷屬聖馬丁
 #SK|斯洛伐克
 #SI|斯洛維尼亞
@@ -772,7 +774,7 @@
 #MC|摩納哥
 #FL|列支敦士登
 #GW|幾內亞比索
-@AW|阿鲁巴
+#AW|阿鲁巴
 #ARUBA|阿鲁巴 - AW
 #CZECHIA|捷克 - CZ
 #CONGO, THE DEMOCRATIC REPUBLIC OF|剛果 - CG
@@ -800,6 +802,7 @@
 #BRAZIL|巴西 - BR
 #BRITISH VIRGIN ISLANDS|英屬維爾京群島 - VG
 #BRUNEI|汶萊 - BN
+#BERMUDA|百慕達 - BM
 #BULGARIA|保加利亞 - BG
 #BURKINA FASO|布吉納法索 - BF
 #CAMBODIA|柬埔寨 - KH
