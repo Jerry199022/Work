@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IVP顯示注釋
 // @namespace    IVP顯示注釋
-// @version      V7.9
+// @version      V7.10
 // @description  IVP顯示注釋、一眼模式、定義字體顏色。
 // @author       Jerry Law
 // @match        *://ivp.inside.ups.com/*
@@ -26,6 +26,8 @@
     // ================================================================
     const annotationsText = `
 #REC BY UPS|包裹已由UPS接收
+#NO LISTING|沒有收件地址信息
+#REF UPS BROK|拒絕UPS擔任報關代理
 #RTL NON DEL|無法派送至自提點
 #RGL HAZMAT|一般及預先通知的危險品貨件
 #OTHER DF|其他司機跟進中
@@ -489,7 +491,7 @@
 #PGA HOLD|美國政府機構暫扣
 #PKG ABANDOND|棄貨
 #PKG DELAY|包裹正運往目的地
-#REC REQUEST|收件人需UPS稍晚派送,需有客戶書面要求.
+#REC REQUEST|收件人要求UPS稍晚派送
 #REF DAMAGED|貨物破損，收件人拒收
 #REF DIDN WAN|收件人不想要貨物，拒收
 #REF DUTY/VAT|收件人拒付關稅
@@ -574,7 +576,7 @@
 #AM|亞美尼亞
 #AU|澳洲 - 澳大利亞
 #AT|奧地利
-#AZ|亞塞拜然
+#AZ|阿塞拜疆
 #BS|巴哈馬
 #BD|孟加拉
 #BY|白俄羅斯
@@ -775,6 +777,9 @@
 #FL|列支敦士登
 #GW|幾內亞比索
 #AW|阿鲁巴
+#BQ|波奈,荷蘭屬加勒比
+#CW|庫拉索
+#BONAIRE, SINT EUSTATIUS AND SABA|波奈,荷蘭屬加勒比 - BQ
 #ARUBA|阿鲁巴 - AW
 #CZECHIA|捷克 - CZ
 #CONGO, THE DEMOCRATIC REPUBLIC OF|剛果 - CG
@@ -790,7 +795,7 @@
 #ARMENIA|亞美尼亞 - AM
 #AUSTRALIA|澳洲 - 澳大利亞 - AU
 #AUSTRIA|奧地利 - AT
-#AZERBAIJAN|亞塞拜然 - AZ
+#AZERBAIJAN|阿塞拜疆 - AZ
 #BAHAMAS|巴哈馬 - BS
 #BANGLADESH|孟加拉 - BD
 #BELARUS|白俄羅斯 - BY
