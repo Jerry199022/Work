@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IVP顯示注釋
 // @namespace    IVP顯示注釋
-// @version      V7.10
+// @version      V7.11
 // @description  IVP顯示注釋、一眼模式、定義字體顏色。
 // @author       Jerry Law
 // @match        *://ivp.inside.ups.com/*
@@ -26,6 +26,10 @@
     // ================================================================
     const annotationsText = `
 #REC BY UPS|包裹已由UPS接收
+#CLR AGY REJ|清關機構拒絕清關
+#LAST SELLER|需要賣家資料
+#LATE TOFC|拖車延遲
+#LBL DETACH|標籤從包裹脫落
 #NO LISTING|沒有收件地址信息
 #REF UPS BROK|拒絕UPS擔任報關代理
 #RTL NON DEL|無法派送至自提點
@@ -331,7 +335,7 @@
 #DELIV TO AP|送往 UPS 存取點待處理
 #DELIVERED|已送達
 #DELV AFT COM|於服務承諾時間後送達
-#DENIED PARTY|拒絕方客戶收費
+#DENIED PARTY|政府或國際制裁名篩查
 #DEPARTURE|離境掃描
 #DERAILMENT|火車出軌
 #DESTROY|銷毀
@@ -592,6 +596,7 @@
 #BF|布吉納法索
 #KH|柬埔寨
 #CM|喀麥隆
+#CV|維德角
 #CA|加拿大
 #IC|加那利群島
 #KY|開曼群島
@@ -810,6 +815,7 @@
 #BERMUDA|百慕達 - BM
 #BULGARIA|保加利亞 - BG
 #BURKINA FASO|布吉納法索 - BF
+#CABO VERDE|維德角 - CV
 #CAMBODIA|柬埔寨 - KH
 #CAMEROON|喀麥隆 - CM
 #CANADA|加拿大 - CA
