@@ -1,35 +1,32 @@
 // ==UserScript==
-// @name         IVP 接收器
+// @name         IVP 接收器 (鍵盤注入版)
 // @namespace    IVP Receiver
-// @version      11
-// @description  同時支持 postMessage 和本地HTTP輪詢，增加重複追蹤號攔截，並能自動關閉彈出窗口。
+// @version      12
+// @description  移除本地服務器依賴，改用 F10 + 粘貼 (Excel注入) 方式，保留彈窗自動關閉功能。
 // @author       Jerry Law
 // @match        https://ivp.inside.ups.com/internal-visibility-portal*
-// @grant        GM_xmlhttpRequest
-// @connect      127.0.0.1
-// @connect      localhost
+// @grant        none
 // @run-at       document-idle
-// @updateURL    https://raw.githubusercontent.com/Jerry199022/Work/refs/heads/main/IVPReceiver.js
-// @downloadURL  https://raw.githubusercontent.com/Jerry199022/Work/refs/heads/main/IVPReceiver.js
 // ==/UserScript==
 
 (function() {
     'use strict';
 
-    console.log('[IVP Receiver v11] 腳本已啟動，具備自動關閉彈窗功能...');
+    console.log('[IVP Receiver v12.0] 腳本已啟動，正在監聽 F10 快捷鍵...');
 
-    const SERVER_URL = "http://127.0.0.1:58888/";
-    const POLLING_INTERVAL = 500;
-    const ALLOWED_ORIGIN = 'https://upsdrive.lightning.force.com';
+    // --- 常量配置 ---
+    const ALLOWED_ORIGIN = 'https://upsdrive.lightning.force.com'; // 保留 Salesforce 支持
     const POST_RESET_DELAY = 150;
     const PRE_SEARCH_DELAY = 150;
     const OVERLAY_CLOSE_DELAY = 100;
 
+    // --- 狀態變量 ---
     let lastProcessedTimestamp = 0;
     let lastProcessedTrackingNumber = null;
 
     const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+    // --- 輔助函數 ---
     function waitForElement(selector, root = document.body, timeout = 5000) {
         return new Promise((resolve, reject) => {
             const el = root.querySelector(selector);
@@ -69,137 +66,153 @@
     }
 
     /**
-     * [優化] 檢測並關閉所有由 Angular CDK 生成的頂置彈出窗口
+     * 檢測並關閉所有由 Angular CDK 生成的頂置彈出窗口
      */
     async function closeExistingOverlaysAsync() {
-        // 選擇器定位到包含 "fa-times" (關閉圖標) 的 <li> 元素，這通常是可點擊的目標
         const closeButtonParents = document.querySelectorAll('div.cdk-overlay-pane li:has(em.fa-times)');
-
         if (closeButtonParents.length > 0) {
             console.log(`[IVP Receiver] 檢測到 ${closeButtonParents.length} 個彈出窗口，正在嘗試關閉...`);
             for (const btnParent of closeButtonParents) {
-                // 點擊 <li> 元素本身
                 btnParent.click();
-                await delay(OVERLAY_CLOSE_DELAY); // 等待動畫完成
+                await delay(OVERLAY_CLOSE_DELAY);
             }
-            console.log('[IVP Receiver] 所有彈出窗口已關閉。');
         }
     }
 
+    /**
+     * 執行核心搜索邏輯
+     */
     async function performSearch(trackingNumber, source) {
-        // [優化] 在執行任何操作前，首先檢查並關閉可能存在的彈出窗口
+        // 1. 關閉彈窗
         await closeExistingOverlaysAsync();
 
         if (!trackingNumber) {
-            console.warn(`[IVP Receiver - ${source}] 收到空的追蹤號碼，跳過搜索。`);
-            return false;
+            console.warn(`[IVP Receiver - ${source}] 收到空的追蹤號碼，跳過。`);
+            return;
         }
-        console.log(`[IVP Receiver - ${source}] 流程開始，追蹤號碼: ${trackingNumber}`);
+
+        console.log(`[IVP Receiver - ${source}] 開始處理追蹤號碼: ${trackingNumber}`);
+
         try {
+            // 2. 處理隱藏的搜索欄
             const hiddenContainerSelector = '#mainContainer > app-tracking > div > div > div.container-fluid.d-none';
             const toggleButtonSelector = '#toggle-visibility > button';
             let attempts = 0;
-            const maxAttempts = 5;
-            while (document.querySelector(hiddenContainerSelector) && attempts < maxAttempts) {
+            while (document.querySelector(hiddenContainerSelector) && attempts < 5) {
                 const toggleButton = document.querySelector(toggleButtonSelector);
                 if (toggleButton) {
                     toggleButton.click();
                     await delay(200);
-                } else {
-                    throw new Error(`無法找到展開按鈕 "${toggleButtonSelector}"`);
                 }
                 attempts++;
             }
-            if (attempts >= maxAttempts) throw new Error('展開搜索表單失敗，已達最大嘗試次數。');
+
+            // 3. 清除舊內容
             const clearButton = document.querySelector('div.action-buttons button[aria-label="Clear"]');
             if (clearButton) {
                 clearButton.click();
                 await delay(200);
             }
+
+            // 4. 填入追蹤號
             const searchInput = await waitForElement('input[id="Enter Tracking Number"]');
             await delay(POST_RESET_DELAY);
             searchInput.value = trackingNumber;
+            // 觸發 input 事件，這對於 Angular/React 很重要
             searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+
+            // 5. 點擊搜索
             const searchButton = await waitForButtonEnabled('div.action-buttons button[type="submit"]');
             await delay(PRE_SEARCH_DELAY);
             searchButton.click();
-            console.log(`[IVP Receiver - ${source}] 追蹤號碼 ${trackingNumber} 的搜索流程已成功執行完畢。`);
-            return true;
+
+            console.log(`[IVP Receiver - ${source}] 搜索已執行。`);
+
+            // 更新狀態防止重複
+            lastProcessedTrackingNumber = trackingNumber;
+
         } catch (error) {
-            console.error(`[IVP Receiver - ${source}] 執行搜索時發生錯誤:`, error);
-            return false;
+            console.error(`[IVP Receiver - ${source}] 錯誤:`, error);
         }
     }
 
-    async function handlePostMessage(event) {
+    /**
+     * [核心新功能] 激活隱形接收陷阱
+     * 用於捕獲 Excel 發送的 Ctrl+V 內容
+     */
+    function activateTrap() {
+        console.log('[IVP Receiver] F10 被觸發，正在創建接收框...');
+
+        // 創建接收用的 textarea
+        const trap = document.createElement('textarea');
+
+        // 樣式設置：覆蓋在屏幕上方，透明，確保能獲取焦點
+        trap.style.position = 'fixed';
+        trap.style.top = '0';
+        trap.style.left = '0';
+        trap.style.width = '100px';
+        trap.style.height = '100px';
+        trap.style.opacity = '0'; // 透明不可見
+        trap.style.zIndex = '999999'; // 最頂層
+        trap.style.pointerEvents = 'none'; // 讓鼠標點擊穿透，不影響用戶
+
+        document.body.appendChild(trap);
+
+        // 強制聚焦
+        trap.focus();
+
+        // 雙重保險：如果在極短時間內焦點丟失，嘗試重新聚焦
+        setTimeout(() => trap.focus(), 50);
+
+        // 等待 Excel 粘貼數據 (800ms)
+        setTimeout(() => {
+            const receivedData = trap.value.trim();
+
+            // 清理 DOM
+            if (trap.parentNode) {
+                document.body.removeChild(trap);
+            }
+
+            if (receivedData) {
+                console.log(`[IVP Receiver] 成功通過 F10 捕獲數據: ${receivedData}`);
+                performSearch(receivedData, 'KeyboardInjection');
+            } else {
+                console.warn('[IVP Receiver] 陷阱未捕獲到數據 (粘貼超時或為空)。');
+            }
+        }, 800);
+    }
+
+    // --- 事件監聽 ---
+
+    // 1. 監聽 F10 鍵 (來自 Excel 的觸發信號)
+    window.addEventListener('keydown', function(e) {
+        if (e.key === 'F10' || e.keyCode === 121) {
+            e.preventDefault(); // 阻止瀏覽器默認行為
+            e.stopPropagation();
+            activateTrap(); // 啟動接收流程
+        }
+    });
+
+    // 2. 保留 postMessage 監聽 (Salesforce 兼容性)
+    window.addEventListener('message', async function(event) {
         if (event.origin !== ALLOWED_ORIGIN) return;
         const data = event.data;
-        if (typeof data !== 'object' || data === null || data.type !== 'CEC_SEARCH_REQUEST' || !data.payload) return;
-        const { trackingNumber, timestamp } = data.payload;
-        if (!trackingNumber || typeof trackingNumber !== 'string' || !timestamp || typeof timestamp !== 'number') return;
-
-        if (timestamp > lastProcessedTimestamp) {
-            console.log(`[IVP Receiver - PostMessage] 收到新的搜索請求！時間戳: ${timestamp}`);
-
-            if (trackingNumber === lastProcessedTrackingNumber) {
-                console.log(`[IVP Receiver - PostMessage] 偵測到重複的追蹤號碼 "${trackingNumber}"，跳過搜索但發送確認回執。`);
-                lastProcessedTimestamp = timestamp;
-                if (event.source) {
-                    event.source.postMessage({
-                        type: 'CEC_REQUEST_RECEIVED',
-                        payload: { timestamp: timestamp }
-                    }, event.origin);
+        if (data?.type === 'CEC_SEARCH_REQUEST' && data.payload) {
+            const { trackingNumber, timestamp } = data.payload;
+            if (timestamp > lastProcessedTimestamp) {
+                if (trackingNumber !== lastProcessedTrackingNumber) {
+                    await performSearch(trackingNumber, 'PostMessage');
                 }
-                return;
-            }
-
-            const success = await performSearch(trackingNumber, 'PostMessage');
-            if (success) {
                 lastProcessedTimestamp = timestamp;
-                lastProcessedTrackingNumber = trackingNumber;
+                // 發送回執
                 if (event.source) {
                     event.source.postMessage({
                         type: 'CEC_REQUEST_RECEIVED',
                         payload: { timestamp: timestamp }
                     }, event.origin);
-                    console.log(`[IVP Receiver - PostMessage] 已向 CEC 回發時間戳為 ${timestamp} 的確認消息。`);
                 }
             }
         }
-    }
-
-    function pollServer() {
-        GM_xmlhttpRequest({
-            method: "GET",
-            url: SERVER_URL,
-            timeout: 1000,
-            onload: function(response) {
-                if (response.status === 200) {
-                    const trackingNumber = (response.responseText || "").trim();
-                    if (trackingNumber) {
-                        if (trackingNumber === lastProcessedTrackingNumber) {
-                            return;
-                        }
-                        lastProcessedTrackingNumber = trackingNumber;
-                        performSearch(trackingNumber, 'Polling');
-                    }
-                }
-            },
-            onerror: function(response) { /* 靜默處理錯誤 */ },
-            ontimeout: function() { /* 靜默處理超時 */ }
-        });
-    }
-
-    function initializeReceivers() {
-        window.addEventListener('message', handlePostMessage, false);
-        console.log(`[IVP Receiver] 已註冊 'message' 事件監聽器，等待來自 ${ALLOWED_ORIGIN} 的指令。`);
-
-        setTimeout(() => {
-            setInterval(pollServer, POLLING_INTERVAL);
-            console.log(`[IVP Receiver] 已啟動 HTTP 輪詢，每 ${POLLING_INTERVAL / 1000} 秒向 ${SERVER_URL} 查詢一次。`);
-        }, 2000);
-    }
-
-    initializeReceivers();
+    }, false);
 
 })();
