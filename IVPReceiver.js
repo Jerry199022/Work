@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         IVP 接收器 (鍵盤注入版)
+// @name         IVP 接收器
 // @namespace    IVP Receiver
 // @version      12
 // @description  移除本地服務器依賴，改用 F10 + 粘貼 (Excel注入) 方式，保留彈窗自動關閉功能。
