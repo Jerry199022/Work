@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IVP顯示注釋
 // @namespace    IVP顯示注釋
-// @version      V7.11
+// @version      V7.13
 // @description  IVP顯示注釋、一眼模式、定義字體顏色。
 // @author       Jerry Law
 // @match        *://ivp.inside.ups.com/*
@@ -20,15 +20,19 @@
 
 (function () {
     'use strict';
-
     // ================================================================
     // 注釋數據
     // ================================================================
     const annotationsText = `
 #REC BY UPS|包裹已由UPS接收
+#PICKUP BY PACKAGE CAR|包裹由派送車輛取件
 #CLR AGY REJ|清關機構拒絕清關
+#PROCESSING FOR|正在處理派送
+#OUT SVC AREA|所選的服務不適用於該目的地地址
 #LAST SELLER|需要賣家資料
 #LATE TOFC|拖車延遲
+#LOCAL CHOSEN|已在當地選擇派送
+#NO SAT ACC |不收取週六附加費
 #LBL DETACH|標籤從包裹脫落
 #NO LISTING|沒有收件地址信息
 #REF UPS BROK|拒絕UPS擔任報關代理
@@ -118,7 +122,7 @@
 #TRXFER TO PO|包裹轉移到郵局
 #OUT FOR DELV|計劃今天送貨
 #INT REQUEST|包裹被攔截
-#NO COD AMNT|C.O.D.標籤上未列出美元金額
+#NO COD AMNT|標籤上沒有顯示貨到付款的金額
 #RETAIL POSS|包裹在UPS自提點
 #DELV TO RETL|已送到UPS自提點
 #IMMED INSPEC|海關抽檢
@@ -859,6 +863,7 @@
 #GUATEMALA|危地馬拉 - GT
 #GUERNSEY|根西 - GG
 #GUINEA REPUBLIC|幾內亞 - GN
+#GUINEA|幾內亞 - GN
 #HAITI|海地 - HT
 #HONDURAS|洪都拉斯 - HN
 #HUNGARY|匈牙利 - HU
@@ -942,6 +947,7 @@
 #SUDAN|蘇丹 - SD
 #SURINAME|蘇利南 - SR
 #SWAZILAND|史瓦濟蘭 - SZ
+#ESWATINI|史瓦濟蘭 - SZ
 #SWEDEN|瑞典 - SE
 #SWITZERLAND|瑞士 - CH
 #SYRIA|敘利亞 - SY
