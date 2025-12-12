@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IVP顯示注釋
 // @namespace    IVP顯示注釋
-// @version      V7.13
+// @version      V7.14
 // @description  IVP顯示注釋、一眼模式、定義字體顏色。
 // @author       Jerry Law
 // @match        *://ivp.inside.ups.com/*
@@ -25,6 +25,7 @@
     // ================================================================
     const annotationsText = `
 #REC BY UPS|包裹已由UPS接收
+#TPB WTC|第三方倉庫-自清關
 #PICKUP BY PACKAGE CAR|包裹由派送車輛取件
 #CLR AGY REJ|清關機構拒絕清關
 #PROCESSING FOR|正在處理派送
