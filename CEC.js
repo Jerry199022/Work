@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CEC功能強化
 // @namespace    CEC Enhanced
-// @version      V58
+// @version      V59
 // @description  快捷操作按鈕、自動指派、IVP快速查詢、聯繫人彈窗優化、按鈕警示色、賬戶檢測、組件屏蔽、設置菜單、自動IVP查詢、URL精準匹配、快捷按鈕可編輯、(Related Cases)數據提取與增強排序功能、關聯案件提取器、回覆case快捷按鈕、已跟進case提示、全局暫停/恢復功能。
 // @author       Jerry Law
 // @match        https://upsdrive.lightning.force.com/*
@@ -2377,27 +2377,62 @@ V53 > V54
 
     /**
      * @description 處理編輯器加載完畢後的模板快捷按鈕注入流程。
+     *              [修改版] 強制每次獲取最新排序，並使用 Observer 確保按鈕在 DOM 重繪後依然存在。
      */
     async function handleEditorReadyForTemplateButtons() {
         try {
-            const editor = await waitForElementWithObserver(document.body, ".slds-rich-text-editor .tox-tinymce", 15000); // 15000ms: 等待編輯器核心加載的超時。
+            // 1. 等待編輯器核心加載
+            const editorSelector = ".slds-rich-text-editor .tox-tinymce";
+            const editor = await waitForElementWithObserver(document.body, editorSelector, 15000);
 
+            // 調整高度
             const desiredHeight = GM_getValue("richTextEditorHeight", DEFAULTS.richTextEditorHeight) + "px";
             if (editor.style.height !== desiredHeight) {
                 editor.style.height = desiredHeight;
-                Log.info('UI.Enhancement', `回覆編輯器高度已根據設置調整為 ${desiredHeight}。`);
             }
 
+            // 2. [核心步驟] 獲取最新模板列表 (實時抓取，不緩存)
+            // 注意：這裡會觸發一次菜單的打開與關閉，為了獲取最新排序，這是必須的代價
             const templates = await getAndLogTemplateOptions();
 
             if (templates && templates.length > 1) {
-                const anchorIcon = findElementInShadows(document.body, 'lightning-icon[icon-name="utility:new_window"]');
-                const anchorLi = anchorIcon ? anchorIcon.closest('li.cuf-attachmentsItem') : null;
+                const anchorIconSelector = 'lightning-icon[icon-name="utility:new_window"]';
+                const anchorIcon = await waitForElementWithObserver(document.body, anchorIconSelector, 5000);
+                // 找到工具欄的容器 (ul.cuf-attachmentsList)
+                const anchorLi = anchorIcon.closest('li.cuf-attachmentsItem');
+                const toolbarContainer = anchorLi ? anchorLi.parentElement : null;
 
-                if (anchorLi) {
+                if (anchorLi && toolbarContainer) {
+                    // 3. [第一次注入]
                     injectTemplateShortcutButtons(anchorLi, templates);
+
+                    // 4. [關鍵修改] 啟動 Observer 守護按鈕
+                    // 防止 Salesforce 在數據加載後重繪工具欄導致按鈕消失
+                    if (!toolbarContainer.dataset.cecObserverAttached) {
+                        const observer = new MutationObserver((mutations) => {
+                            // 檢查我們的按鈕是否還在
+                            const myButtons = toolbarContainer.querySelector('.cec-template-shortcut-button');
+                            if (!myButtons) {
+                                // 如果按鈕丟失，使用剛剛獲取的 templates 列表重新注入
+                                // 必須重新獲取最新的錨點，因為舊的錨點可能已被銷毀
+                                const currentAnchorIcon = toolbarContainer.querySelector(anchorIconSelector);
+                                const currentAnchorLi = currentAnchorIcon ? currentAnchorIcon.closest('li.cuf-attachmentsItem') : null;
+                                if (currentAnchorLi) {
+                                    // 重置注入標記，強制重新注入
+                                    toolbarContainer.dataset.shortcutsInjected = 'false';
+                                    Log.info('UI.Enhancement', '檢測到按鈕丟失，正在重新注入...');
+                                    injectTemplateShortcutButtons(currentAnchorLi, templates);
+                                }
+                            }
+                        });
+
+                        observer.observe(toolbarContainer, { childList: true, subtree: true });
+                        toolbarContainer.dataset.cecObserverAttached = 'true';
+                        // 將 observer 存儲在元素上以便後續清理（如果需要）
+                        toolbarContainer._cecObserver = observer;
+                    }
                 } else {
-                    Log.warn('UI.Enhancement', `未能找到用於注入快捷按鈕的錨點元素 ("Popout" 按鈕)。`);
+                    Log.warn('UI.Enhancement', `未能找到用於注入快捷按鈕的錨點元素。`);
                 }
             }
 
@@ -2453,10 +2488,8 @@ V53 > V54
     }
 
     /**
-     * @description 根據模板標題自動點擊對應的模板選項，並執行插入後的光標定位、粘貼優化及已有文本轉換。
-     *              [修改版] 新增：在插入前自動將光標上方的已有內容轉換為對應的繁/簡體。
-     * @param {string} templateTitle - 要點擊的模板的完整標題。
-     * @param {string} buttonText - 按鈕上顯示的文本，用於判斷繁簡模式。
+     * @description 根據模板標題自動點擊對應的模板選項，並執行插入及後續增強。
+     *              [修復版] 修復了光標定位時 "selection is not defined" 的錯誤，確保插入後能自動跳轉與滾動。
      */
     async function clickTemplateOptionByTitle(templateTitle, buttonText) {
         let VIEW_ADJUSTMENT_OFFSET_PX = 0;
@@ -2467,7 +2500,6 @@ V53 > V54
         const TIMEOUT = 5000;
         let clickableButton = null;
 
-        // 1. 確定繁簡轉換模式
         let conversionMode = 'off';
         if (buttonText) {
             if (buttonText.includes('繁') || buttonText.includes('繁')) {
@@ -2479,25 +2511,21 @@ V53 > V54
 
         const insertionMode = GM_getValue('templateInsertionMode', DEFAULTS.templateInsertionMode);
 
-        // 2. 執行光標預定位邏輯 (Logo 模式)
+        // --- 1. 光標預定位 (Logo 模式) ---
         if (insertionMode === 'logo') {
-            Log.info('UI.Enhancement', `模板插入策略: "UPS Logo 圖標下方插入"，執行預定位。`);
             try {
                 const iframe = await waitForElementWithObserver(document.body, EDITOR_IFRAME_SELECTOR, TIMEOUT);
                 await delay(100);
-
                 if (iframe && iframe.contentDocument) {
                     iframe.contentWindow.focus();
                     const editorDoc = iframe.contentDocument;
                     const editorBody = editorDoc.body;
-
                     const logoTable = editorBody.querySelector('table.mce-item-table');
 
                     if (logoTable) {
                         const targetLineNumber = 9;
                         let linesFound = 0;
                         let targetNode = null;
-
                         const nodeFilter = {
                             acceptNode: function(node) {
                                 const nodeName = node.nodeName.toUpperCase();
@@ -2507,35 +2535,23 @@ V53 > V54
                                 return NodeFilter.FILTER_SKIP;
                             }
                         };
-
                         const walker = editorDoc.createTreeWalker(editorBody, NodeFilter.SHOW_ELEMENT, nodeFilter, false);
                         walker.currentNode = logoTable;
+                        while (linesFound < targetLineNumber && (targetNode = walker.nextNode())) { linesFound++; }
 
-                        while (linesFound < targetLineNumber && (targetNode = walker.nextNode())) {
-                            linesFound++;
-                        }
-
+                        const selection = iframe.contentWindow.getSelection();
+                        const range = editorDoc.createRange();
                         if (targetNode) {
-                            const selection = iframe.contentWindow.getSelection();
-                            const range = editorDoc.createRange();
                             range.setStartBefore(targetNode);
-                            range.collapse(true);
-                            selection.removeAllRanges();
-                            selection.addRange(range);
-                            Log.info('UI.Enhancement', `[定位] TreeWalker 成功定位到圖標後的第 ${targetLineNumber} 行。`);
                         } else {
-                            // Fallback logic
-                            const selection = iframe.contentWindow.getSelection();
-                            const range = editorDoc.createRange();
                             range.selectNodeContents(editorBody);
                             range.collapse(false);
-                            selection.removeAllRanges();
-                            selection.addRange(range);
                         }
-
+                        range.collapse(true);
+                        selection.removeAllRanges();
+                        selection.addRange(range);
                     } else {
-                        // Table not found logic
-                        let fallbackTarget = null;
+                         let fallbackTarget = null;
                         if (editorBody && editorBody.children && editorBody.children.length >= 3) {
                             fallbackTarget = editorBody.children[2];
                         } else if (editorBody && editorBody.firstElementChild) {
@@ -2552,53 +2568,31 @@ V53 > V54
                     }
                 }
             } catch (cursorError) {
-                Log.error('UI.Enhancement', `嘗試預定位光標時發生錯誤: ${cursorError.message}`);
+                Log.error('UI.Enhancement', `預定位光標錯誤: ${cursorError.message}`);
             }
-        } else {
-            Log.info('UI.Enhancement', `模板插入策略: "隨光標位置插入"，已跳過預定位。`);
         }
 
-        // 3. [核心新增] 轉換已有文本 (在點擊插入模板之前執行)
+        // --- 2. 轉換已有文本 ---
         if (conversionMode !== 'off') {
-            try {
-                // 嘗試快速獲取 iframe (可能已在上面獲取過，這裡再次獲取確保安全)
+             try {
                 const iframe = findElementInShadows(document.body, EDITOR_IFRAME_SELECTOR);
                 if (iframe && iframe.contentDocument && iframe.contentWindow) {
                     const win = iframe.contentWindow;
                     const doc = iframe.contentDocument;
                     const sel = win.getSelection();
-
                     if (sel.rangeCount > 0) {
                         const range = sel.getRangeAt(0);
-                        // 創建遍歷器，只查找文本節點
                         const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, null, false);
                         let node;
-                        let convertedCount = 0;
-
                         while (node = walker.nextNode()) {
-                            // range.comparePoint(node, 0) 返回值:
-                            // -1: 節點起點在光標之前 (或光標就在此節點內)
-                            //  0: 節點起點與光標重合
-                            //  1: 節點起點在光標之後
-
-                            // 我們只轉換光標之前或光標所在的文本節點
                             const position = range.comparePoint(node, 0);
-
                             if (position !== 1) {
                                 const originalText = node.nodeValue;
                                 const convertedText = ChineseConverter.convert(originalText, conversionMode);
-                                if (originalText !== convertedText) {
-                                    node.nodeValue = convertedText;
-                                    convertedCount++;
-                                }
+                                if (originalText !== convertedText) node.nodeValue = convertedText;
                             } else {
-                                // 一旦遇到光標後的節點 (如簽名檔)，停止遍歷以保護後續內容
-                                // 如果您的簽名檔在內容中間，這裡可能需要調整，但通常簽名在底部
                                 break;
                             }
-                        }
-                        if (convertedCount > 0) {
-                            Log.info('Converter', `已將光標前的 ${convertedCount} 個文本節點轉換為 ${conversionMode === 's2t' ? '繁體' : '簡體'}。`);
                         }
                     }
                 }
@@ -2607,20 +2601,16 @@ V53 > V54
             }
         }
 
-        // 4. 執行模板插入操作
+        // --- 3. 執行插入並設置增強功能 ---
         try {
             const iconElement = await waitForElementWithObserver(document.body, BUTTON_ICON_SELECTOR, TIMEOUT);
             clickableButton = iconElement.closest('a[role="button"]');
-            if (!clickableButton) throw new Error('未能找到 "插入模板" 按鈕。');
-
             if (clickableButton.getAttribute('aria-expanded') !== 'true') {
                 clickableButton.click();
                 await waitForAttributeChange(clickableButton, 'aria-expanded', 'true', TIMEOUT);
             }
 
             const menuId = clickableButton.getAttribute('aria-controls');
-            if (!menuId) throw new Error('缺少 aria-controls 屬性。');
-
             const menuContainer = await waitForElementWithObserver(document.body, `[id="${menuId}"]`, TIMEOUT);
             const targetOption = findElementInShadows(menuContainer, MENU_ITEM_SELECTOR);
 
@@ -2628,100 +2618,48 @@ V53 > V54
                 targetOption.click();
                 await delay(100);
 
-                if (!GM_getValue('postInsertionEnhancementsEnabled', DEFAULTS.postInsertionEnhancementsEnabled)) {
-                    Log.info('UI.Enhancement', '模板插入後增強處理功能未啟用。');
-                    return;
+                if (!GM_getValue('postInsertionEnhancementsEnabled', DEFAULTS.postInsertionEnhancementsEnabled)) return;
+
+                const iframe = findElementInShadows(document.body, EDITOR_IFRAME_SELECTOR);
+                if (!iframe || !iframe.contentDocument) throw new Error('無法找到編輯器');
+
+                const iframeWindow = iframe.contentWindow;
+                const iframeDocument = iframe.contentDocument;
+                const editorBody = iframeDocument.body;
+
+                const firstParagraph = editorBody.querySelector('p');
+                const targetContainerSpan = firstParagraph ? firstParagraph.querySelector('span') : null;
+
+                if (!targetContainerSpan || targetContainerSpan.getElementsByTagName('br').length === 0) {
+                    throw new Error('未找到預期的模板結構');
                 }
 
-                try {
-                    const iframe = findElementInShadows(document.body, EDITOR_IFRAME_SELECTOR);
-                    if (!iframe || !iframe.contentDocument || !iframe.contentDocument.body) {
-                        throw new Error('無法找到富文本編輯器 iframe。');
-                    }
-                    const iframeWindow = iframe.contentWindow;
-                    const iframeDocument = iframe.contentDocument;
-                    const editorBody = iframeDocument.body;
+                // 添加特殊標記
+                targetContainerSpan.dataset.cecTemplateZone = 'true';
 
-                    const firstParagraph = editorBody.querySelector('p');
-                    const targetContainerSpan = firstParagraph ? firstParagraph.querySelector('span') : null;
+                // --- 全局事件委託 (粘貼 + Enter鍵) ---
+                if (!editorBody.dataset.cecGlobalHandlersAttached) {
 
-                    if (!targetContainerSpan || targetContainerSpan.getElementsByTagName('br').length === 0) {
-                        throw new Error('在編輯器中未找到預期的模板結構 (包含<br>的span)。');
-                    }
-
-                    // 5. 為新插入的模板內容設置轉換監聽器 (MutationObserver)
-                    if (conversionMode !== 'off' && !targetContainerSpan.dataset.converterAttached) {
-                        Log.info('UI.Enhancement', `為模板 "${buttonText}" 啟用繁簡轉換模式: ${conversionMode} (使用 MutationObserver)`);
-
-                        const conversionHandler = () => {
-                            const selection = iframeWindow.getSelection();
-                            if (!selection || selection.rangeCount === 0) return;
-
-                            observer.disconnect();
-
-                            const range = selection.getRangeAt(0);
-                            const preSelectionRange = range.cloneRange();
-                            preSelectionRange.selectNodeContents(targetContainerSpan);
-                            preSelectionRange.setEnd(range.startContainer, range.startOffset);
-                            const startOffset = preSelectionRange.toString().length;
-
-                            const originalText = targetContainerSpan.innerText;
-                            const convertedText = ChineseConverter.convert(originalText, conversionMode);
-
-                            if (originalText !== convertedText) {
-                                const lines = convertedText.split('\n');
-                                targetContainerSpan.innerHTML = '';
-                                lines.forEach((line, index) => {
-                                    targetContainerSpan.appendChild(iframeDocument.createTextNode(line));
-                                    if (index < lines.length - 1) {
-                                        targetContainerSpan.appendChild(iframeDocument.createElement('br'));
-                                    }
-                                });
-
-                                let charCount = 0;
-                                let endNode = null;
-                                let endOffsetInNode = 0;
-                                const treeWalker = iframeDocument.createTreeWalker(targetContainerSpan, NodeFilter.SHOW_TEXT, null, false);
-                                while (treeWalker.nextNode()) {
-                                    const node = treeWalker.currentNode;
-                                    const nextCharCount = charCount + node.length;
-                                    if (startOffset <= nextCharCount) {
-                                        endNode = node;
-                                        endOffsetInNode = startOffset - charCount;
-                                        break;
-                                    }
-                                    charCount = nextCharCount;
-                                }
-
-                                if (endNode) {
-                                    const newRange = iframeDocument.createRange();
-                                    newRange.setStart(endNode, endOffsetInNode);
-                                    newRange.collapse(true);
-                                    selection.removeAllRanges();
-                                    selection.addRange(newRange);
-                                } else {
-                                    const newRange = iframeDocument.createRange();
-                                    newRange.selectNodeContents(targetContainerSpan);
-                                    newRange.collapse(false);
-                                    selection.removeAllRanges();
-                                    selection.addRange(newRange);
-                                }
+                    const isCursorInTemplate = () => {
+                        const selection = iframeWindow.getSelection();
+                        if (!selection.rangeCount) return false;
+                        let node = selection.anchorNode;
+                        while (node && node !== editorBody) {
+                            if (node.nodeType === 1 && node.dataset.cecTemplateZone === 'true') {
+                                return true;
                             }
-                            observer.observe(targetContainerSpan, { childList: true, subtree: true, characterData: true });
-                        };
+                            node = node.parentNode;
+                        }
+                        return false;
+                    };
 
-                        const debouncedConversionHandler = debounce(conversionHandler, 350);
-                        const observer = new MutationObserver(debouncedConversionHandler);
-                        observer.observe(targetContainerSpan, { childList: true, subtree: true, characterData: true });
-                        targetContainerSpan.dataset.converterAttached = 'true';
-                    }
-
-                    if (!targetContainerSpan.dataset.pasteHandlerAttached) {
-                        targetContainerSpan.addEventListener('paste', (event) => {
+                    // 1. 粘貼攔截器
+                    editorBody.addEventListener('paste', (event) => {
+                        if (isCursorInTemplate()) {
                             event.preventDefault();
+                            event.stopPropagation();
                             const textToPaste = (event.clipboardData || iframeWindow.clipboardData).getData('text/plain');
                             const selection = iframeWindow.getSelection();
-                            if (!selection.rangeCount) return;
                             const range = selection.getRangeAt(0);
                             range.deleteContents();
                             const fragment = iframeDocument.createDocumentFragment();
@@ -2734,50 +2672,125 @@ V53 > V54
                             range.collapse(false);
                             selection.removeAllRanges();
                             selection.addRange(range);
-                        });
-                        targetContainerSpan.dataset.pasteHandlerAttached = 'true';
-                    }
+                            Log.info('UI.Input', '全局攔截器已執行純文本粘貼');
+                        }
+                    }, true);
 
-                    const userBrPosition = GM_getValue('cursorPositionBrIndex', DEFAULTS.cursorPositionBrIndex);
-                    const brIndex = userBrPosition - 1;
-                    const allBrTags = targetContainerSpan.getElementsByTagName('br');
-                    let targetPositionNode = null;
+                    // 2. Enter 鍵攔截器
+                    editorBody.addEventListener('keydown', (event) => {
+                        if (event.key === 'Enter') {
+                            if (isCursorInTemplate()) {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                const selection = iframeWindow.getSelection();
+                                const range = selection.getRangeAt(0);
+                                range.deleteContents();
+                                const br = iframeDocument.createElement('br');
+                                range.insertNode(br);
+                                range.setStartAfter(br);
+                                range.setEndAfter(br);
+                                selection.removeAllRanges();
+                                selection.addRange(range);
+                                br.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                                Log.info('UI.Input', '全局攔截器已強制執行單倍換行');
+                            }
+                        }
+                    }, true);
 
-                    if (allBrTags.length > brIndex && brIndex >= 0) {
-                        targetPositionNode = allBrTags[brIndex];
-                    } else {
-                        throw new Error(`模板結構不符合預期，未能找到用於定位光標的第 ${userBrPosition} 個<br>標籤。`);
-                    }
+                    editorBody.dataset.cecGlobalHandlersAttached = 'true';
+                }
 
+                // --- 轉換監聽器 ---
+                if (conversionMode !== 'off' && !targetContainerSpan.dataset.converterAttached) {
+                    const conversionHandler = () => {
+                         const selection = iframeWindow.getSelection();
+                        if (!selection || selection.rangeCount === 0) return;
+
+                        observer.disconnect();
+
+                        const range = selection.getRangeAt(0);
+                        const preRange = range.cloneRange();
+                        preRange.selectNodeContents(targetContainerSpan);
+                        preRange.setEnd(range.startContainer, range.startOffset);
+                        const currentLength = preRange.toString().length;
+
+                        const originalText = targetContainerSpan.innerText;
+                        const convertedText = ChineseConverter.convert(originalText, conversionMode);
+
+                        if (originalText !== convertedText) {
+                            const lines = convertedText.split('\n');
+                            targetContainerSpan.innerHTML = '';
+                            lines.forEach((line, index) => {
+                                targetContainerSpan.appendChild(iframeDocument.createTextNode(line));
+                                if (index < lines.length - 1) targetContainerSpan.appendChild(iframeDocument.createElement('br'));
+                            });
+
+                            let charCount = 0;
+                            let endNode = null;
+                            let endOffset = 0;
+                            const walker = iframeDocument.createTreeWalker(targetContainerSpan, NodeFilter.SHOW_TEXT, null, false);
+                            while(walker.nextNode()){
+                                const node = walker.currentNode;
+                                if(charCount + node.length >= currentLength){
+                                    endNode = node;
+                                    endOffset = currentLength - charCount;
+                                    break;
+                                }
+                                charCount += node.length;
+                            }
+
+                            if(endNode){
+                                const newRange = iframeDocument.createRange();
+                                newRange.setStart(endNode, endOffset);
+                                newRange.collapse(true);
+                                selection.removeAllRanges();
+                                selection.addRange(newRange);
+                            } else {
+                                const newRange = iframeDocument.createRange();
+                                newRange.selectNodeContents(targetContainerSpan);
+                                newRange.collapse(false);
+                                selection.removeAllRanges();
+                                selection.addRange(newRange);
+                            }
+                        }
+                        observer.observe(targetContainerSpan, { childList: true, subtree: true, characterData: true });
+                    };
+                    const debouncedHandler = debounce(conversionHandler, 350);
+                    const observer = new MutationObserver(debouncedHandler);
+                    observer.observe(targetContainerSpan, { childList: true, subtree: true, characterData: true });
+                    targetContainerSpan.dataset.converterAttached = 'true';
+                }
+
+                // --- 4. 光標定位 (修復版) ---
+                const userBrPosition = GM_getValue('cursorPositionBrIndex', DEFAULTS.cursorPositionBrIndex);
+                const brIndex = userBrPosition - 1;
+                const allBrTags = targetContainerSpan.getElementsByTagName('br');
+                if (allBrTags.length > brIndex && brIndex >= 0) {
+                    const targetPositionNode = allBrTags[brIndex];
+
+                    // [修復點] 確保這裡定義了 selection
                     const selection = iframeWindow.getSelection();
+
                     const range = iframeDocument.createRange();
                     range.setStartBefore(targetPositionNode);
                     range.collapse(true);
+
                     selection.removeAllRanges();
                     selection.addRange(range);
 
                     if (typeof targetPositionNode.scrollIntoView === 'function') {
                         targetPositionNode.scrollIntoView({ behavior: 'auto', block: 'center' });
-                        requestAnimationFrame(() => {
-                            setTimeout(() => { window.scrollBy(0, VIEW_ADJUSTMENT_OFFSET_PX); }, 50);
-                        });
+                        requestAnimationFrame(() => { setTimeout(() => { window.scrollBy(0, VIEW_ADJUSTMENT_OFFSET_PX); }, 50); });
                     }
-
-                    iframeWindow.focus();
-                    Log.info('UI.Enhancement', `模板插入後，光標已成功定位到第 ${userBrPosition} 個換行符前。`);
-
-                } catch (error) {
-                    Log.warn('UI.Enhancement', `嘗試定位光標或附加事件時失敗: ${error.message}`);
                 }
+                iframeWindow.focus();
 
             } else {
-                throw new Error(`在菜單中未找到標題為 "${templateTitle}" 的選項。`);
+                throw new Error(`未找到標題為 "${templateTitle}" 的選項。`);
             }
         } catch (error) {
-            Log.error('UI.Enhancement', `執行模板插入時出錯: ${error.message}`);
-            if (clickableButton && clickableButton.getAttribute('aria-expanded') === 'true') {
-                clickableButton.click();
-            }
+            Log.error('UI.Enhancement', `執行模板插入錯誤: ${error.message}`);
+            if (clickableButton && clickableButton.getAttribute('aria-expanded') === 'true') clickableButton.click();
             throw error;
         }
     }
