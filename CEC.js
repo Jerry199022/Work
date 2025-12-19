@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CEC功能強化
 // @namespace    CEC Enhanced
-// @version      V57
+// @version      V58
 // @description  快捷操作按鈕、自動指派、IVP快速查詢、聯繫人彈窗優化、按鈕警示色、賬戶檢測、組件屏蔽、設置菜單、自動IVP查詢、URL精準匹配、快捷按鈕可編輯、(Related Cases)數據提取與增強排序功能、關聯案件提取器、回覆case快捷按鈕、已跟進case提示、全局暫停/恢復功能。
 // @author       Jerry Law
 // @match        https://upsdrive.lightning.force.com/*
@@ -21,6 +21,7 @@
 V89 > V57
 更新內容：
 -自動繁簡轉換
+-快過期case提示
 
 V55 > V56
 更新內容：
@@ -1050,6 +1051,13 @@ V53 > V54
                                     </div>
                                     <p class="cec-settings-description">在 Case 詳情頁和列表頁，對近期已回覆的 Case 進行醒目提示。</p>
                                 </div>
+                            <div class="cec-settings-option">
+                                    <div class="cec-settings-option-main">
+                                        <label for="highlightExpiringCasesToggle" class="cec-settings-label">快過期 Case 紅色高亮提示</label>
+                                        <label class="cec-settings-switch"><input type="checkbox" id="highlightExpiringCasesToggle"><span class="cec-settings-slider"></span></label>
+                                    </div>
+                                    <p class="cec-settings-description">在列表頁檢測 Importance 列，若非 "Priority" 狀態或空白，將該單元格標紅。</p>
+                                </div>
                             </div>
                             <div class="cec-settings-section">
                                 <h3 class="cec-settings-section-title">組件屏蔽</h3>
@@ -1645,6 +1653,15 @@ V53 > V54
             showToast();
         };
 
+        const highlightExpiringCasesToggle = document.getElementById('highlightExpiringCasesToggle');
+        highlightExpiringCasesToggle.checked = GM_getValue('highlightExpiringCasesEnabled', false); // 默認為關閉
+        highlightExpiringCasesToggle.onchange = () => {
+            const value = highlightExpiringCasesToggle.checked;
+            GM_setValue('highlightExpiringCasesEnabled', value);
+            Log.info('UI.Settings', `設置已保存: highlightExpiringCasesEnabled = ${value}`);
+            showToast();
+        };
+
         const autoAssignUserInput = document.getElementById('autoAssignUserInput');
         autoAssignUserInput.value = GM_getValue('autoAssignUser', DEFAULTS.autoAssignUser);
         autoAssignUserInput.onchange = () => {
@@ -2155,59 +2172,109 @@ V53 > V54
     // =================================================================================
 
     /**
-     * @description 處理 Case 列表頁的表格行，為已回覆的 Case 添加時間注釋。
-     *              [修正版] 增加了冪等性處理，在添加新提示前會先移除舊提示，防止重複顯示。
+     * @description 處理 Case 列表頁：
+     *              1. 為已回覆的 Case 添加時間注釋。
+     *              2. [修改版] 檢測所有行，若發現"非Priority且非空白"的案件，將 "Importance" 表頭變紅。
      * @param {HTMLTableSectionElement} tableBody - 要處理的表格 tbody 元素。
      */
     function processCaseListRows(tableBody) {
         const SEND_BUTTON_CACHE_KEY = 'sendButtonClickLog';
-        const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 10小時: 已回覆記錄的緩存有效期。
-        const ANNOTATION_CLASS = 'cec-replied-annotation'; // 用於識別和清除的專用類名
+        const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+        const ANNOTATION_CLASS = 'cec-replied-annotation';
+
+        const notifyEnabled = GM_getValue('notifyOnRepliedCaseEnabled', DEFAULTS.notifyOnRepliedCaseEnabled);
+        const expiringHighlightEnabled = GM_getValue('highlightExpiringCasesEnabled', false);
+
+        if (!notifyEnabled && !expiringHighlightEnabled) return;
+
         const cache = GM_getValue(SEND_BUTTON_CACHE_KEY, {});
+        const allRows = tableBody.querySelectorAll('tr[data-row-key-value]');
+        let isAnyCaseExpiring = false;
 
-        const rows = tableBody.querySelectorAll('tr[data-row-key-value]:not([data-cec-processed="true"])');
-
-        rows.forEach(row => {
-            row.dataset.cecProcessed = 'true';
-
+        allRows.forEach(row => {
             const caseId = row.getAttribute('data-row-key-value');
-            if (!caseId) return;
 
-            const entry = cache[caseId];
+            // --- 功能 1: 已回覆案件提示 ---
+            if (notifyEnabled && caseId && row.dataset.cecProcessed !== 'true') {
+                row.dataset.cecProcessed = 'true';
+                const entry = cache[caseId];
+                if (entry && (Date.now() - entry.timestamp < CACHE_TTL_MS)) {
+                    const caseNumberCell = row.querySelector('td[data-label="Case Number"]');
+                    if (caseNumberCell) {
+                        const caseNumberLink = findElementInShadows(caseNumberCell, `a[href*="${caseId}"]`);
+                        if (caseNumberLink) {
+                            const injectionTarget = caseNumberLink.parentElement;
+                            if (injectionTarget) {
+                                const existingAnnotation = injectionTarget.querySelector(`.${ANNOTATION_CLASS}`);
+                                if (existingAnnotation) existingAnnotation.remove();
 
-            if (entry && (Date.now() - entry.timestamp < CACHE_TTL_MS)) {
-                const caseNumberCell = row.querySelector('td[data-label="Case Number"]');
-                if (caseNumberCell) {
-                    const caseNumberLink = findElementInShadows(caseNumberCell, `a[href*="${caseId}"]`);
-                    if (caseNumberLink) {
-                        const injectionTarget = caseNumberLink.parentElement;
-                        if (!injectionTarget) return;
-
-                        // [核心修正] 先清除已存在的舊提示
-                        const existingAnnotation = injectionTarget.querySelector(`.${ANNOTATION_CLASS}`);
-                        if (existingAnnotation) {
-                            existingAnnotation.remove();
+                                const annotationSpan = document.createElement('span');
+                                annotationSpan.className = ANNOTATION_CLASS;
+                                annotationSpan.textContent = ` ${formatTimeAgoSimple(entry.timestamp)}`;
+                                annotationSpan.style.color = '#000000';
+                                annotationSpan.style.fontSize = 'inherit';
+                                annotationSpan.style.fontWeight = 'normal';
+                                annotationSpan.style.marginLeft = '8px';
+                                injectionTarget.appendChild(annotationSpan);
+                            }
                         }
-
-                        // [核心修正] 再添加新的提示
-                        const annotationSpan = document.createElement('span');
-                        annotationSpan.className = ANNOTATION_CLASS; // 添加專用類名
-                        annotationSpan.textContent = ` ${formatTimeAgoSimple(entry.timestamp)}`;
-                        annotationSpan.style.color = '#000000';
-                        annotationSpan.style.fontSize = 'inherit';
-                        annotationSpan.style.fontWeight = 'normal';
-                        annotationSpan.style.marginLeft = '8px';
-
-                        injectionTarget.appendChild(annotationSpan);
-
-                    } else {
-                        Log.warn('Feature.CaseList', `在 Case ID ${caseId} 的行中，已定位到 Case Number 單元格，但在其內部未找到對應的 a 標籤錨點。`);
                     }
-                } else {
-                    Log.warn('Feature.CaseList', `在 Case ID ${caseId} 的行中，未能定位到 data-label="Case Number" 的單元格。`);
+                }
+            }
+
+            // --- 功能 2 檢測邏輯: 檢查是否為過期案件 ---
+            // 邏輯修改：僅當有內容(有圖標)且圖標不是Priority時才觸發
+            if (expiringHighlightEnabled && !isAnyCaseExpiring) {
+                const importanceCell = row.querySelector('td[data-label="Importance"]');
+                if (importanceCell) {
+                    const richText = findElementInShadows(importanceCell, 'lightning-formatted-rich-text');
+
+                    if (richText) {
+                        const img = findElementInShadows(richText, 'img');
+                        // 只有當圖片存在(非空白)時才進行檢查
+                        if (img) {
+                            const altText = img.getAttribute('alt');
+                            // 如果有圖片，且含義不是 Priority，則視為需要警示
+                            if (altText && altText !== 'Priority') {
+                                isAnyCaseExpiring = true;
+                            }
+                        }
+                        // 如果 img 不存在 (空白)，視為安全，不操作
+                    }
+                    // 如果 richText 不存在 (空白)，視為安全，不操作
                 }
             }
         });
+
+        // --- 功能 2 執行邏輯: 更新表頭顏色 ---
+        if (expiringHighlightEnabled) {
+            const table = tableBody.parentElement;
+            const thead = table ? table.querySelector('thead') : null;
+
+            if (thead) {
+                const importanceTitleSpan = findElementInShadows(thead, 'span[title="Importance"]');
+
+                if (importanceTitleSpan) {
+                    const headerAction = importanceTitleSpan.closest('a.slds-th__action');
+
+                    if (headerAction) {
+                        if (isAnyCaseExpiring) {
+                            headerAction.style.setProperty('background-color', 'red', 'important');
+                            headerAction.style.setProperty('color', 'white', 'important');
+
+                            const icon = headerAction.querySelector('lightning-primitive-icon svg');
+                            if(icon) icon.style.fill = 'white';
+                        } else {
+                            headerAction.style.removeProperty('background-color');
+                            headerAction.style.removeProperty('color');
+
+                            const icon = headerAction.querySelector('lightning-primitive-icon svg');
+                            if(icon) icon.style.fill = '';
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /**
