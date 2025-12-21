@@ -20,7 +20,7 @@
     const IS_UPS_WEB = CURRENT_HOST.includes('ups.com');
     const ALLOWED_ORIGIN = 'https://upsdrive.lightning.force.com';
 
-    console.log(`[Universal Receiver V13.3] 啟動於: ${CURRENT_HOST}`);
+    console.log(`[Universal Receiver V13] 啟動於: ${CURRENT_HOST}`);
     console.log(`[Mode] ${IS_IVP ? 'IVP Mode' : (IS_UPS_WEB ? 'UPS Web Mode' : 'Unknown Mode')}`);
 
     // --- 狀態變量 ---
