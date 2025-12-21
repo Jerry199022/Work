@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Case查重與指派分析
 // @namespace    Case duplicate and find A/C
-// @version      V8.2
+// @version      V9
 // @description  集成Case查重、指派分析(儀表盤可視化+雙向聯動+智能標記)、自動標示與緩存功能。
 // @author       Jerry Law
 // @match        https://upsdrive.lightning.force.com/lightning/*
@@ -138,7 +138,7 @@
          */
         init() {
             this.addStyles();
-            console.log('[Case助手 V8.2]：腳本已啟動。');
+            console.log('[Case助手 V9]：腳本已啟動。');
 
             const checkAndInject = () => {
                 // 防止重複注入
