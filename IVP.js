@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IVP顯示注釋
 // @namespace    IVP顯示注釋
-// @version      V7.14
+// @version      V8
 // @description  IVP顯示注釋、一眼模式、定義字體顏色。
 // @author       Jerry Law
 // @match        *://ivp.inside.ups.com/*
@@ -25,6 +25,8 @@
     // ================================================================
     const annotationsText = `
 #REC BY UPS|包裹已由UPS接收
+#TRADE INSPCT|政府檢查潛在的貿易違規行為
+#PHONE NO ANS|收件人沒有接聽電話
 #TPB WTC|第三方倉庫-自清關
 #PICKUP BY PACKAGE CAR|包裹由派送車輛取件
 #CLR AGY REJ|清關機構拒絕清關
@@ -1142,6 +1144,14 @@ PACKAGE WAS DRIVER RELEASED
                     font-size: 60% !important;
                 }
 
+                /* [新增] 針對 GSR Status 特定容器的佈局調整 */
+                /* 使用 :has 語法精確定位含有 GSR Status 結構的 container */
+                div.container:has(.row > .col-10.text-center) {
+                    margin-top: 67rem !important;
+                    position: relative; /* 確保 z-index 生效 */
+                    z-index: 5; /* 防止被遮擋 */
+                }
+
                 /* [新增] 壓縮按鈕尺寸 */
                 .btnsmall {
                     padding: .001rem .3rem!important;
@@ -1154,19 +1164,17 @@ PACKAGE WAS DRIVER RELEASED
                     margin-bottom: 7px;
                 }
 
-                /* 基礎隱藏與樣式微調 */
+                /* ... (保留你原有的其他樣式規則: 基礎隱藏、表格行高、Prev/Next 按鈕等) ... */
                 app-ivp-pd-trackingno-detail .ng-star-inserted > .row,
                 app-root > .ng-star-inserted > .row,
-                .ng-star-inserted.h5tracking, /* [增量添加] 在此處新增需要屏蔽的元素 */
+                .ng-star-inserted.h5tracking,
                 .footer { display: none !important; }
 
-                /* 極度壓縮表格行高 */
                 .table th, .table td {
                     padding-top: 0.01rem !important;
                     padding-bottom: 0.001rem !important;
                 }
 
-                /* 調整頂部標籤頁的樣式 */
                 .mat-tab-label {
                     height: 45px;
                     padding: 0 24px;
@@ -1182,33 +1190,29 @@ PACKAGE WAS DRIVER RELEASED
                     position: relative;
                 }
 
-                /* [修改] 微調 Movement 列表的頂部邊距 */
                 ${SELECTORS.fullViewMarginTarget} { margin-top: -2px !important; }
 
-                /* 究極佈局優化 */
-                /* 1. 為 Prev/Next 按鈕的父組件創建定位上下文 */
                 ${SELECTORS.movementComponent} {
                     position: relative !important;
-                    padding-bottom: 40px !important; /* 為懸浮按鈕留出空間 */
+                    padding-bottom: 40px !important;
                 }
-                /* 2. 讓 Prev/Next 容器脫離文檔流，並將其置於底部中央 */
-                /* [修改] 調整 Prev/Next 容器的邊距 */
+
                 ${SELECTORS.prevNextContainer} {
                     position: absolute !important;
                     margin: -5px !important;
                     left: 50% !important;
                     transform: translateX(-50%) !important;
-                    width: auto !important; /* 寬度自動收縮 */
-                    z-index: 10 !important; /* 確保在最上層 */
+                    width: auto !important;
+                    z-index: 10 !important;
                 }
-                /* [修改] 調整 Prev/Next 按鈕本身的內邊距 */
+
                 ${SELECTORS.prevNextContainer} .btn-prev-next {
                     padding-left: 64px !important;
                     padding-right: 83px !important;
                 }
-                /* 3. 鎖定底部功能按鈕的寬度，使其不再超出範圍 */
+
                 ${SELECTORS.footerButtons} {
-                    display: inline-flex !important; /* 關鍵：使其容器緊密包裹內容 */
+                    display: inline-flex !important;
                     align-items: center;
                     justify-content: center;
                 }
@@ -1279,9 +1283,12 @@ PACKAGE WAS DRIVER RELEASED
         fullViewBtn.addEventListener('click', () => {
             SCRIPT_STATE.isFullViewModeActive = !SCRIPT_STATE.isFullViewModeActive;
             GM_setValue('fullViewMode', SCRIPT_STATE.isFullViewModeActive);
+            SCRIPT_STATE.annotationsAreVisible = SCRIPT_STATE.isFullViewModeActive;
             updateFullViewButton();
             applyOrRemoveFullViewStyles();
             triggerSeamlessHeightAdjustment();
+            updateToggleButton();
+            syncBodyClasses();
         });
 
         const settingsBtn = document.createElement('button');
