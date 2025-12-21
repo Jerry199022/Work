@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CEC功能強化
 // @namespace    CEC Enhanced
-// @version      V57
+// @version      V58
 // @description  快捷操作按鈕、自動指派、IVP快速查詢、聯繫人彈窗優化、按鈕警示色、賬戶檢測、組件屏蔽、設置菜單、自動IVP查詢、URL精準匹配、快捷按鈕可編輯、(Related Cases)數據提取與增強排序功能、關聯案件提取器、回覆case快捷按鈕、已跟進case提示、全局暫停/恢復功能。
 // @author       Jerry Law
 // @match        https://upsdrive.lightning.force.com/*
@@ -18,10 +18,11 @@
 // ==/UserScript==
 
 /*
-V56 > V57
+V56 > V58
 更新內容：
 -自動繁簡轉換
 -快過期case提示
+-添加官網快速查詢
 
 V55 > V56
 更新內容：
@@ -108,6 +109,7 @@ V53 > V54
         sentinelCloseEnabled: true,
         blockIVPCard: false,
         autoIVPQueryEnabled: false,
+        autoWebQueryEnabled: false,
         accountHighlightMode: 'pca',
         richTextEditorHeight: 500,
         caseDescriptionHeight: 160,
@@ -234,6 +236,7 @@ V53 > V54
     let lastUrl = '';
     let foundTrackingNumber = null;
     let ivpWindowHandle = null;
+    let webWindowHandle = null;
     let globalToastTimer = null;
     let globalScannerId = null;
     const processedModals = new WeakSet();
@@ -1116,6 +1119,9 @@ V53 > V54
                             <div class="cec-settings-section">
                                 <h3 class="cec-settings-section-title">IVP 查詢優化</h3>
                                 <div class="cec-settings-option">
+                                    <div class="cec-settings-option-main"><label for="autoWebQueryToggle" class="cec-settings-label">進入Case頁面自動查詢Web</label><label class="cec-settings-switch"><input type="checkbox" id="autoWebQueryToggle"><span class="cec-settings-slider"></span></label></div>
+                                </div>
+                                <div class="cec-settings-option">
                                     <div class="cec-settings-option-main"><label for="autoIVPQueryToggle" class="cec-settings-label">進入Case頁面自動查詢IVP</label><label class="cec-settings-switch"><input type="checkbox" id="autoIVPQueryToggle"><span class="cec-settings-slider"></span></label></div>
                                 </div>
                                 <div class="cec-settings-option">
@@ -1125,6 +1131,7 @@ V53 > V54
                                     <div class="cec-settings-option-main"><label for="blockIVPToggle" class="cec-settings-label">屏蔽原生IVP卡片自動加載</label><label class="cec-settings-switch"><input type="checkbox" id="blockIVPToggle"><span class="cec-settings-slider"></span></label></div>
                                 </div>
                             </div>
+
                             <div class="cec-settings-section">
                                 <h3 class="cec-settings-section-title">模板插入優化</h3>
                                 <div class="cec-settings-option">
@@ -1668,6 +1675,15 @@ V53 > V54
             const value = autoAssignUserInput.value.trim();
             GM_setValue('autoAssignUser', value);
             Log.info('UI.Settings', `設置已保存: autoAssignUser = ${value}`);
+            showToast();
+        };
+
+        const autoWebQueryToggle = document.getElementById('autoWebQueryToggle');
+        autoWebQueryToggle.checked = GM_getValue('autoWebQueryEnabled', DEFAULTS.autoWebQueryEnabled);
+        autoWebQueryToggle.onchange = () => {
+            const value = autoWebQueryToggle.checked;
+            GM_setValue('autoWebQueryEnabled', value);
+            Log.info('UI.Settings', `設置已保存: autoWebQueryEnabled = ${value}`);
             showToast();
         };
 
@@ -2898,49 +2914,76 @@ V53 > V54
     }
 
     /**
-     * @description 從頁面中提取追踪號碼，並觸發自動IVP查詢（如果已啟用）。
+     * @description 從頁面中提取追踪號碼，並觸發自動IVP/Web查詢（如果已啟用）。
      */
     async function extractTrackingNumberAndTriggerIVP() {
         const TRACKING_CACHE_KEY = 'trackingNumberLog';
         const CACHE_TTL_MS = 60 * 60 * 1000; // 60分鐘: 追踪號緩存有效期。
         const caseId = getCaseIdFromUrl(location.href);
         if (!caseId) {
-            Log.warn('Feature.IVP', `無法從當前 URL 提取 Case ID，追踪號緩存功能跳過。`);
+            Log.warn('Feature.Query', `無法從當前 URL 提取 Case ID，追踪號緩存功能跳過。`);
             return;
         }
 
         const cache = GM_getValue(TRACKING_CACHE_KEY, {});
         const entry = cache[caseId];
 
+        // 輔助函數：執行所有啟用的自動查詢
+        const triggerAutoQueries = async () => {
+            // 1. 啟動 Web 查詢
+            await autoQueryWebOnLoad();
+
+            // 2. 啟動 IVP 查詢
+            await autoQueryIVPOnLoad();
+
+            // 3. [核心修復] 焦點強制鎖定機制
+            // 原因：Web 端的接收器腳本在填寫輸入框時會執行 focus()，這會導致 Web 窗口後發制人搶走焦點。
+            // 對策：我們在多個時間點強制將 IVP 窗口拉回最前，覆蓋 Web 的搶佔行為。
+            if (ivpWindowHandle && !ivpWindowHandle.closed) {
+                // (A) 立即聚焦
+                ivpWindowHandle.focus();
+
+                // (B) 500ms 後再次聚焦 (應對快速加載的 Web)
+                setTimeout(() => {
+                    if(ivpWindowHandle && !ivpWindowHandle.closed) ivpWindowHandle.focus();
+                }, 100);
+
+                // (C) 1500ms 後最終聚焦 (應對慢速加載的 Web)
+                setTimeout(() => {
+                    if(ivpWindowHandle && !ivpWindowHandle.closed) ivpWindowHandle.focus();
+                }, 500);
+            }
+        };
+
         if (entry && (Date.now() - entry.timestamp < CACHE_TTL_MS)) {
             foundTrackingNumber = entry.trackingNumber;
-            Log.info('Feature.IVP', `從緩存中成功讀取追踪號 (Case ID: ${caseId}): ${foundTrackingNumber}`);
-            autoQueryIVPOnLoad();
+            Log.info('Feature.Query', `從緩存中成功讀取追踪號 (Case ID: ${caseId}): ${foundTrackingNumber}`);
+            triggerAutoQueries();
             return;
         }
 
         const trackingRegex = /(1Z[A-Z0-9]{16})/;
         const selector = 'td[data-label="IDENTIFIER VALUE"] a, a[href*="/lightning/r/Shipment_Identifier"]';
         try {
-            const element = await waitForElement(document.body, selector, 10000); // 10000ms: 等待追踪號元素的超時。
+            const element = await waitForElement(document.body, selector, 10000);
             if (element && element.textContent) {
                 const match = element.textContent.trim().match(trackingRegex);
                 if (match) {
                     const extractedNumber = match[0];
-                    Log.info('Feature.IVP', `成功提取追踪號: ${extractedNumber}`);
+                    Log.info('Feature.Query', `成功提取追踪號: ${extractedNumber}`);
                     foundTrackingNumber = extractedNumber;
                     cache[caseId] = {
                         trackingNumber: extractedNumber,
                         timestamp: Date.now()
                     };
                     GM_setValue(TRACKING_CACHE_KEY, cache);
-                    Log.info('Feature.IVP', `追踪號已為 Case ID ${caseId} 寫入緩存，有效期30分鐘。`);
+                    Log.info('Feature.Query', `追踪號已為 Case ID ${caseId} 寫入緩存，有效期60分鐘。`);
 
-                    autoQueryIVPOnLoad();
+                    triggerAutoQueries();
                 }
             }
         } catch (error) {
-            Log.warn('Feature.IVP', `在10秒內未找到追踪號元素，自動IVP查詢將不會觸發。`);
+            Log.warn('Feature.Query', `在10秒內未找到追踪號元素，自動查詢將不會觸發。`);
         }
     }
 
@@ -3509,6 +3552,48 @@ V53 > V54
             }
         } catch (err) {
             Log.error('Feature.IVP', `自動查詢IVP時發生未知錯誤: ${err.message}`);
+        }
+    }
+
+    /**
+     * @description [新增] 如果啟用了自動 Web 查詢，則在頁面加載並提取到追踪號後，自動向 UPS Web 窗口發送查詢請求。
+     */
+    async function autoQueryWebOnLoad() {
+        if (!GM_getValue('autoWebQueryEnabled', DEFAULTS.autoWebQueryEnabled)) {
+            return;
+        }
+        if (!foundTrackingNumber) {
+            return;
+        }
+        Log.info('Feature.Web', `檢測到追踪號: ${foundTrackingNumber}，觸發自動 Web 查詢。`);
+        try {
+            const webUrl = 'https://www.ups.com/track?loc=zh_HK&requester=ST/';
+
+            if (!webWindowHandle || webWindowHandle.closed) {
+                webWindowHandle = window.open(webUrl, 'ups_web_window');
+            }
+            if (!webWindowHandle) {
+                Log.error('Feature.Web', `打開 UPS Web 窗口失敗，可能已被瀏覽器攔截。`);
+                return;
+            }
+
+            const messagePayload = {
+                type: 'CEC_SEARCH_REQUEST',
+                payload: {
+                    trackingNumber: foundTrackingNumber,
+                    timestamp: Date.now()
+                }
+            };
+
+            sendMessageWithRetries(webWindowHandle, messagePayload, 'https://www.ups.com');
+            Log.info('Feature.Web', `查詢請求已發送至 UPS Web 窗口。`);
+
+            // 注意：自動查詢通常不強制奪取焦點，以免干擾用戶在 Case 頁面的操作
+            // 如果需要強制聚焦，可以取消下面這行的註釋
+            // webWindowHandle.focus();
+
+        } catch (err) {
+            Log.error('Feature.Web', `自動查詢 Web 時發生未知錯誤: ${err.message}`);
         }
     }
 
@@ -4755,11 +4840,9 @@ V53 > V54
         once: true,
         handler: (datatableContainer) => {
             const shadowRoot = datatableContainer.shadowRoot;
-            if (!shadowRoot) {
-                return;
-            }
+            if (!shadowRoot) return;
 
-            const POLL_INTERVAL = 300; // 300ms: 輪詢間隔，探測按鈕是否已渲染。
+            const POLL_INTERVAL = 300;
             const MAX_ATTEMPTS = 50;
             let attempts = 0;
 
@@ -4770,6 +4853,7 @@ V53 > V54
                 if (copyButtons.length > 0) {
                     clearInterval(poller);
 
+                    // --- 1. 注入按鈕邏輯 (保持不變) ---
                     let injectedCount = 0;
                     const MAX_BUTTONS = 10;
                     const allRows = findAllElementsInShadows(shadowRoot, 'tr');
@@ -4781,18 +4865,77 @@ V53 > V54
                         const copyButtonInRow = findElementInShadows(row, 'button[name="copyIdentifier"]');
                         if (copyButtonInRow) {
                             const cellWrapper = copyButtonInRow.closest("lightning-primitive-cell-button");
-                            if (cellWrapper && !cellWrapper.previousElementSibling?.classList.contains("custom-s-button")) {
+                            if (cellWrapper && !cellWrapper.parentElement.querySelector('.custom-s-button')) {
+
+                                // 創建 IVP 按鈕
                                 const ivpButton = document.createElement("button");
                                 ivpButton.textContent = "IVP";
                                 ivpButton.className = "slds-button slds-button_icon slds-button_icon-brand custom-s-button";
-                                ivpButton.style.marginRight = "4px";
+                                ivpButton.dataset.target = "ivp";
+                                ivpButton.style.marginRight = "-2px";
                                 ivpButton.style.fontWeight = 'bold';
-                                cellWrapper.parentElement.insertBefore(ivpButton, cellWrapper);
+
+                                // 創建 Web 按鈕
+                                const webButton = document.createElement("button");
+                                webButton.textContent = "Web";
+                                webButton.className = "slds-button slds-button_icon slds-button_icon-brand custom-s-button";
+                                webButton.dataset.target = "web";
+                                webButton.style.marginRight = "2px";
+                                webButton.style.fontWeight = 'bold';
+
+                                // 插入 DOM
+                                cellWrapper.parentElement.insertBefore(webButton, cellWrapper);
+                                cellWrapper.parentElement.insertBefore(ivpButton, webButton);
+
                                 row.setAttribute('data-ivp-processed', 'true');
                                 injectedCount++;
                             }
                         }
                     }
+
+                    // --- 2. [新增] 調整表頭寬度邏輯 ---
+                    const adjustColumnWidths = () => {
+                        const targetSelectors = [
+                            'th[aria-label="COPY"]',
+                            'th[aria-label="DATE ADDED"]'
+                        ];
+
+                        targetSelectors.forEach(selector => {
+                            const th = shadowRoot.querySelector(selector);
+                            if (th) {
+                                const TARGET_WIDTH = '90px';
+
+                                // 1. 修改最外層 TH
+                                th.style.width = TARGET_WIDTH;
+                                th.style.minWidth = TARGET_WIDTH;
+                                th.style.maxWidth = TARGET_WIDTH;
+
+                                // 2. 修改內部的 Factory 組件
+                                const factory = th.querySelector('lightning-primitive-header-factory');
+                                if (factory) {
+                                    factory.style.width = TARGET_WIDTH;
+                                }
+
+                                // 3. 遞歸修改內部所有帶有固定寬度的容器 (div, span, a)
+                                // Salesforce 的結構很深，通常寬度會寫在內層的 div 或 a 標籤上
+                                const innerElements = th.querySelectorAll('[style*="width"]');
+                                innerElements.forEach(el => {
+                                    // 為了安全，我們只修改那些寬度接近原始值 (94px/95px) 的元素
+                                    // 避免誤傷圖標等小元素
+                                    const currentStyle = el.style.width;
+                                    if (currentStyle.includes('94px') || currentStyle.includes('95px')) {
+                                        el.style.width = TARGET_WIDTH;
+                                    }
+                                });
+
+                                Log.info('UI.Enhancement', `已調整表頭寬度: ${selector} -> ${TARGET_WIDTH}`);
+                            }
+                        });
+                    };
+
+                    // 執行寬度調整
+                    adjustColumnWidths();
+
                     return;
                 }
 
@@ -4924,6 +5067,7 @@ V53 > V54
         document.body.addEventListener('click', (event) => {
             if (isScriptPaused) return;
 
+            // --- 1. 處理郵件編輯器觸發按鈕 (Compose, Reply All, Write email) ---
             const composeButton = event.target.closest('button.testid__dummy-button-submit-action');
             const replyAllButton = event.target.closest('a[title="Reply All"]');
             const writeEmailButton = event.target.closest('button[title="Write an email..."]');
@@ -4933,23 +5077,24 @@ V53 > V54
                 Log.info('UI.Enhancement', `檢測到 ${triggerName} 按鈕點擊，準備注入模板快捷按鈕。`);
                 setTimeout(() => {
                     handleEditorReadyForTemplateButtons();
-                }, 300); // 100ms: 短暫延遲以確保編輯器容器開始渲染。
+                }, 300);
             }
 
+            // --- 2. 處理關聯聯繫人按鈕 (Associate Contact) ---
             const associateButton = event.target.closest('button[title="Associate Contact"], a[title="Associate Contact"]');
             if (associateButton) {
                 waitForElementWithObserver(document.body, '.slds-modal__container', 10000).then(modal => {
                     processAssociateContactModal(modal);
-                }).catch(error => {
-                    // 忽略錯誤
-                });
+                }).catch(error => { /* 忽略錯誤 */ });
                 return;
             }
 
-            const ivpButton = event.target.closest('.custom-s-button');
-            if (ivpButton) {
-                const row = ivpButton.closest('tr');
+            // --- 3. 處理自定義查詢按鈕 (IVP / Web) ---
+            const actionButton = event.target.closest('.custom-s-button');
+            if (actionButton) {
+                const row = actionButton.closest('tr');
                 if (!row) return;
+
                 let trackingNumber = null;
                 for (const link of findAllElementsInShadows(row, 'a')) {
                     const match = link.textContent.match(/1Z[A-Z0-9]{16}/);
@@ -4958,33 +5103,55 @@ V53 > V54
                         break;
                     }
                 }
+
                 if (!trackingNumber) {
+                    Log.warn('Feature.Query', '未在當前行提取到有效的 1Z 追踪號。');
                     return;
                 }
-                Log.info('Feature.IVP', `手動點擊 IVP 按鈕，查詢追踪號: ${trackingNumber}。`);
-                try {
-                    if (!ivpWindowHandle || ivpWindowHandle.closed) {
-                        ivpWindowHandle = window.open('https://ivp.inside.ups.com/internal-visibility-portal', 'ivp_window');
-                    }
-                    if (!ivpWindowHandle) {
-                        Log.error('Feature.IVP', `打開 IVP 窗口失敗，可能已被瀏覽器攔截。`);
-                        alert('CEC 功能強化：打開 IVP 窗口失敗，可能已被瀏覽器攔截。請為此網站允許彈窗。');
-                        return;
-                    }
-                    const messagePayload = {
-                        type: 'CEC_SEARCH_REQUEST',
-                        payload: {
-                            trackingNumber: trackingNumber,
-                            timestamp: Date.now()
+
+                const targetType = actionButton.dataset.target;
+                const timestamp = Date.now();
+                const messagePayload = {
+                    type: 'CEC_SEARCH_REQUEST',
+                    payload: { trackingNumber, timestamp }
+                };
+
+                // 分支 A: 執行 IVP 查詢
+                if (targetType === 'ivp') {
+                    Log.info('Feature.IVP', `手動點擊 IVP 按鈕，查詢追踪號: ${trackingNumber}。`);
+                    try {
+                        if (!ivpWindowHandle || ivpWindowHandle.closed) {
+                            ivpWindowHandle = window.open('https://ivp.inside.ups.com/internal-visibility-portal', 'ivp_window');
                         }
-                    };
-                    sendMessageWithRetries(ivpWindowHandle, messagePayload, 'https://ivp.inside.ups.com');
-                    Log.info('Feature.IVP', `查詢請求已發送至 IVP 窗口。`);
-                    if (GM_getValue('autoSwitchEnabled', DEFAULTS.autoSwitchEnabled)) {
+                        if (!ivpWindowHandle) {
+                            alert('CEC 功能強化：打開 IVP 窗口失敗，請允許彈窗。');
+                            return;
+                        }
+                        sendMessageWithRetries(ivpWindowHandle, messagePayload, 'https://ivp.inside.ups.com');
+
+                        // [修改點] 移除 GM_getValue 檢查，改為強制聚焦，與 Web 按鈕保持一致
                         ivpWindowHandle.focus();
-                    }
-                } catch (err) {
-                    // 忽略錯誤
+
+                    } catch (err) { Log.error('Feature.IVP', err.message); }
+                }
+                // 分支 B: 執行 UPS Web 查詢
+                else if (targetType === 'web') {
+                    Log.info('Feature.Web', `手動點擊 Web 按鈕，查詢追踪號: ${trackingNumber}。`);
+                    try {
+                        const webUrl = 'https://www.ups.com/track?loc=zh_HK&requester=ST/';
+                        if (!webWindowHandle || webWindowHandle.closed) {
+                            webWindowHandle = window.open(webUrl, 'ups_web_window');
+                        }
+                        if (!webWindowHandle) {
+                            alert('CEC 功能強化：打開 UPS Web 窗口失敗，請允許彈窗。');
+                            return;
+                        }
+                        sendMessageWithRetries(webWindowHandle, messagePayload, 'https://www.ups.com');
+
+                        // Web 模式強制聚焦
+                        webWindowHandle.focus();
+
+                    } catch (err) { Log.error('Feature.Web', err.message); }
                 }
             }
         }, true);
