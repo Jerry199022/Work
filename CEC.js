@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CEC功能強化
 // @namespace    CEC Enhanced
-// @version      V58
+// @version      V59
 // @description  快捷操作按鈕、自動指派、IVP快速查詢、聯繫人彈窗優化、按鈕警示色、賬戶檢測、組件屏蔽、設置菜單、自動IVP查詢、URL精準匹配、快捷按鈕可編輯、(Related Cases)數據提取與增強排序功能、關聯案件提取器、回覆case快捷按鈕、已跟進case提示、全局暫停/恢復功能。
 // @author       Jerry Law
 // @match        https://upsdrive.lightning.force.com/*
@@ -2249,9 +2249,9 @@ V53 > V54
                         const img = findElementInShadows(richText, 'img');
                         // 只有當圖片存在(非空白)時才進行檢查
                         if (img) {
-                            const altText = img.getAttribute('alt');
+                            const altText = img.getAttribute('src');
                             // 如果有圖片，且含義不是 Priority，則視為需要警示
-                            if (altText && altText !== 'Priority') {
+                            if (altText && altText !== '/resource/CEC_Commitment_Priority_4_IMG') {
                                 isAnyCaseExpiring = true;
                             }
                         }
