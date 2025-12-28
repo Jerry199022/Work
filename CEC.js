@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CEC功能強化
 // @namespace    CEC Enhanced
-// @version      V60
+// @version      V61
 // @description  快捷操作按鈕、自動指派、IVP快速查詢、聯繫人彈窗優化、按鈕警示色、賬戶檢測、組件屏蔽、設置菜單、自動IVP查詢、URL精準匹配、快捷按鈕可編輯、(Related Cases)數據提取與增強排序功能、關聯案件提取器、回覆case快捷按鈕、已跟進case提示、全局暫停/恢復功能。
 // @author       Jerry Law
 // @match        https://upsdrive.lightning.force.com/*
@@ -18,7 +18,11 @@
 // ==/UserScript==
 
 /*
-V56 > V60
+V58 > V61
+更新內容：
+-優化完善繁簡轉換
+
+V56 > V58
 更新內容：
 -自動繁簡轉換
 -快過期case提示
@@ -379,7 +383,8 @@ V53 > V54
     }
 
     /**
-     * @description [新增] 繁簡轉換的核心引擎，採用高效的字符串索引映射。
+     * @description 繁簡轉換引擎，增加詞組修正功能 (Phrase-Based Patching)。
+     *              修復了「一簡多繁」或特定詞彙（如系統/系统）的轉換歧義問題。
      */
     const ChineseConverter = {
         s_chars: null,
@@ -387,12 +392,20 @@ V53 > V54
         s2t_map: null,
         t2s_map: null,
 
-        // 初始化數據，採用 chinese-s2t 的高效字符串索引映射方式
-        init: function() {
-            this.s_chars = '钟系万与丑专业丛东丝丢两严丧个丬丰临为丽举么义乌乐乔习乡书买乱争于亏云亘亚产亩亲亵亸亿仅从仑仓仪们价众优伙会伛伞伟传伤伥伦伧伪伫体余佣佥侠侣侥侦侧侨侩侪侬俣俦俨俩俪俭债倾偬偻偾偿傥傧储傩儿兑兖党兰关兴兹养兽冁内冈册写军农冢冯冲决况冻净凄凉凌减凑凛几凤凫凭凯击凼凿刍划刘则刚创删别刬刭刽刿剀剂剐剑剥剧劝办务劢动励劲劳势勋勐勚匀匦匮区医华协单卖卢卤卧卫却卺厂厅历厉压厌厍厕厢厣厦厨厩厮县参叆叇双发变叙叠叶号叹叽吁后吓吕吗吣吨听启吴呒呓呕呖呗员呙呛呜咏咔咙咛咝咤咴咸哌响哑哒哓哔哕哗哙哜哝哟唛唝唠唡唢唣唤唿啧啬啭啮啰啴啸喷喽喾嗫呵嗳嘘嘤嘱噜噼嚣嚯团园囱围囵国图圆圣圹场坂坏块坚坛坜坝坞坟坠垄垅垆垒垦垧垩垫垭垯垱垲垴埘埙埚埝埯堑堕塆墙壮声壳壶壸处备复够头夸夹夺奁奂奋奖奥妆妇妈妩妪妫姗姜娄娅娆娇娈娱娲娴婳婴婵婶媪嫒嫔嫱嬷孙学孪宁宝实宠审宪宫宽宾寝对寻导寿将尔尘尧尴尸尽层屃屉届属屡屦屿岁岂岖岗岘岙岚岛岭岳岽岿峃峄峡峣峤峥峦崂崃崄崭嵘嵚嵛嵝嵴巅巩巯币帅师帏帐帘帜带帧帮帱帻帼幂幞干并广庄庆庐庑库应庙庞废庼廪开异弃张弥弪弯弹强归当录彟彦彻径徕御忆忏忧忾怀态怂怃怄怅怆怜总怼怿恋恳恶恸恹恺恻恼恽悦悫悬悭悯惊惧惨惩惫惬惭惮惯愍愠愤愦愿慑慭憷懑懒懔戆戋戏戗战戬户扎扑扦执扩扪扫扬扰抚抛抟抠抡抢护报担拟拢拣拥拦拧拨择挂挚挛挜挝挞挟挠挡挢挣挤挥挦捞损捡换捣据捻掳掴掷掸掺掼揸揽揿搀搁搂搅携摄摅摆摇摈摊撄撑撵撷撸撺擞攒敌敛数斋斓斗斩断无旧时旷旸昙昼昽显晋晒晓晔晕晖暂暧札术朴机杀杂权条来杨杩杰极构枞枢枣枥枧枨枪枫枭柜柠柽栀栅标栈栉栊栋栌栎栏树栖样栾桊桠桡桢档桤桥桦桧桨桩梦梼梾检棂椁椟椠椤椭楼榄榇榈榉槚槛槟槠横樯樱橥橱橹橼檐檩欢欤欧歼殁殇残殒殓殚殡殴毁毂毕毙毡毵氇气氢氩氲汇汉污汤汹沓沟没沣沤沥沦沧沨沩沪沵泞泪泶泷泸泺泻泼泽泾洁洒洼浃浅浆浇浈浉浊测浍济浏浐浑浒浓浔浕涂涌涛涝涞涟涠涡涢涣涤润涧涨涩淀渊渌渍渎渐渑渔渖渗温游湾湿溃溅溆溇滗滚滞滟滠满滢滤滥滦滨滩滪漤潆潇潋潍潜潴澜濑濒灏灭灯灵灾灿炀炉炖炜炝点炼炽烁烂烃烛烟烦烧烨烩烫烬热焕焖焘煅煳熘爱爷牍牦牵牺犊犟状犷犸犹狈狍狝狞独狭狮狯狰狱狲猃猎猕猡猪猫猬献獭玑玙玚玛玮环现玱玺珉珏珐珑珰珲琎琏琐琼瑶瑷璇璎瓒瓮瓯电画畅畲畴疖疗疟疠疡疬疮疯疱疴痈痉痒痖痨痪痫痴瘅瘆瘗瘘瘪瘫瘾瘿癞癣癫癯皑皱皲盏盐监盖盗盘眍眦眬着睁睐睑瞒瞩矫矶矾矿砀码砖砗砚砜砺砻砾础硁硅硕硖硗硙硚确硷碍碛碜碱碹磙礼祎祢祯祷祸禀禄禅离秃秆种积称秽秾稆税稣稳穑穷窃窍窑窜窝窥窦窭竖竞笃笋笔笕笺笼笾筑筚筛筜筝筹签简箓箦箧箨箩箪箫篑篓篮篱簖籁籴类籼粜粝粤粪粮糁糇紧絷纟纠纡红纣纤纥约级纨纩纪纫纬纭纮纯纰纱纲纳纴纵纶纷纸纹纺纻纼纽纾线绀绁绂练组绅细织终绉绊绋绌绍绎经绐绑绒结绔绕绖绗绘给绚绛络绝绞统绠绡绢绣绤绥绦继绨绩绪绫绬续绮绯绰绱绲绳维绵绶绷绸绹绺绻综绽绾绿缀缁缂缃缄缅缆缇缈缉缊缋缌缍缎缏缐缑缒缓缔缕编缗缘缙缚缛缜缝缞缟缠缡缢缣缤缥缦缧缨缩缪缫缬缭缮缯缰缱缲缳缴缵罂网罗罚罢罴羁羟羡翘翙翚耢耧耸耻聂聋职聍联聩聪肃肠肤肷肾肿胀胁胆胜胧胨胪胫胶脉脍脏脐脑脓脔脚脱脶脸腊腌腘腭腻腼腽腾膑臜舆舣舰舱舻艰艳艹艺节芈芗芜芦苁苇苈苋苌苍苎苏苘苹茎茏茑茔茕茧荆荐荙荚荛荜荞荟荠荡荣荤荥荦荧荨荩荪荫荬荭荮药莅莜莱莲莳莴莶获莸莹莺莼萚萝萤营萦萧萨葱蒇蒉蒋蒌蓝蓟蓠蓣蓥蓦蔷蔹蔺蔼蕲蕴薮藁藓虏虑虚虫虬虮虽虾虿蚀蚁蚂蚕蚝蚬蛊蛎蛏蛮蛰蛱蛲蛳蛴蜕蜗蜡蝇蝈蝉蝎蝼蝾螀螨蟏衅衔补衬衮袄袅袆袜袭袯装裆裈裢裣裤裥褛褴襁襕见观觃规觅视觇览觉觊觋觌觍觎觏觐觑觞触觯詟誉誊讠计订讣认讥讦讧讨让讪讫训议讯记讱讲讳讴讵讶讷许讹论讻讼讽设访诀证诂诃评诅识诇诈诉诊诋诌词诎诏诐译诒诓诔试诖诗诘诙诚诛诜话诞诟诠诡询诣诤该详诧诨诩诪诫诬语诮误诰诱诲诳说诵诶请诸诹诺读诼诽课诿谀谁谂调谄谅谆谇谈谊谋谌谍谎谏谐谑谒谓谔谕谖谗谘谙谚谛谜谝谞谟谠谡谢谣谤谥谦谧谨谩谪谫谬谭谮谯谰谱谲谳谴谵谶谷豮贝贞负贠贡财责贤败账货质贩贪贫贬购贮贯贰贱贲贳贴贵贶贷贸费贺贻贼贽贾贿赀赁赂赃资赅赆赇赈赉赊赋赌赍赎赏赐赑赒赓赔赕赖赗赘赙赚赛赜赝赞赟赠赡赢赣赪赵赶趋趱趸跃跄跖跞践跶跷跸跹跻踊踌踪踬踯蹑蹒蹰蹿躏躜躯车轧轨轩轪轫转轭轮软轰轱轲轳轴轵轶轷轸轹轺轻轼载轾轿辀辁辂较辄辅辆辇辈辉辊辋辌辍辎辏辐辑辒输辔辕辖辗辘辙辚辞辩辫边辽达迁过迈运还这进远违连迟迩迳迹适选逊递逦逻遗遥邓邝邬邮邹邺邻郁郄郏郐郑郓郦郧郸酝酦酱酽酾酿释里鉅鉴銮錾钆钇针钉钊钋钌钍钎钏钐钑钒钓钔钕钖钗钘钙钚钛钝钞钟钠钡钢钣钤钥钦钧钨钩钪钫钬钭钮钯钰钱钲钳钴钵钶钷钸钹钺钻钼钽钾钿铀铁铂铃铄铅铆铈铉铊铋铍铎铏铐铑铒铕铗铘铙铚铛铜铝铞铟铠铡铢铣铤铥铦铧铨铪铫铬铭铮铯铰铱铲铳铴铵银铷铸铹铺铻铼铽链铿销锁锂锃锄锅锆锇锈锉锊锋锌锍锎锏锐锑锒锓锔锕锖锗错锚锜锞锟锠锡锢锣锤锥锦锨锩锫锬锭键锯锰锱锲锳锴锵锶锷锸锹锺锻锼锽锾锿镀镁镂镃镆镇镈镉镊镌镍镎镏镐镑镒镕镖镗镙镚镛镜镝镞镟镠镡镢镣镤镥镦镧镨镩镪镫镬镭镮镯镰镱镲镳镴镶长门闩闪闫闬闭问闯闰闱闲闳间闵闶闷闸闹闺闻闼闽闾闿阀阁阂阃阄阅阆阇阈阉阊阋阌阍阎阏阐阑阒阓阔阕阖阗阘阙阚阛队阳阴阵阶际陆陇陈陉陕陧陨险随隐隶隽难雏雠雳雾霁霉霭靓静靥鞑鞒鞯鞴韦韧韨韩韪韫韬韵页顶顷顸项顺须顼顽顾顿颀颁颂颃预颅领颇颈颉颊颋颌颍颎颏颐频颒颓颔颕颖颗题颙颚颛颜额颞颟颠颡颢颣颤颥颦颧风飏飐飑飒飓飔飕飖飗飘飙飚飞飨餍饤饥饦饧饨饩饪饫饬饭饮饯饰饱饲饳饴饵饶饷饸饹饺饻饼饽饾饿馀馁馂馃馄馅馆馇馈馉馊馋馌馍馎馏馐馑馒馓馔馕马驭驮驯驰驱驲驳驴驵驶驷驸驹驺驻驼驽驾驿骀骁骂骃骄骅骆骇骈骉骊骋验骍骎骏骐骑骒骓骔骕骖骗骘骙骚骛骜骝骞骟骠骡骢骣骤骥骦骧髅髋髌鬓魇魉鱼鱽鱾鱿鲀鲁鲂鲄鲅鲆鲇鲈鲉鲊鲋鲌鲍鲎鲏鲐鲑鲒鲓鲔鲕鲖鲗鲘鲙鲚鲛鲜鲝鲞鲟鲠鲡鲢鲣鲤鲥鲦鲧鲨鲩鲪鲫鲬鲭鲮鲯鲰鲱鲲鲳鲴鲵鲶鲷鲸鲹鲺鲻鲼鲽鲾鲿鳀鳁鳂鳃鳄鳅鳆鳇鳈鳉鳊鳋鳌鳍鳎鳏鳐鳑鳒鳓鳔鳕鳖鳗鳘鳙鳛鳜鳝鳞鳟鳠鳡鳢鳣鸟鸠鸡鸢鸣鸤鸥鸦鸧鸨鸩鸪鸫鸬鸭鸮鸯鸰鸱鸲鸳鸴鸵鸶鸷鸸鸹鸺鸻鸼鸽鸾鸿鹀鹁鹂鹃鹄鹅鹆鹇鹈鹉鹊鹋鹌鹍鹎鹏鹐鹑鹒鹓鹔鹕鹖鹗鹘鹚鹛鹜鹝鹞鹟鹠鹡鹢鹣鹤鹥鹦鹧鹨鹩鹪鹫鹬鹭鹯鹰鹱鹲鹳鹴鹾麦麸黄黉黡黩黪黾鼋鼌鼍鼗鼹齄齐齑齿龀龁龂龃龄龅龆龇龈龉龊龋龌龙龚龛龟志制咨只里范松没尝尝闹面准钟别闲乾尽脏拼';
-            this.t_chars = '鐘繫萬與醜專業叢東絲丟兩嚴喪個丬豐臨爲麗舉麼義烏樂喬習鄉書買亂爭於虧雲亙亞產畝親褻嚲億僅從侖倉儀們價衆優夥會傴傘偉傳傷倀倫傖僞佇體餘傭僉俠侶僥偵側僑儈儕儂俁儔儼倆儷儉債傾傯僂僨償儻儐儲儺兒兌兗黨蘭關興茲養獸囅內岡冊寫軍農冢馮沖決況凍淨淒涼凌減湊凜幾鳳鳧憑凱擊凼鑿芻劃劉則剛創刪別剗剄劊劌剴劑剮劍剝劇勸辦務勱動勵勁勞勢勳勐勩勻匭匱區醫華協單賣盧滷臥衛卻巹廠廳歷厲壓厭厙廁廂厴廈廚廄廝縣參靉靆雙發變敘疊葉號嘆嘰籲後嚇呂嗎唚噸聽啓吳嘸囈嘔嚦唄員咼嗆嗚詠咔嚨嚀噝吒咴鹹哌響啞噠嘵嗶噦譁噲嚌噥喲嘜嗊嘮啢嗩唣喚唿嘖嗇囀齧囉嘽嘯噴嘍嚳囁呵噯噓嚶囑嚕噼囂嚯團園囪圍圇國圖圓聖壙場阪壞塊堅壇壢壩塢墳墜壟壠壚壘墾垧堊墊埡墶壋塏堖塒壎堝埝垵塹墮壪牆壯聲殼壺壼處備復夠頭誇夾奪奩奐奮獎奧妝婦媽嫵嫗嬀姍姜婁婭嬈嬌孌娛媧嫺嫿嬰嬋嬸媼嬡嬪嬙嬤孫學孿寧寶實寵審憲宮寬賓寢對尋導壽將爾塵堯尷屍盡層屓屜屆屬屢屨嶼歲豈嶇崗峴嶴嵐島嶺嶽崬巋嶨嶧峽嶢嶠崢巒嶗崍嶮嶄嶸嶔嵛嶁嵴巔鞏巰幣帥師幃帳簾幟帶幀幫幬幘幗冪襆幹並廣莊慶廬廡庫應廟龐廢廎廩開異棄張彌弳彎彈強歸當錄彠彥徹徑徠御憶懺憂愾懷態慫憮慪悵愴憐總懟懌戀懇惡慟懨愷惻惱惲悅愨懸慳憫驚懼慘懲憊愜慚憚慣愍慍憤憒願懾憖憷懣懶懍戇戔戲戧戰戩戶扎撲扦執擴捫掃揚擾撫拋摶摳掄搶護報擔擬攏揀擁攔擰撥擇掛摯攣掗撾撻挾撓擋撟掙擠揮撏撈損撿換搗據捻擄摑擲撣摻摜揸攬撳攙擱摟攪攜攝攄擺搖擯攤攖撐攆擷擼攛擻攢敵斂數齋斕鬥斬斷無舊時曠暘曇晝曨顯晉曬曉曄暈暉暫曖札術樸機殺雜權條來楊榪傑極構樅樞棗櫪梘棖槍楓梟櫃檸檉梔柵標棧櫛櫳棟櫨櫟欄樹棲樣欒桊椏橈楨檔榿橋樺檜槳樁夢檮棶檢櫺槨櫝槧欏橢樓欖櫬櫚櫸檟檻檳櫧橫檣櫻櫫櫥櫓櫞檐檁歡歟歐殲歿殤殘殞殮殫殯毆毀轂畢斃氈毿氌氣氫氬氳匯漢污湯洶沓溝沒灃漚瀝淪滄渢潙滬沵濘淚澩瀧瀘濼瀉潑澤涇潔灑窪浹淺漿澆湞溮濁測澮濟瀏滻渾滸濃潯濜塗涌濤澇淶漣潿渦溳渙滌潤澗漲澀澱淵淥漬瀆漸澠漁瀋滲溫遊灣溼潰濺漵漊潷滾滯灩灄滿瀅濾濫灤濱灘澦漤瀠瀟瀲濰潛瀦瀾瀨瀕灝滅燈靈災燦煬爐燉煒熗點煉熾爍爛烴燭煙煩燒燁燴燙燼熱煥燜燾煅煳熘愛爺牘犛牽犧犢犟狀獷獁猶狽狍獮獰獨狹獅獪猙獄猻獫獵獼玀豬貓蝟獻獺璣璵瑒瑪瑋環現瑲璽珉珏琺瓏璫琿璡璉瑣瓊瑤璦璇瓔瓚甕甌電畫暢畲疇癤療瘧癘瘍癧瘡瘋皰痾癰痙癢瘂癆瘓癇癡癉瘮瘞瘻癟癱癮癭癩癬癲癯皚皺皸盞鹽監蓋盜盤瞘眥矓着睜睞瞼瞞矚矯磯礬礦碭碼磚硨硯碸礪礱礫礎硜硅碩硤磽磑礄確礆礙磧磣鹼碹磙禮禕禰禎禱禍稟祿禪離禿稈種積稱穢穠穭稅穌穩穡窮竊竅窯竄窩窺竇窶豎競篤筍筆筧箋籠籩築篳篩簹箏籌籤簡籙簀篋籜籮簞簫簣簍籃籬籪籟糴類秈糶糲粵糞糧糝餱緊縶糹糾紆紅紂纖紇約級紈纊紀紉緯紜紘純紕紗綱納紝縱綸紛紙紋紡紵紖紐紓線紺紲紱練組紳細織終縐絆紼絀紹繹經紿綁絨結絝繞絰絎繪給絢絳絡絕絞統綆綃絹繡綌綏絛繼綈績緒綾緓續綺緋綽鞝緄繩維綿綬繃綢綯綹綣綜綻綰綠綴緇緙緗緘緬纜緹緲緝縕繢緦綞緞緶線緱縋緩締縷編緡緣縉縛縟縝縫縗縞纏縭縊縑繽縹縵縲纓縮繆繅纈繚繕繒繮繾繰繯繳纘罌網羅罰罷羆羈羥羨翹翽翬耮耬聳恥聶聾職聹聯聵聰肅腸膚肷腎腫脹脅膽勝朧腖臚脛膠脈膾髒臍腦膿臠腳脫腡臉臘醃膕齶膩靦膃騰臏臢輿艤艦艙艫艱豔艹藝節羋薌蕪蘆蓯葦藶莧萇蒼苧蘇檾蘋莖蘢蔦塋煢繭荊薦薘莢蕘蓽蕎薈薺蕩榮葷滎犖熒蕁藎蓀蔭蕒葒葤藥蒞莜萊蓮蒔萵薟獲蕕瑩鶯蓴蘀蘿螢營縈蕭薩蔥蕆蕢蔣蔞藍薊蘺蕷鎣驀薔蘞藺藹蘄蘊藪藁蘚虜慮虛蟲虯蟣雖蝦蠆蝕蟻螞蠶蠔蜆蠱蠣蟶蠻蟄蛺蟯螄蠐蛻蝸蠟蠅蟈蟬蠍螻蠑螿蟎蠨釁銜補襯袞襖嫋褘襪襲襏裝襠褌褳襝褲襉褸襤襁襴見觀覎規覓視覘覽覺覬覡覿覥覦覯覲覷觴觸觶讋譽謄訁計訂訃認譏訐訌討讓訕訖訓議訊記訒講諱謳詎訝訥許訛論訩訟諷設訪訣證詁訶評詛識詗詐訴診詆謅詞詘詔詖譯詒誆誄試詿詩詰詼誠誅詵話誕詬詮詭詢詣諍該詳詫諢詡譸誡誣語誚誤誥誘誨誑說誦誒請諸諏諾讀諑誹課諉諛誰諗調諂諒諄誶談誼謀諶諜謊諫諧謔謁謂諤諭諼讒諮諳諺諦謎諞諝謨讜謖謝謠謗諡謙謐謹謾謫譾謬譚譖譙讕譜譎讞譴譫讖谷豶貝貞負貟貢財責賢敗賬貨質販貪貧貶購貯貫貳賤賁貰貼貴貺貸貿費賀貽賊贄賈賄貲賃賂贓資賅贐賕賑賚賒賦賭齎贖賞賜贔賙賡賠賧賴賵贅賻賺賽賾贗贊贇贈贍贏贛赬趙趕趨趲躉躍蹌跖躒踐躂蹺蹕躚躋踊躊蹤躓躑躡蹣躕躥躪躦軀車軋軌軒軑軔轉軛輪軟轟軲軻轤軸軹軼軤軫轢軺輕軾載輊轎輈輇輅較輒輔輛輦輩輝輥輞輬輟輜輳輻輯轀輸轡轅轄輾轆轍轔辭辯辮邊遼達遷過邁運還這進遠違連遲邇逕跡適選遜遞邐邏遺遙鄧鄺鄔郵鄒鄴鄰鬱郄郟鄶鄭鄆酈鄖鄲醞醱醬釅釃釀釋裏鉅鑑鑾鏨釓釔針釘釗釙釕釷釺釧釤鈒釩釣鍆釹鍚釵鈃鈣鈈鈦鈍鈔鍾鈉鋇鋼鈑鈐鑰欽鈞鎢鉤鈧鈁鈥鈄鈕鈀鈺錢鉦鉗鈷鉢鈳鉕鈽鈸鉞鑽鉬鉭鉀鈿鈾鐵鉑鈴鑠鉛鉚鈰鉉鉈鉍鈹鐸鉶銬銠鉺銪鋏鋣鐃銍鐺銅鋁銱銦鎧鍘銖銑鋌銩銛鏵銓鉿銚鉻銘錚銫鉸銥鏟銃鐋銨銀銣鑄鐒鋪鋙錸鋱鏈鏗銷鎖鋰鋥鋤鍋鋯鋨鏽銼鋝鋒鋅鋶鐦鐗銳銻鋃鋟鋦錒錆鍺錯錨錡錁錕錩錫錮鑼錘錐錦杴錈錇錟錠鍵鋸錳錙鍥鍈鍇鏘鍶鍔鍤鍬鍾鍛鎪鍠鍰鎄鍍鎂鏤鎡鏌鎮鎛鎘鑷鐫鎳鎿鎦鎬鎊鎰鎔鏢鏜鏍鏰鏞鏡鏑鏃鏇鏐鐔钁鐐鏷鑥鐓鑭鐠鑹鏹鐙鑊鐳鐶鐲鐮鐿鑔鑣鑞鑲長門閂閃閆閈閉問闖閏闈閒閎間閔閌悶閘鬧閨聞闥閩閭闓閥閣閡閫鬮閱閬闍閾閹閶鬩閿閽閻閼闡闌闃闠闊闋闔闐闒闕闞闤隊陽陰陣階際陸隴陳陘陝隉隕險隨隱隸雋難雛讎靂霧霽黴靄靚靜靨韃鞽韉鞴韋韌韍韓韙韞韜韻頁頂頃頇項順須頊頑顧頓頎頒頌頏預顱領頗頸頡頰頲頜潁熲頦頤頻頮頹頷頴穎顆題顒顎顓顏額顳顢顛顙顥纇顫顬顰顴風颺颭颮颯颶颸颼颻飀飄飆飈飛饗饜飣飢飥餳飩餼飪飫飭飯飲餞飾飽飼飿飴餌饒餉餄餎餃餏餅餑餖餓餘餒餕餜餛餡館餷饋餶餿饞饁饃餺餾饈饉饅饊饌饢馬馭馱馴馳驅馹駁驢駔駛駟駙駒騶駐駝駑駕驛駘驍罵駰驕驊駱駭駢驫驪騁驗騂駸駿騏騎騍騅騌驌驂騙騭騤騷騖驁騮騫騸驃騾驄驏驟驥驦驤髏髖髕鬢魘魎魚魛魢魷魨魯魴魺鮁鮃鮎鱸鮋鮓鮒鮊鮑鱟鮍鮐鮭鮚鮳鮪鮞鮦鰂鮜鱠鱭鮫鮮鮺鯗鱘鯁鱺鰱鰹鯉鰣鰷鯀鯊鯇鮶鯽鯒鯖鯪鯕鯫鯡鯤鯧鯝鯢鮎鯛鯨鰺鯴鯔鱝鰈鰏鱨鯷鰮鰃鰓鱷鰍鰒鰉鰁鱂鯿鰠鰲鰭鰨鰥鰩鰟鰜鰳鰾鱈鱉鰻鰵鱅鰼鱖鱔鱗鱒鱯鱤鱧鱣鳥鳩雞鳶鳴鳲鷗鴉鶬鴇鴆鴣鶇鸕鴨鴞鴦鴒鴟鴝鴛鷽鴕鷥鷙鴯鴰鵂鴴鵃鴿鸞鴻鵐鵓鸝鵑鵠鵝鵒鷳鵜鵡鵲鶓鵪鵾鵯鵬鵮鶉鶊鵷鷫鶘鶡鶚鶻鶿鶥鶩鷊鷂鶲鶹鶺鷁鶼鶴鷖鸚鷓鷚鷯鷦鷲鷸鷺鸇鷹鸌鸏鸛鸘鹺麥麩黃黌黶黷黲黽黿鼂鼉鞀鼴齇齊齏齒齔齕齗齟齡齙齠齜齦齬齪齲齷龍龔龕龜志制諮只裏範鬆沒嚐嚐鬧面準鍾別閒乾盡髒拼';
+        // 簡 轉 繁 修正字典
+        s2t_fix: {
+            '繫統': '系統',
+            '頭發': '頭髮',
+        },
 
-            // 延遲生成映射表，僅在首次使用時創建
+        // 繁 轉 簡 修正字典
+        t2s_fix: {
+        },
+
+        init: function() {
+            this.s_chars = '系为尝钟万与丑专业丛东丝丢两严丧个丬丰临为丽举么义乌乐乔习乡书买乱争于亏云亘亚产亩亲亵亸亿仅从仑仓仪们价众优伙会伛伞伟传伤伥伦伧伪伫体余佣佥侠侣侥侦侧侨侩侪侬俣俦俨俩俪俭债倾偬偻偾偿傥傧储傩儿兑兖党兰关兴兹养兽冁内冈册写军农冢冯冲决况冻净凄凉凌减凑凛几凤凫凭凯击凼凿刍划刘则刚创删别刬刭刽刿剀剂剐剑剥剧劝办务劢动励劲劳势勋勐勚匀匦匮区医华协单卖卢卤卧卫却卺厂厅历厉压厌厍厕厢厣厦厨厩厮县参叆叇双发变叙叠叶号叹叽吁后吓吕吗吣吨听启吴呒呓呕呖呗员呙呛呜咏咔咙咛咝咤咴咸哌响哑哒哓哔哕哗哙哜哝哟唛唝唠唡唢唣唤唿啧啬啭啮啰啴啸喷喽喾嗫呵嗳嘘嘤嘱噜噼嚣嚯团园囱围囵国图圆圣圹场坂坏块坚坛坜坝坞坟坠垄垅垆垒垦垧垩垫垭垯垱垲垴埘埙埚埝埯堑堕塆墙壮声壳壶壸处备复够头夸夹夺奁奂奋奖奥妆妇妈妩妪妫姗姜娄娅娆娇娈娱娲娴婳婴婵婶媪嫒嫔嫱嬷孙学孪宁宝实宠审宪宫宽宾寝对寻导寿将尔尘尧尴尸尽层屃屉届属屡屦屿岁岂岖岗岘岙岚岛岭岳岽岿峃峄峡峣峤峥峦崂崃崄崭嵘嵚嵛嵝嵴巅巩巯币帅师帏帐帘帜带帧帮帱帻帼幂幞干并广庄庆庐庑库应庙庞废庼廪开异弃张弥弪弯弹强归当录彟彦彻径徕御忆忏忧忾怀态怂怃怄怅怆怜总怼怿恋恳恶恸恹恺恻恼恽悦悫悬悭悯惊惧惨惩惫惬惭惮惯愍愠愤愦愿慑慭憷懑懒懔戆戋戏戗战戬户扎扑扦执扩扪扫扬扰抚抛抟抠抡抢护报担拟拢拣拥拦拧拨择挂挚挛挜挝挞挟挠挡挢挣挤挥挦捞损捡换捣据捻掳掴掷掸掺掼揸揽揿搀搁搂搅携摄摅摆摇摈摊撄撑撵撷撸撺擞攒敌敛数斋斓斗斩断无旧时旷旸昙昼昽显晋晒晓晔晕晖暂暧札术朴机杀杂权条来杨杩杰极构枞枢枣枥枧枨枪枫枭柜柠柽栀栅标栈栉栊栋栌栎栏树栖样栾桊桠桡桢档桤桥桦桧桨桩梦梼梾检棂椁椟椠椤椭楼榄榇榈榉槚槛槟槠横樯樱橥橱橹橼檐檩欢欤欧歼殁殇残殒殓殚殡殴毁毂毕毙毡毵氇气氢氩氲汇汉污汤汹沓沟没沣沤沥沦沧沨沩沪沵泞泪泶泷泸泺泻泼泽泾洁洒洼浃浅浆浇浈浉浊测浍济浏浐浑浒浓浔浕涂涌涛涝涞涟涠涡涢涣涤润涧涨涩淀渊渌渍渎渐渑渔渖渗温游湾湿溃溅溆溇滗滚滞滟滠满滢滤滥滦滨滩滪漤潆潇潋潍潜潴澜濑濒灏灭灯灵灾灿炀炉炖炜炝点炼炽烁烂烃烛烟烦烧烨烩烫烬热焕焖焘煅煳熘爱爷牍牦牵牺犊犟状犷犸犹狈狍狝狞独狭狮狯狰狱狲猃猎猕猡猪猫猬献獭玑玙玚玛玮环现玱玺珉珏珐珑珰珲琎琏琐琼瑶瑷璇璎瓒瓮瓯电画畅畲畴疖疗疟疠疡疬疮疯疱疴痈痉痒痖痨痪痫痴瘅瘆瘗瘘瘪瘫瘾瘿癞癣癫癯皑皱皲盏盐监盖盗盘眍眦眬着睁睐睑瞒瞩矫矶矾矿砀码砖砗砚砜砺砻砾础硁硅硕硖硗硙硚确硷碍碛碜碱碹磙礼祎祢祯祷祸禀禄禅离秃秆种积称秽秾稆税稣稳穑穷窃窍窑窜窝窥窦窭竖竞笃笋笔笕笺笼笾筑筚筛筜筝筹签简箓箦箧箨箩箪箫篑篓篮篱簖籁籴类籼粜粝粤粪粮糁糇紧絷纟纠纡红纣纤纥约级纨纩纪纫纬纭纮纯纰纱纲纳纴纵纶纷纸纹纺纻纼纽纾线绀绁绂练组绅细织终绉绊绋绌绍绎经绐绑绒结绔绕绖绗绘给绚绛络绝绞统绠绡绢绣绤绥绦继绨绩绪绫绬续绮绯绰绱绲绳维绵绶绷绸绹绺绻综绽绾绿缀缁缂缃缄缅缆缇缈缉缊缋缌缍缎缏缐缑缒缓缔缕编缗缘缙缚缛缜缝缞缟缠缡缢缣缤缥缦缧缨缩缪缫缬缭缮缯缰缱缲缳缴缵罂网罗罚罢罴羁羟羡翘翙翚耢耧耸耻聂聋职聍联聩聪肃肠肤肷肾肿胀胁胆胜胧胨胪胫胶脉脍脏脐脑脓脔脚脱脶脸腊腌腘腭腻腼腽腾膑臜舆舣舰舱舻艰艳艹艺节芈芗芜芦苁苇苈苋苌苍苎苏苘苹茎茏茑茔茕茧荆荐荙荚荛荜荞荟荠荡荣荤荥荦荧荨荩荪荫荬荭荮药莅莜莱莲莳莴莶获莸莹莺莼萚萝萤营萦萧萨葱蒇蒉蒋蒌蓝蓟蓠蓣蓥蓦蔷蔹蔺蔼蕲蕴薮藁藓虏虑虚虫虬虮虽虾虿蚀蚁蚂蚕蚝蚬蛊蛎蛏蛮蛰蛱蛲蛳蛴蜕蜗蜡蝇蝈蝉蝎蝼蝾螀螨蟏衅衔补衬衮袄袅袆袜袭袯装裆裈裢裣裤裥褛褴襁襕见观觃规觅视觇览觉觊觋觌觍觎觏觐觑觞触觯詟誉誊讠计订讣认讥讦讧讨让讪讫训议讯记讱讲讳讴讵讶讷许讹论讻讼讽设访诀证诂诃评诅识诇诈诉诊诋诌词诎诏诐译诒诓诔试诖诗诘诙诚诛诜话诞诟诠诡询诣诤该详诧诨诩诪诫诬语诮误诰诱诲诳说诵诶请诸诹诺读诼诽课诿谀谁谂调谄谅谆谇谈谊谋谌谍谎谏谐谑谒谓谔谕谖谗谘谙谚谛谜谝谞谟谠谡谢谣谤谥谦谧谨谩谪谫谬谭谮谯谰谱谲谳谴谵谶谷豮贝贞负贠贡财责贤败账货质贩贪贫贬购贮贯贰贱贲贳贴贵贶贷贸费贺贻贼贽贾贿赀赁赂赃资赅赆赇赈赉赊赋赌赍赎赏赐赑赒赓赔赕赖赗赘赙赚赛赜赝赞赟赠赡赢赣赪赵赶趋趱趸跃跄跖跞践跶跷跸跹跻踊踌踪踬踯蹑蹒蹰蹿躏躜躯车轧轨轩轪轫转轭轮软轰轱轲轳轴轵轶轷轸轹轺轻轼载轾轿辀辁辂较辄辅辆辇辈辉辊辋辌辍辎辏辐辑辒输辔辕辖辗辘辙辚辞辩辫边辽达迁过迈运还这进远违连迟迩迳迹适选逊递逦逻遗遥邓邝邬邮邹邺邻郁郄郏郐郑郓郦郧郸酝酦酱酽酾酿释里鉅鉴銮錾钆钇针钉钊钋钌钍钎钏钐钑钒钓钔钕钖钗钘钙钚钛钝钞钟钠钡钢钣钤钥钦钧钨钩钪钫钬钭钮钯钰钱钲钳钴钵钶钷钸钹钺钻钼钽钾钿铀铁铂铃铄铅铆铈铉铊铋铍铎铏铐铑铒铕铗铘铙铚铛铜铝铞铟铠铡铢铣铤铥铦铧铨铪铫铬铭铮铯铰铱铲铳铴铵银铷铸铹铺铻铼铽链铿销锁锂锃锄锅锆锇锈锉锊锋锌锍锎锏锐锑锒锓锔锕锖锗错锚锜锞锟锠锡锢锣锤锥锦锨锩锫锬锭键锯锰锱锲锳锴锵锶锷锸锹锺锻锼锽锾锿镀镁镂镃镆镇镈镉镊镌镍镎镏镐镑镒镕镖镗镙镚镛镜镝镞镟镠镡镢镣镤镥镦镧镨镩镪镫镬镭镮镯镰镱镲镳镴镶长门闩闪闫闬闭问闯闰闱闲闳间闵闶闷闸闹闺闻闼闽闾闿阀阁阂阃阄阅阆阇阈阉阊阋阌阍阎阏阐阑阒阓阔阕阖阗阘阙阚阛队阳阴阵阶际陆陇陈陉陕陧陨险随隐隶隽难雏雠雳雾霁霉霭靓静靥鞑鞒鞯鞴韦韧韨韩韪韫韬韵页顶顷顸项顺须顼顽顾顿颀颁颂颃预颅领颇颈颉颊颋颌颍颎颏颐频颒颓颔颕颖颗题颙颚颛颜额颞颟颠颡颢颣颤颥颦颧风飏飐飑飒飓飔飕飖飗飘飙飚飞飨餍饤饥饦饧饨饩饪饫饬饭饮饯饰饱饲饳饴饵饶饷饸饹饺饻饼饽饾饿馀馁馂馃馄馅馆馇馈馉馊馋馌馍馎馏馐馑馒馓馔馕马驭驮驯驰驱驲驳驴驵驶驷驸驹驺驻驼驽驾驿骀骁骂骃骄骅骆骇骈骉骊骋验骍骎骏骐骑骒骓骔骕骖骗骘骙骚骛骜骝骞骟骠骡骢骣骤骥骦骧髅髋髌鬓魇魉鱼鱽鱾鱿鲀鲁鲂鲄鲅鲆鲇鲈鲉鲊鲋鲌鲍鲎鲏鲐鲑鲒鲓鲔鲕鲖鲗鲘鲙鲚鲛鲜鲝鲞鲟鲠鲡鲢鲣鲤鲥鲦鲧鲨鲩鲪鲫鲬鲭鲮鲯鲰鲱鲲鲳鲴鲵鲶鲷鲸鲹鲺鲻鲼鲽鲾鲿鳀鳁鳂鳃鳄鳅鳆鳇鳈鳉鳊鳋鳌鳍鳎鳏鳐鳑鳒鳓鳔鳕鳖鳗鳘鳙鳛鳜鳝鳞鳟鳠鳡鳢鳣鸟鸠鸡鸢鸣鸤鸥鸦鸧鸨鸩鸪鸫鸬鸭鸮鸯鸰鸱鸲鸳鸴鸵鸶鸷鸸鸹鸺鸻鸼鸽鸾鸿鹀鹁鹂鹃鹄鹅鹆鹇鹈鹉鹊鹋鹌鹍鹎鹏鹐鹑鹒鹓鹔鹕鹖鹗鹘鹚鹛鹜鹝鹞鹟鹠鹡鹢鹣鹤鹥鹦鹧鹨鹩鹪鹫鹬鹭鹯鹰鹱鹲鹳鹴鹾麦麸黄黉黡黩黪黾鼋鼌鼍鼗鼹齄齐齑齿龀龁龂龃龄龅龆龇龈龉龊龋龌龙龚龛龟志制咨只里范松没闹面准钟别闲乾尽脏拼';
+            this.t_chars = '繫為嘗鐘萬與醜專業叢東絲丟兩嚴喪個丬豐臨爲麗舉麼義烏樂喬習鄉書買亂爭於虧雲亙亞產畝親褻嚲億僅從侖倉儀們價衆優夥會傴傘偉傳傷倀倫傖僞佇體餘傭僉俠侶僥偵側僑儈儕儂俁儔儼倆儷儉債傾傯僂僨償儻儐儲儺兒兌兗黨蘭關興茲養獸囅內岡冊寫軍農冢馮沖決況凍淨淒涼凌減湊凜幾鳳鳧憑凱擊凼鑿芻劃劉則剛創刪別剗剄劊劌剴劑剮劍剝劇勸辦務勱動勵勁勞勢勳勐勩勻匭匱區醫華協單賣盧滷臥衛卻巹廠廳歷厲壓厭厙廁廂厴廈廚廄廝縣參靉靆雙發變敘疊葉號嘆嘰籲後嚇呂嗎唚噸聽啓吳嘸囈嘔嚦唄員咼嗆嗚詠咔嚨嚀噝吒咴鹹哌響啞噠嘵嗶噦譁噲嚌噥喲嘜嗊嘮啢嗩唣喚唿嘖嗇囀齧囉嘽嘯噴嘍嚳囁呵噯噓嚶囑嚕噼囂嚯團園囪圍圇國圖圓聖壙場阪壞塊堅壇壢壩塢墳墜壟壠壚壘墾垧堊墊埡墶壋塏堖塒壎堝埝垵塹墮壪牆壯聲殼壺壼處備復夠頭誇夾奪奩奐奮獎奧妝婦媽嫵嫗嬀姍姜婁婭嬈嬌孌娛媧嫺嫿嬰嬋嬸媼嬡嬪嬙嬤孫學孿寧寶實寵審憲宮寬賓寢對尋導壽將爾塵堯尷屍盡層屓屜屆屬屢屨嶼歲豈嶇崗峴嶴嵐島嶺嶽崬巋嶨嶧峽嶢嶠崢巒嶗崍嶮嶄嶸嶔嵛嶁嵴巔鞏巰幣帥師幃帳簾幟帶幀幫幬幘幗冪襆幹並廣莊慶廬廡庫應廟龐廢廎廩開異棄張彌弳彎彈強歸當錄彠彥徹徑徠御憶懺憂愾懷態慫憮慪悵愴憐總懟懌戀懇惡慟懨愷惻惱惲悅愨懸慳憫驚懼慘懲憊愜慚憚慣愍慍憤憒願懾憖憷懣懶懍戇戔戲戧戰戩戶扎撲扦執擴捫掃揚擾撫拋摶摳掄搶護報擔擬攏揀擁攔擰撥擇掛摯攣掗撾撻挾撓擋撟掙擠揮撏撈損撿換搗據捻擄摑擲撣摻摜揸攬撳攙擱摟攪攜攝攄擺搖擯攤攖撐攆擷擼攛擻攢敵斂數齋斕鬥斬斷無舊時曠暘曇晝曨顯晉曬曉曄暈暉暫曖札術樸機殺雜權條來楊榪傑極構樅樞棗櫪梘棖槍楓梟櫃檸檉梔柵標棧櫛櫳棟櫨櫟欄樹棲樣欒桊椏橈楨檔榿橋樺檜槳樁夢檮棶檢櫺槨櫝槧欏橢樓欖櫬櫚櫸檟檻檳櫧橫檣櫻櫫櫥櫓櫞檐檁歡歟歐殲歿殤殘殞殮殫殯毆毀轂畢斃氈毿氌氣氫氬氳匯漢污湯洶沓溝沒灃漚瀝淪滄渢潙滬沵濘淚澩瀧瀘濼瀉潑澤涇潔灑窪浹淺漿澆湞溮濁測澮濟瀏滻渾滸濃潯濜塗涌濤澇淶漣潿渦溳渙滌潤澗漲澀澱淵淥漬瀆漸澠漁瀋滲溫遊灣溼潰濺漵漊潷滾滯灩灄滿瀅濾濫灤濱灘澦漤瀠瀟瀲濰潛瀦瀾瀨瀕灝滅燈靈災燦煬爐燉煒熗點煉熾爍爛烴燭煙煩燒燁燴燙燼熱煥燜燾煅煳熘愛爺牘犛牽犧犢犟狀獷獁猶狽狍獮獰獨狹獅獪猙獄猻獫獵獼玀豬貓蝟獻獺璣璵瑒瑪瑋環現瑲璽珉珏琺瓏璫琿璡璉瑣瓊瑤璦璇瓔瓚甕甌電畫暢畲疇癤療瘧癘瘍癧瘡瘋皰痾癰痙癢瘂癆瘓癇癡癉瘮瘞瘻癟癱癮癭癩癬癲癯皚皺皸盞鹽監蓋盜盤瞘眥矓着睜睞瞼瞞矚矯磯礬礦碭碼磚硨硯碸礪礱礫礎硜硅碩硤磽磑礄確礆礙磧磣鹼碹磙禮禕禰禎禱禍稟祿禪離禿稈種積稱穢穠穭稅穌穩穡窮竊竅窯竄窩窺竇窶豎競篤筍筆筧箋籠籩築篳篩簹箏籌籤簡籙簀篋籜籮簞簫簣簍籃籬籪籟糴類秈糶糲粵糞糧糝餱緊縶糹糾紆紅紂纖紇約級紈纊紀紉緯紜紘純紕紗綱納紝縱綸紛紙紋紡紵紖紐紓線紺紲紱練組紳細織終縐絆紼絀紹繹經紿綁絨結絝繞絰絎繪給絢絳絡絕絞統綆綃絹繡綌綏絛繼綈績緒綾緓續綺緋綽鞝緄繩維綿綬繃綢綯綹綣綜綻綰綠綴緇緙緗緘緬纜緹緲緝縕繢緦綞緞緶線緱縋緩締縷編緡緣縉縛縟縝縫縗縞纏縭縊縑繽縹縵縲纓縮繆繅纈繚繕繒繮繾繰繯繳纘罌網羅罰罷羆羈羥羨翹翽翬耮耬聳恥聶聾職聹聯聵聰肅腸膚肷腎腫脹脅膽勝朧腖臚脛膠脈膾髒臍腦膿臠腳脫腡臉臘醃膕齶膩靦膃騰臏臢輿艤艦艙艫艱豔艹藝節羋薌蕪蘆蓯葦藶莧萇蒼苧蘇檾蘋莖蘢蔦塋煢繭荊薦薘莢蕘蓽蕎薈薺蕩榮葷滎犖熒蕁藎蓀蔭蕒葒葤藥蒞莜萊蓮蒔萵薟獲蕕瑩鶯蓴蘀蘿螢營縈蕭薩蔥蕆蕢蔣蔞藍薊蘺蕷鎣驀薔蘞藺藹蘄蘊藪藁蘚虜慮虛蟲虯蟣雖蝦蠆蝕蟻螞蠶蠔蜆蠱蠣蟶蠻蟄蛺蟯螄蠐蛻蝸蠟蠅蟈蟬蠍螻蠑螿蟎蠨釁銜補襯袞襖嫋褘襪襲襏裝襠褌褳襝褲襉褸襤襁襴見觀覎規覓視覘覽覺覬覡覿覥覦覯覲覷觴觸觶讋譽謄訁計訂訃認譏訐訌討讓訕訖訓議訊記訒講諱謳詎訝訥許訛論訩訟諷設訪訣證詁訶評詛識詗詐訴診詆謅詞詘詔詖譯詒誆誄試詿詩詰詼誠誅詵話誕詬詮詭詢詣諍該詳詫諢詡譸誡誣語誚誤誥誘誨誑說誦誒請諸諏諾讀諑誹課諉諛誰諗調諂諒諄誶談誼謀諶諜謊諫諧謔謁謂諤諭諼讒諮諳諺諦謎諞諝謨讜謖謝謠謗諡謙謐謹謾謫譾謬譚譖譙讕譜譎讞譴譫讖谷豶貝貞負貟貢財責賢敗賬貨質販貪貧貶購貯貫貳賤賁貰貼貴貺貸貿費賀貽賊贄賈賄貲賃賂贓資賅贐賕賑賚賒賦賭齎贖賞賜贔賙賡賠賧賴賵贅賻賺賽賾贗贊贇贈贍贏贛赬趙趕趨趲躉躍蹌跖躒踐躂蹺蹕躚躋踊躊蹤躓躑躡蹣躕躥躪躦軀車軋軌軒軑軔轉軛輪軟轟軲軻轤軸軹軼軤軫轢軺輕軾載輊轎輈輇輅較輒輔輛輦輩輝輥輞輬輟輜輳輻輯轀輸轡轅轄輾轆轍轔辭辯辮邊遼達遷過邁運還這進遠違連遲邇逕跡適選遜遞邐邏遺遙鄧鄺鄔郵鄒鄴鄰鬱郄郟鄶鄭鄆酈鄖鄲醞醱醬釅釃釀釋裏鉅鑑鑾鏨釓釔針釘釗釙釕釷釺釧釤鈒釩釣鍆釹鍚釵鈃鈣鈈鈦鈍鈔鍾鈉鋇鋼鈑鈐鑰欽鈞鎢鉤鈧鈁鈥鈄鈕鈀鈺錢鉦鉗鈷鉢鈳鉕鈽鈸鉞鑽鉬鉭鉀鈿鈾鐵鉑鈴鑠鉛鉚鈰鉉鉈鉍鈹鐸鉶銬銠鉺銪鋏鋣鐃銍鐺銅鋁銱銦鎧鍘銖銑鋌銩銛鏵銓鉿銚鉻銘錚銫鉸銥鏟銃鐋銨銀銣鑄鐒鋪鋙錸鋱鏈鏗銷鎖鋰鋥鋤鍋鋯鋨鏽銼鋝鋒鋅鋶鐦鐗銳銻鋃鋟鋦錒錆鍺錯錨錡錁錕錩錫錮鑼錘錐錦杴錈錇錟錠鍵鋸錳錙鍥鍈鍇鏘鍶鍔鍤鍬鍾鍛鎪鍠鍰鎄鍍鎂鏤鎡鏌鎮鎛鎘鑷鐫鎳鎿鎦鎬鎊鎰鎔鏢鏜鏍鏰鏞鏡鏑鏃鏇鏐鐔钁鐐鏷鑥鐓鑭鐠鑹鏹鐙鑊鐳鐶鐲鐮鐿鑔鑣鑞鑲長門閂閃閆閈閉問闖閏闈閒閎間閔閌悶閘鬧閨聞闥閩閭闓閥閣閡閫鬮閱閬闍閾閹閶鬩閿閽閻閼闡闌闃闠闊闋闔闐闒闕闞闤隊陽陰陣階際陸隴陳陘陝隉隕險隨隱隸雋難雛讎靂霧霽黴靄靚靜靨韃鞽韉鞴韋韌韍韓韙韞韜韻頁頂頃頇項順須頊頑顧頓頎頒頌頏預顱領頗頸頡頰頲頜潁熲頦頤頻頮頹頷頴穎顆題顒顎顓顏額顳顢顛顙顥纇顫顬顰顴風颺颭颮颯颶颸颼颻飀飄飆飈飛饗饜飣飢飥餳飩餼飪飫飭飯飲餞飾飽飼飿飴餌饒餉餄餎餃餏餅餑餖餓餘餒餕餜餛餡館餷饋餶餿饞饁饃餺餾饈饉饅饊饌饢馬馭馱馴馳驅馹駁驢駔駛駟駙駒騶駐駝駑駕驛駘驍罵駰驕驊駱駭駢驫驪騁驗騂駸駿騏騎騍騅騌驌驂騙騭騤騷騖驁騮騫騸驃騾驄驏驟驥驦驤髏髖髕鬢魘魎魚魛魢魷魨魯魴魺鮁鮃鮎鱸鮋鮓鮒鮊鮑鱟鮍鮐鮭鮚鮳鮪鮞鮦鰂鮜鱠鱭鮫鮮鮺鯗鱘鯁鱺鰱鰹鯉鰣鰷鯀鯊鯇鮶鯽鯒鯖鯪鯕鯫鯡鯤鯧鯝鯢鮎鯛鯨鰺鯴鯔鱝鰈鰏鱨鯷鰮鰃鰓鱷鰍鰒鰉鰁鱂鯿鰠鰲鰭鰨鰥鰩鰟鰜鰳鰾鱈鱉鰻鰵鱅鰼鱖鱔鱗鱒鱯鱤鱧鱣鳥鳩雞鳶鳴鳲鷗鴉鶬鴇鴆鴣鶇鸕鴨鴞鴦鴒鴟鴝鴛鷽鴕鷥鷙鴯鴰鵂鴴鵃鴿鸞鴻鵐鵓鸝鵑鵠鵝鵒鷳鵜鵡鵲鶓鵪鵾鵯鵬鵮鶉鶊鵷鷫鶘鶡鶚鶻鶿鶥鶩鷊鷂鶲鶹鶺鷁鶼鶴鷖鸚鷓鷚鷯鷦鷲鷸鷺鸇鷹鸌鸏鸛鸘鹺麥麩黃黌黶黷黲黽黿鼂鼉鞀鼴齇齊齏齒齔齕齗齟齡齙齠齜齦齬齪齲齷龍龔龕龜志制諮只裏範鬆沒鬧面準鍾別閒乾盡髒拼';
+
             this.s2t_map = null;
             this.t2s_map = null;
         },
@@ -418,7 +431,7 @@ V53 > V54
         },
 
         /**
-         * 執行文本轉換
+         * 執行文本轉換 (含詞組修正)
          * @param {string} text - 需要轉換的文本.
          * @param {'s2t'|'t2s'} mode - 轉換模式.
          * @returns {string} 轉換後的文本.
@@ -427,15 +440,27 @@ V53 > V54
             if (!text) return '';
             const map = (mode === 's2t') ? this.getS2TMap() : this.getT2SMap();
             let result = '';
+
+            // 1. 基礎字對字轉換
             for (let i = 0; i < text.length; i++) {
                 const char = text[i];
                 result += map[char] || char;
             }
+
+            // 2. 詞組修正 (Phrase Patching)
+            const fixes = (mode === 's2t') ? this.s2t_fix : this.t2s_fix;
+            for (const [wrong, right] of Object.entries(fixes)) {
+                if (result.includes(wrong)) {
+                     // 使用 split+join 替換所有出現的錯誤詞組
+                     result = result.split(wrong).join(right);
+                }
+            }
+
             return result;
         }
     };
 
-    // [新增] 初始化繁簡轉換引擎
+    // 初始化轉換引擎
     ChineseConverter.init();
 
     /**
@@ -2505,7 +2530,10 @@ V53 > V54
 
     /**
      * @description 根據模板標題自動點擊對應的模板選項，並執行插入及後續增強。
-     *              [修復版] 修復了光標定位時 "selection is not defined" 的錯誤，確保插入後能自動跳轉與滾動。
+     *              [極致性能版 V11]
+     *              1. 實現 "預過濾 (Pre-Filter)" 機制：在觸發任何 DOM 計算前，先檢查文字是否需要轉換。
+     *              2. 解決鼠標點擊導致的 CPU 飆升：過濾掉編輯器內部無意義的節點拆分與標記變動。
+     *              3. 優化循環：將 DOM 查找移出循環體，減少查詢開銷。
      */
     async function clickTemplateOptionByTitle(templateTitle, buttonText) {
         let VIEW_ADJUSTMENT_OFFSET_PX = 0;
@@ -2516,6 +2544,7 @@ V53 > V54
         const TIMEOUT = 5000;
         let clickableButton = null;
 
+        // 1. 確定繁簡轉換模式
         let conversionMode = 'off';
         if (buttonText) {
             if (buttonText.includes('繁') || buttonText.includes('繁')) {
@@ -2527,7 +2556,15 @@ V53 > V54
 
         const insertionMode = GM_getValue('templateInsertionMode', DEFAULTS.templateInsertionMode);
 
-        // --- 1. 光標預定位 (Logo 模式) ---
+        // 更新 DOM 上的轉換模式標記
+        try {
+            const iframe = findElementInShadows(document.body, EDITOR_IFRAME_SELECTOR);
+            if (iframe && iframe.contentDocument) {
+                iframe.contentDocument.body.dataset.cecConversionMode = conversionMode;
+            }
+        } catch (e) {}
+
+        // 2. 光標預定位 (Logo 模式 - 歸零定位法)
         if (insertionMode === 'logo') {
             try {
                 const iframe = await waitForElementWithObserver(document.body, EDITOR_IFRAME_SELECTOR, TIMEOUT);
@@ -2536,59 +2573,46 @@ V53 > V54
                     iframe.contentWindow.focus();
                     const editorDoc = iframe.contentDocument;
                     const editorBody = editorDoc.body;
-                    const logoTable = editorBody.querySelector('table.mce-item-table');
 
-                    if (logoTable) {
-                        const targetLineNumber = 9;
-                        let linesFound = 0;
-                        let targetNode = null;
-                        const nodeFilter = {
-                            acceptNode: function(node) {
-                                const nodeName = node.nodeName.toUpperCase();
-                                if (nodeName === 'BR' || ['DIV', 'P', 'TABLE', 'H1', 'H2', 'H3'].includes(nodeName)) {
-                                    return NodeFilter.FILTER_ACCEPT;
-                                }
-                                return NodeFilter.FILTER_SKIP;
+                    const targetLineNumber = 9;
+                    let linesFound = 0;
+                    let targetNode = null;
+
+                    const nodeFilter = {
+                        acceptNode: function(node) {
+                            const nodeName = node.nodeName.toUpperCase();
+                            if (nodeName === 'BR' || ['DIV', 'P', 'TABLE', 'H1', 'H2', 'H3'].includes(nodeName)) {
+                                return NodeFilter.FILTER_ACCEPT;
                             }
-                        };
-                        const walker = editorDoc.createTreeWalker(editorBody, NodeFilter.SHOW_ELEMENT, nodeFilter, false);
-                        walker.currentNode = logoTable;
-                        while (linesFound < targetLineNumber && (targetNode = walker.nextNode())) { linesFound++; }
+                            return NodeFilter.FILTER_SKIP;
+                        }
+                    };
 
-                        const selection = iframe.contentWindow.getSelection();
-                        const range = editorDoc.createRange();
-                        if (targetNode) {
-                            range.setStartBefore(targetNode);
-                        } else {
-                            range.selectNodeContents(editorBody);
-                            range.collapse(false);
-                        }
-                        range.collapse(true);
-                        selection.removeAllRanges();
-                        selection.addRange(range);
-                    } else {
-                         let fallbackTarget = null;
-                        if (editorBody && editorBody.children && editorBody.children.length >= 3) {
-                            fallbackTarget = editorBody.children[2];
-                        } else if (editorBody && editorBody.firstElementChild) {
-                            fallbackTarget = editorBody.firstElementChild;
-                        }
-                        if (fallbackTarget) {
-                            const selection = iframe.contentWindow.getSelection();
-                            const range = editorDoc.createRange();
-                            range.setStartBefore(fallbackTarget);
-                            range.collapse(true);
-                            selection.removeAllRanges();
-                            selection.addRange(range);
-                        }
+                    const walker = editorDoc.createTreeWalker(editorBody, NodeFilter.SHOW_ELEMENT, nodeFilter, false);
+                    while (linesFound < targetLineNumber && (targetNode = walker.nextNode())) {
+                        linesFound++;
                     }
+
+                    const selection = iframe.contentWindow.getSelection();
+                    const range = editorDoc.createRange();
+
+                    if (targetNode) {
+                        range.setStartBefore(targetNode);
+                    } else {
+                        range.selectNodeContents(editorBody);
+                        range.collapse(false);
+                    }
+                    range.collapse(true);
+                    selection.removeAllRanges();
+                    selection.addRange(range);
+                    Log.info('UI.Enhancement', `已執行歸零定位法 (跳過 ${linesFound} 行)`);
                 }
             } catch (cursorError) {
                 Log.error('UI.Enhancement', `預定位光標錯誤: ${cursorError.message}`);
             }
         }
 
-        // --- 2. 轉換已有文本 ---
+        // 3. Pre-Conversion
         if (conversionMode !== 'off') {
              try {
                 const iframe = findElementInShadows(document.body, EDITOR_IFRAME_SELECTOR);
@@ -2605,7 +2629,9 @@ V53 > V54
                             if (position !== 1) {
                                 const originalText = node.nodeValue;
                                 const convertedText = ChineseConverter.convert(originalText, conversionMode);
-                                if (originalText !== convertedText) node.nodeValue = convertedText;
+                                if (originalText !== convertedText) {
+                                    node.nodeValue = convertedText;
+                                }
                             } else {
                                 break;
                             }
@@ -2613,11 +2639,11 @@ V53 > V54
                     }
                 }
             } catch (e) {
-                Log.warn('Converter', `轉換已有文本時發生錯誤: ${e.message}`);
+                Log.warn('Converter', `Pre-Conversion 執行異常: ${e.message}`);
             }
         }
 
-        // --- 3. 執行插入並設置增強功能 ---
+        // 4. 執行插入
         try {
             const iconElement = await waitForElementWithObserver(document.body, BUTTON_ICON_SELECTOR, TIMEOUT);
             clickableButton = iconElement.closest('a[role="button"]');
@@ -2632,7 +2658,7 @@ V53 > V54
 
             if (targetOption) {
                 targetOption.click();
-                await delay(100);
+                await delay(150);
 
                 if (!GM_getValue('postInsertionEnhancementsEnabled', DEFAULTS.postInsertionEnhancementsEnabled)) return;
 
@@ -2650,10 +2676,38 @@ V53 > V54
                     throw new Error('未找到預期的模板結構');
                 }
 
-                // 添加特殊標記
                 targetContainerSpan.dataset.cecTemplateZone = 'true';
 
-                // --- 全局事件委託 (粘貼 + Enter鍵) ---
+                // --- 5. 樣式同步 & 已有文本轉換 ---
+                if (conversionMode !== 'off') {
+                    try {
+                        const computedStyle = iframeWindow.getComputedStyle(targetContainerSpan);
+                        const targetFont = computedStyle.fontFamily;
+                        const targetSize = computedStyle.fontSize;
+
+                        const walker = iframeDocument.createTreeWalker(editorBody, NodeFilter.SHOW_TEXT, null, false);
+                        let node;
+                        while (node = walker.nextNode()) {
+                            const position = targetContainerSpan.compareDocumentPosition(node);
+                            if (position & Node.DOCUMENT_POSITION_PRECEDING) {
+                                const originalText = node.nodeValue;
+                                const convertedText = ChineseConverter.convert(originalText, conversionMode);
+                                if (originalText !== convertedText) {
+                                    node.nodeValue = convertedText;
+                                }
+                                const parent = node.parentElement;
+                                if (parent && ['P', 'DIV', 'SPAN', 'FONT', 'STRONG', 'B'].includes(parent.nodeName)) {
+                                    parent.style.fontFamily = targetFont;
+                                    parent.style.fontSize = targetSize;
+                                }
+                            }
+                        }
+                    } catch (e) {
+                        Log.warn('UI.Style', `樣式同步執行異常: ${e.message}`);
+                    }
+                }
+
+                // --- 6. 全局增強 ---
                 if (!editorBody.dataset.cecGlobalHandlersAttached) {
 
                     const isCursorInTemplate = () => {
@@ -2669,17 +2723,33 @@ V53 > V54
                         return false;
                     };
 
-                    // 1. 粘貼攔截器
+                    // A. 粘貼攔截器
                     editorBody.addEventListener('paste', (event) => {
                         if (isCursorInTemplate()) {
+                            const items = (event.clipboardData || iframeWindow.clipboardData).items;
+                            let hasImage = false;
+                            for (let i = 0; i < items.length; i++) {
+                                if (items[i].type.indexOf("image") !== -1) {
+                                    hasImage = true;
+                                    break;
+                                }
+                            }
+                            if (hasImage) return;
+
                             event.preventDefault();
                             event.stopPropagation();
+
                             const textToPaste = (event.clipboardData || iframeWindow.clipboardData).getData('text/plain');
+                            const currentMode = editorBody.dataset.cecConversionMode;
+                            const finalPasteText = (currentMode && currentMode !== 'off')
+                                ? ChineseConverter.convert(textToPaste, currentMode)
+                                : textToPaste;
+
                             const selection = iframeWindow.getSelection();
                             const range = selection.getRangeAt(0);
                             range.deleteContents();
                             const fragment = iframeDocument.createDocumentFragment();
-                            const lines = textToPaste.split('\n');
+                            const lines = finalPasteText.split('\n');
                             lines.forEach((line, index) => {
                                 fragment.appendChild(iframeDocument.createTextNode(line));
                                 if (index < lines.length - 1) fragment.appendChild(iframeDocument.createElement('br'));
@@ -2688,11 +2758,10 @@ V53 > V54
                             range.collapse(false);
                             selection.removeAllRanges();
                             selection.addRange(range);
-                            Log.info('UI.Input', '全局攔截器已執行純文本粘貼');
                         }
                     }, true);
 
-                    // 2. Enter 鍵攔截器
+                    // B. Enter 鍵攔截器
                     editorBody.addEventListener('keydown', (event) => {
                         if (event.key === 'Enter') {
                             if (isCursorInTemplate()) {
@@ -2708,89 +2777,147 @@ V53 > V54
                                 selection.removeAllRanges();
                                 selection.addRange(range);
                                 br.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-                                Log.info('UI.Input', '全局攔截器已強制執行單倍換行');
                             }
                         }
                     }, true);
 
+                    // C. [極致優化] 全局實時轉換監聽器
+                    const processQueue = new Set();
+                    let isProcessing = false;
+
+                    const processMutations = () => {
+                        isProcessing = false;
+                        const mode = editorBody.dataset.cecConversionMode;
+                        if (!mode || mode === 'off' || processQueue.size === 0) {
+                            processQueue.clear();
+                            return;
+                        }
+
+                        // 優化：緩存 templateZone，避免在循環中重複查詢 DOM
+                        const templateZone = editorBody.querySelector('[data-cec-template-zone="true"]');
+                        if (!templateZone) {
+                            processQueue.clear();
+                            return;
+                        }
+
+                        processQueue.forEach(textNode => {
+                            if (!textNode.isConnected) return;
+
+                            // 再次檢查內容 (Double Check)，防止 race condition
+                            const original = textNode.nodeValue;
+                            const converted = ChineseConverter.convert(original, mode);
+
+                            if (original === converted) return; // 再次確認無需轉換，跳過位置計算
+
+                            // 只有確定文字需要轉換時，才執行昂貴的邊界檢查 (Reflow)
+                            let shouldConvert = false;
+                            if (templateZone.contains(textNode)) shouldConvert = true;
+                            else {
+                                const position = templateZone.compareDocumentPosition(textNode);
+                                if (position & Node.DOCUMENT_POSITION_PRECEDING) shouldConvert = true;
+                            }
+
+                            if (shouldConvert) {
+                                // 執行轉換與光標恢復
+                                const selection = iframeWindow.getSelection();
+                                let savedOffset = null;
+                                if (selection.rangeCount > 0 && selection.anchorNode === textNode) {
+                                    savedOffset = selection.anchorOffset;
+                                }
+
+                                textNode.nodeValue = converted;
+
+                                if (savedOffset !== null) {
+                                    const newRange = iframeDocument.createRange();
+                                    const safeOffset = Math.min(savedOffset, converted.length);
+                                    newRange.setStart(textNode, safeOffset);
+                                    newRange.collapse(true);
+                                    selection.removeAllRanges();
+                                    selection.addRange(newRange);
+                                }
+                            }
+                        });
+
+                        processQueue.clear();
+                    };
+
+                    const scheduleProcessing = () => {
+                        if (!isProcessing) {
+                            isProcessing = true;
+                            requestAnimationFrame(processMutations);
+                        }
+                    };
+
+                    const globalObserver = new MutationObserver((mutations) => {
+                        const mode = editorBody.dataset.cecConversionMode;
+                        if (!mode || mode === 'off') return;
+
+                        let hasWork = false;
+
+                        for (const mutation of mutations) {
+                            // [核心過濾]
+                            // 在加入隊列前，先做一次輕量級的字串比對
+                            // 如果 original === converted，說明該次變動與繁簡轉換無關
+                            // (可能是光標移動導致編輯器重排 DOM，或者是輸入了標點符號/英文)
+                            // 直接忽略，避免後續昂貴的 DOM 計算
+
+                            if (mutation.type === 'characterData') {
+                                const node = mutation.target;
+                                if (node.nodeType === 3) {
+                                    const text = node.nodeValue;
+                                    // 只有當轉換前後不一致時，才視為有工作要做
+                                    if (text !== ChineseConverter.convert(text, mode)) {
+                                        processQueue.add(node);
+                                        hasWork = true;
+                                    }
+                                }
+                            } else if (mutation.type === 'childList') {
+                                if (mutation.addedNodes.length > 0) {
+                                    mutation.addedNodes.forEach(addedNode => {
+                                        if (addedNode.nodeType === 3) {
+                                            const text = addedNode.nodeValue;
+                                            if (text !== ChineseConverter.convert(text, mode)) {
+                                                processQueue.add(addedNode);
+                                                hasWork = true;
+                                            }
+                                        } else if (addedNode.nodeType === 1) {
+                                            const walker = iframeDocument.createTreeWalker(addedNode, NodeFilter.SHOW_TEXT, null, false);
+                                            let subNode;
+                                            while(subNode = walker.nextNode()) {
+                                                const text = subNode.nodeValue;
+                                                if (text !== ChineseConverter.convert(text, mode)) {
+                                                    processQueue.add(subNode);
+                                                    hasWork = true;
+                                                }
+                                            }
+                                        }
+                                    });
+                                }
+                            }
+                        }
+
+                        if (hasWork) {
+                            scheduleProcessing();
+                        }
+                    });
+
+                    globalObserver.observe(editorBody, { childList: true, subtree: true, characterData: true });
                     editorBody.dataset.cecGlobalHandlersAttached = 'true';
                 }
 
-                // --- 轉換監聽器 ---
-                if (conversionMode !== 'off' && !targetContainerSpan.dataset.converterAttached) {
-                    const conversionHandler = () => {
-                         const selection = iframeWindow.getSelection();
-                        if (!selection || selection.rangeCount === 0) return;
+                // 更新轉換模式
+                editorBody.dataset.cecConversionMode = conversionMode;
 
-                        observer.disconnect();
-
-                        const range = selection.getRangeAt(0);
-                        const preRange = range.cloneRange();
-                        preRange.selectNodeContents(targetContainerSpan);
-                        preRange.setEnd(range.startContainer, range.startOffset);
-                        const currentLength = preRange.toString().length;
-
-                        const originalText = targetContainerSpan.innerText;
-                        const convertedText = ChineseConverter.convert(originalText, conversionMode);
-
-                        if (originalText !== convertedText) {
-                            const lines = convertedText.split('\n');
-                            targetContainerSpan.innerHTML = '';
-                            lines.forEach((line, index) => {
-                                targetContainerSpan.appendChild(iframeDocument.createTextNode(line));
-                                if (index < lines.length - 1) targetContainerSpan.appendChild(iframeDocument.createElement('br'));
-                            });
-
-                            let charCount = 0;
-                            let endNode = null;
-                            let endOffset = 0;
-                            const walker = iframeDocument.createTreeWalker(targetContainerSpan, NodeFilter.SHOW_TEXT, null, false);
-                            while(walker.nextNode()){
-                                const node = walker.currentNode;
-                                if(charCount + node.length >= currentLength){
-                                    endNode = node;
-                                    endOffset = currentLength - charCount;
-                                    break;
-                                }
-                                charCount += node.length;
-                            }
-
-                            if(endNode){
-                                const newRange = iframeDocument.createRange();
-                                newRange.setStart(endNode, endOffset);
-                                newRange.collapse(true);
-                                selection.removeAllRanges();
-                                selection.addRange(newRange);
-                            } else {
-                                const newRange = iframeDocument.createRange();
-                                newRange.selectNodeContents(targetContainerSpan);
-                                newRange.collapse(false);
-                                selection.removeAllRanges();
-                                selection.addRange(newRange);
-                            }
-                        }
-                        observer.observe(targetContainerSpan, { childList: true, subtree: true, characterData: true });
-                    };
-                    const debouncedHandler = debounce(conversionHandler, 350);
-                    const observer = new MutationObserver(debouncedHandler);
-                    observer.observe(targetContainerSpan, { childList: true, subtree: true, characterData: true });
-                    targetContainerSpan.dataset.converterAttached = 'true';
-                }
-
-                // --- 4. 光標定位 (修復版) ---
+                // --- 7. Post-Insertion 光標跳轉 ---
                 const userBrPosition = GM_getValue('cursorPositionBrIndex', DEFAULTS.cursorPositionBrIndex);
                 const brIndex = userBrPosition - 1;
                 const allBrTags = targetContainerSpan.getElementsByTagName('br');
                 if (allBrTags.length > brIndex && brIndex >= 0) {
                     const targetPositionNode = allBrTags[brIndex];
-
-                    // [修復點] 確保這裡定義了 selection
                     const selection = iframeWindow.getSelection();
-
                     const range = iframeDocument.createRange();
                     range.setStartBefore(targetPositionNode);
                     range.collapse(true);
-
                     selection.removeAllRanges();
                     selection.addRange(range);
 
@@ -2812,40 +2939,34 @@ V53 > V54
     }
 
     /**
-     * @description 根據模板列表，在指定位置注入快捷按鈕，並自動滾動視圖。
-     *              [修改版] 增加了 flex-wrap 屬性以支持自動換行，並調整了按鈕間距。
-     * @param {HTMLElement} anchorLiElement - 作為定位錨點的 "Popout" 按鈕所在的 <li> 元素。
-     * @param {string[]} templates - 從菜單讀取到的完整模板標題列表。
+     * @description 根據模板列表，在指定位置注入快捷按鈕 (含 5 個模板按鈕 + 繁/簡 手動轉換按鈕)。
+     *              [修改版 V4]
+     *              1. 修復手動轉換後選區消失的問題 (增加選區恢復邏輯)。
+     *              2. 保持綠色樣式、最右側位置及全局模式更新。
      */
     function injectTemplateShortcutButtons(anchorLiElement, templates) {
-        const BOTTOM_OFFSET_PIXELS = 50; // 50px: 滾動到底部後的額外偏移量，留出更多可視空間。
+        const BOTTOM_OFFSET_PIXELS = 50;
 
         const parentList = anchorLiElement.parentElement;
         if (!parentList || parentList.dataset.shortcutsInjected === 'true') {
             return;
         }
 
-        // [核心修改] 強制容器使用 Flex 佈局並允許換行，防止按鈕超出網頁框架
         parentList.style.display = 'flex';
         parentList.style.flexWrap = 'wrap';
-        parentList.style.height = 'auto'; // 允許高度隨內容撐開
-        parentList.style.alignItems = 'center'; // 確保垂直居中對齊
+        parentList.style.height = 'auto';
+        parentList.style.alignItems = 'center';
 
         anchorLiElement.style.borderRight = '1px solid #dddbda';
         anchorLiElement.style.paddingRight = '0px';
 
         const templatesToShow = templates.slice(1, 6);
-        if (templatesToShow.length === 0) {
-            repositionComposerToBottom(BOTTOM_OFFSET_PIXELS);
-            return;
-        }
 
+        // --- 1. 注入 5 個模板快捷按鈕 ---
         templatesToShow.reverse().forEach((templateTitle, index) => {
             const newLi = anchorLiElement.cloneNode(true);
             newLi.style.borderRight = 'none';
             newLi.style.paddingRight = '0';
-
-            // [核心修改] 添加上下邊距，確保換行後的視覺間距
             newLi.style.marginTop = '2px';
             newLi.style.marginBottom = '2px';
 
@@ -2881,10 +3002,106 @@ V53 > V54
             parentList.insertBefore(newLi, anchorLiElement.nextSibling);
         });
 
-        parentList.dataset.shortcutsInjected = 'true';
-        Log.info('UI.Enhancement', `${templatesToShow.length} 個回覆模板快捷按鈕注入成功 (已啟用自動換行)。`);
+        // --- 2. 注入 [繁] [簡] 手動轉換按鈕 ---
+        const handleManualConvert = (targetMode) => {
+            const iframe = findElementInShadows(document.body, 'iframe.tox-edit-area__iframe');
+            if (!iframe || !iframe.contentDocument) return;
 
-        setTimeout(() => repositionComposerToBottom(BOTTOM_OFFSET_PIXELS), 100); // 100ms: 延遲執行滾動，確保按鈕渲染完成。
+            const win = iframe.contentWindow;
+            const doc = iframe.contentDocument;
+            const editorBody = doc.body;
+
+            const selection = win.getSelection();
+            const hasSelection = selection.rangeCount > 0 && !selection.isCollapsed;
+
+            // 獲取當前的全局轉換模式
+            const currentGlobalMode = editorBody.dataset.cecConversionMode;
+
+            if (hasSelection) {
+                if (currentGlobalMode && currentGlobalMode !== 'off' && currentGlobalMode !== targetMode) {
+                    editorBody.dataset.cecConversionMode = 'off';
+                    Log.info('Converter', `手動模式(${targetMode})與全局模式(${currentGlobalMode})衝突，已關閉全局自動轉換。`);
+                } else {
+                    Log.info('Converter', `手動模式(${targetMode})與全局模式一致，保持全局自動轉換開啟。`);
+                }
+
+                const range = selection.getRangeAt(0);
+                const fragment = range.extractContents();
+
+                let firstNode = fragment.firstChild;
+                let lastNode = fragment.lastChild;
+
+                const processNode = (node) => {
+                    if (node.nodeType === 3) {
+                        node.nodeValue = ChineseConverter.convert(node.nodeValue, targetMode);
+                    } else if (node.childNodes) {
+                        node.childNodes.forEach(processNode);
+                    }
+                };
+                processNode(fragment);
+
+                range.insertNode(fragment);
+
+                if (firstNode && lastNode) {
+                    const newRange = doc.createRange();
+                    newRange.setStartBefore(firstNode);
+                    newRange.setEndAfter(lastNode);
+                    selection.removeAllRanges();
+                    selection.addRange(newRange);
+                }
+            } else {
+                // 如果沒有選中文字，則直接切換全局模式
+                editorBody.dataset.cecConversionMode = targetMode;
+                Log.info('Converter', `未選中文字，已切換全局轉換模式為 ${targetMode}。`);
+            }
+        };
+
+        const createConvertButton = (text, mode) => {
+            const li = anchorLiElement.cloneNode(true);
+            li.style.borderRight = 'none';
+            li.style.paddingRight = '0';
+            li.style.marginTop = '2px';
+            li.style.marginBottom = '2px';
+
+            const btn = li.querySelector('button');
+            btn.textContent = text;
+            btn.title = `將選中文字轉換為${text}，並設置全局模式`;
+
+                Object.assign(btn.style, {
+                marginLeft: '5px',
+                width: '45px',
+                height: '25px',
+                padding: '0',
+                fontSize: '13px',
+                backgroundColor: '#2e844a',
+                color: '#ffffff',
+                border: '1px solid #2e844a',
+                borderRadius: '0px'
+            });
+
+            btn.addEventListener('mousedown', (e) => {
+                e.preventDefault(); // 防止失去焦點
+                handleManualConvert(mode);
+            });
+
+            return li;
+        };
+
+        let insertPoint = anchorLiElement;
+        for(let i=0; i<templatesToShow.length; i++) {
+            if(insertPoint.nextSibling) insertPoint = insertPoint.nextSibling;
+        }
+
+        const btnS2T = createConvertButton('轉繁', 's2t');
+        const btnT2S = createConvertButton('轉簡', 't2s');
+
+        parentList.insertBefore(btnS2T, insertPoint.nextSibling);
+        parentList.insertBefore(btnT2S, btnS2T.nextSibling);
+
+        parentList.dataset.shortcutsInjected = 'true';
+        Log.info('UI.Enhancement', `模板快捷按鈕及 [繁][簡] 按鈕注入成功。`);
+
+        setTimeout(() => repositionComposerToBottom(BOTTOM_OFFSET_PIXELS), 100);
     }
 
     /**
