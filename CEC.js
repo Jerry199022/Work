@@ -2574,7 +2574,7 @@ V53 > V54
                     const editorDoc = iframe.contentDocument;
                     const editorBody = editorDoc.body;
 
-                    const targetLineNumber = 9;
+                    const targetLineNumber = 10;
                     let linesFound = 0;
                     let targetNode = null;
 
