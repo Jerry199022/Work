@@ -1,13 +1,12 @@
 // ==UserScript==
 // @name         永利八達通Case CPU使用率修復
 // @namespace    https://tampermonkey.net/
-// @version      V3
+// @version      V4
 // @description  修復永利八達通Case內嵌Base64圖片導致CPU使用率100%的問題。
 // @author       Jerry Law
 // @match        https://upsdrive.lightning.force.com/lightning/*
 // @run-at       document-start
 // @allFrames    true
-// @grant        none
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @updateURL    https://raw.githubusercontent.com/Jerry199022/Work/refs/heads/main/Base64-Fix.js
@@ -370,3 +369,4 @@
     }
 
 })();
+
