@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CEC功能強化
 // @namespace    CEC Enhanced
-// @version      V61
+// @version      V62
 // @description  快捷操作按鈕、自動指派、IVP快速查詢、聯繫人彈窗優化、按鈕警示色、賬戶檢測、組件屏蔽、設置菜單、自動IVP查詢、URL精準匹配、快捷按鈕可編輯、(Related Cases)數據提取與增強排序功能、關聯案件提取器、回覆case快捷按鈕、已跟進case提示、全局暫停/恢復功能。
 // @author       Jerry Law
 // @match        https://upsdrive.lightning.force.com/*
@@ -18,7 +18,7 @@
 // ==/UserScript==
 
 /*
-V58 > V61
+V58 > V62
 更新內容：
 -優化完善繁簡轉換
 
@@ -2938,7 +2938,8 @@ V53 > V54
         }
     }
 
-    /**
+
+/**
      * @description 根據模板列表，在指定位置注入快捷按鈕 (含 5 個模板按鈕 + 繁/簡 手動轉換按鈕)。
      *              [修改版 V4]
      *              1. 修復手動轉換後選區消失的問題 (增加選區恢復邏輯)。
@@ -2953,7 +2954,7 @@ V53 > V54
         }
 
         parentList.style.display = 'flex';
-        parentList.style.flexWrap = 'wrap';
+        parentList.style.flexWrap = 'nowrap';
         parentList.style.height = 'auto';
         parentList.style.alignItems = 'center';
 
@@ -2961,6 +2962,30 @@ V53 > V54
         anchorLiElement.style.paddingRight = '0px';
 
         const templatesToShow = templates.slice(1, 6);
+
+        // --- 0. 建立內層容器，令換行後每行起點對齊「最左模板按鈕」 ---
+        const shortcutWrapperLi = document.createElement('li');
+        Object.assign(shortcutWrapperLi.style, {
+            listStyle: 'none',
+            padding: '0',
+            margin: '0',
+            flex: '1 1 auto',
+            minWidth: '0'
+        });
+
+        const shortcutFlex = document.createElement('div');
+        Object.assign(shortcutFlex.style, {
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'center',
+            paddingLeft: '12px',
+            columnGap: '5px',
+            rowGap: '4px',
+            minWidth: '0'
+        });
+
+        shortcutWrapperLi.appendChild(shortcutFlex);
+        parentList.insertBefore(shortcutWrapperLi, anchorLiElement.nextSibling);
 
         // --- 1. 注入 5 個模板快捷按鈕 ---
         templatesToShow.reverse().forEach((templateTitle, index) => {
@@ -2977,11 +3002,8 @@ V53 > V54
             button.textContent = buttonText;
             button.title = `Insert Template: ${templateTitle}`;
 
-            const isFirstButton = (index === templatesToShow.length - 1);
-            const marginLeftValue = isFirstButton ? '12px' : '5px';
-
             Object.assign(button.style, {
-                marginLeft: marginLeftValue,
+                marginLeft: '0px',
                 width: '100px',
                 height: '25px',
                 padding: '0 8px',
@@ -2999,7 +3021,7 @@ V53 > V54
                 clickTemplateOptionByTitle(templateTitle, buttonText);
             });
 
-            parentList.insertBefore(newLi, anchorLiElement.nextSibling);
+            shortcutFlex.insertBefore(newLi, shortcutFlex.firstChild);
         });
 
         // --- 2. 注入 [繁] [簡] 手動轉換按鈕 ---
@@ -3068,7 +3090,7 @@ V53 > V54
             btn.title = `將選中文字轉換為${text}，並設置全局模式`;
 
                 Object.assign(btn.style, {
-                marginLeft: '5px',
+                marginLeft: '0px',
                 width: '45px',
                 height: '25px',
                 padding: '0',
@@ -3087,22 +3109,18 @@ V53 > V54
             return li;
         };
 
-        let insertPoint = anchorLiElement;
-        for(let i=0; i<templatesToShow.length; i++) {
-            if(insertPoint.nextSibling) insertPoint = insertPoint.nextSibling;
-        }
-
         const btnS2T = createConvertButton('轉繁', 's2t');
         const btnT2S = createConvertButton('轉簡', 't2s');
 
-        parentList.insertBefore(btnS2T, insertPoint.nextSibling);
-        parentList.insertBefore(btnT2S, btnS2T.nextSibling);
+        shortcutFlex.appendChild(btnS2T);
+        shortcutFlex.appendChild(btnT2S);
 
         parentList.dataset.shortcutsInjected = 'true';
         Log.info('UI.Enhancement', `模板快捷按鈕及 [繁][簡] 按鈕注入成功。`);
 
         setTimeout(() => repositionComposerToBottom(BOTTOM_OFFSET_PIXELS), 100);
     }
+
 
     /**
      * @description 查找並將郵件編輯器組件滾動到視口底部，並應用一個額外的偏移量。
