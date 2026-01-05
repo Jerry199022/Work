@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CEC功能強化
 // @namespace    CEC Enhanced
-// @version      V71
+// @version      V72
 // @description  快捷操作按鈕、自動指派、IVP快速查詢、聯繫人彈窗優化、按鈕警示色、賬戶檢測、組件屏蔽、設置菜單、自動IVP查詢、URL精準匹配、快捷按鈕可編輯、(Related Cases)數據提取與增強排序功能、關聯案件提取器、回覆case快捷按鈕、已跟進case提示、全局暫停/恢復功能。
 // @author       Jerry Law
 // @match        https://upsdrive.lightning.force.com/*
@@ -20,7 +20,7 @@
 /*
 V62 > V70
 更新內容：
--添加開查/賬單case提示
+-添加開查/發票case提示
 -添加跟進面板
 -一堆性能優化
 
@@ -116,7 +116,7 @@ V53 > V54
         followUpPanelEnabled: false,
         notifyOnRepliedCaseEnabled: false,
         pcaDoNotClosePromptEnabled: false, // Do Not Close提醒（彈窗 + 勾選）
-        pcaCaseListHintEnabled: false,     // Case列表提示（開查/賬單 + X天X時X分）
+        pcaCaseListHintEnabled: false,     // Case列表提示（開查/發票 + X天X時X分）
         autoSwitchEnabled: true,
         autoAssignUser: '',
         sentinelCloseEnabled: true,
@@ -173,7 +173,7 @@ V53 > V54
             role: ["Shipper"]
         }, {
             id: "btn-6",
-            name: "賬單",
+            name: "發票",
             category: ["Billing / Invoice - Transportation"],
             subCategory: ["Bill Terms - Rebill / Chargeback"],
             role: ["Shipper"]
@@ -2531,14 +2531,14 @@ const flashHeaderHintByDueAt = (dueAt) => {
 
                         <div id="tab-pca" class="cec-settings-tab-content">
                             <div class="cec-settings-section">
-                                <h3 class="cec-settings-section-title">賬單 / 開查 case</h3>
+                                <h3 class="cec-settings-section-title">發票 / 開查 case</h3>
 
                                 <div class="cec-settings-option">
                                     <div class="cec-settings-option-main">
                                         <label for="pcaDoNotClosePromptToggle" class="cec-settings-label">Do Not Close提醒</label>
                                         <label class="cec-settings-switch"><input type="checkbox" id="pcaDoNotClosePromptToggle"><span class="cec-settings-slider"></span></label>
                                     </div>
-                                    <p class="cec-settings-description">命中【賬單/開查】時彈窗提示是否勾選 “Send and Do Not Close”。</p>
+                                    <p class="cec-settings-description">命中【發票/開查】時彈窗提示是否勾選 “Send and Do Not Close”。</p>
                                 </div>
 
                                 <div class="cec-settings-option">
@@ -2546,7 +2546,7 @@ const flashHeaderHintByDueAt = (dueAt) => {
                                         <label for="pcaCaseListHintToggle" class="cec-settings-label">Case列表提示</label>
                                         <label class="cec-settings-switch"><input type="checkbox" id="pcaCaseListHintToggle"><span class="cec-settings-slider"></span></label>
                                     </div>
-                                    <p class="cec-settings-description">在 Case 列表頁，優先顯示「開查/賬單 + X天X時X分」。</p>
+                                    <p class="cec-settings-description">在 Case 列表頁，優先顯示「開查/發票 + X天X時X分」。</p>
                                 </div>
                             </div>
                         </div>
@@ -3732,7 +3732,7 @@ const flashHeaderHintByDueAt = (dueAt) => {
             const sortLi = createLiButton(
                 'cec-pca-sort-btn',
                 'PCA提示排序',
-                '按賬單/開查分類，再按時間倒序排序（僅當前已渲染行）',
+                '按發票/開查分類，再按時間倒序排序（僅當前已渲染行）',
                 () => { sortPcaHintRowsInCaseList(tableBody); }
             );
 
@@ -3771,7 +3771,7 @@ const flashHeaderHintByDueAt = (dueAt) => {
 
     /**
      * @description 依據 row.dataset.cecPcaType/cecPcaTimestamp 對當前已渲染行進行排序。
-     *              排序規則：先按「賬單/開查」分類，再按時間倒序（越久越前）。
+     *              排序規則：先按「發票/開查」分類，再按時間倒序（越久越前）。
      * @param {HTMLTableSectionElement} tableBody - 表格 tbody。
      */
     function sortPcaHintRowsInCaseList(tableBody) {
@@ -3893,7 +3893,7 @@ const flashHeaderHintByDueAt = (dueAt) => {
                 const billingPurgeResult = purgeExpiredCacheEntries(billingCache, BILLING_TTL_MS);
                 if (billingPurgeResult.changed) {
                     GM_setValue(BILLING_CACHE_KEY, billingPurgeResult.cache);
-                    Log.info('Feature.CaseList', `已清理過期的賬單緩存條目（removed: ${billingPurgeResult.removed}）。`);
+                    Log.info('Feature.CaseList', `已清理過期的發票緩存條目（removed: ${billingPurgeResult.removed}）。`);
                 }
             }
 
@@ -3903,7 +3903,7 @@ const flashHeaderHintByDueAt = (dueAt) => {
             allRows.forEach(row => {
                 const caseId = row.getAttribute('data-row-key-value');
 
-                // --- 功能 1: 列表提示（開查/賬單優先，其次已回覆）---
+                // --- 功能 1: 列表提示（開查/發票優先，其次已回覆）---
 
                 if ((repliedEnabled || listHintEnabled) && caseId && row.dataset.cecProcessed !== 'true') {
                     row.dataset.cecProcessed = 'true';
@@ -3919,7 +3919,7 @@ const flashHeaderHintByDueAt = (dueAt) => {
                             annotationText = ` 開查 - ${formatTimeAgoDaysHoursMinutes(claimsEntry.timestamp)}`;
                             annotationMeta = { type: 'claims', timestamp: claimsEntry.timestamp };
                         } else if (billingEntry && (Date.now() - billingEntry.timestamp < BILLING_TTL_MS)) {
-                            annotationText = ` 賬單 - ${formatTimeAgoDaysHoursMinutes(billingEntry.timestamp)}`;
+                            annotationText = ` 發票 - ${formatTimeAgoDaysHoursMinutes(billingEntry.timestamp)}`;
                             annotationMeta = { type: 'billing', timestamp: billingEntry.timestamp };
                         }
                     }
@@ -3957,10 +3957,10 @@ const flashHeaderHintByDueAt = (dueAt) => {
                                     annotationSpan.style.fontWeight = 'normal';
                                     annotationSpan.style.marginLeft = '8px';
 
-                                    // 只對「開查/賬單 + X天X時X分」加背景色（顏色與 Send 攔截彈窗一致）
+                                    // 只對「開查/發票 + X天X時X分」加背景色（顏色與 Send 攔截彈窗一致）
                                     if (annotationMeta && (annotationMeta.type === 'claims' || annotationMeta.type === 'billing')) {
                                         const CLAIMS_BASE_COLOR = '#2e844a'; // 開查：與攔截彈窗一致
-                                        const BILLING_BASE_COLOR = '#0070d2'; // 賬單：與攔截彈窗一致
+                                        const BILLING_BASE_COLOR = '#0070d2'; // 發票：與攔截彈窗一致
 
                                         let bgColor = (annotationMeta.type === 'claims') ? CLAIMS_BASE_COLOR : BILLING_BASE_COLOR;
 
@@ -4557,7 +4557,7 @@ const flashHeaderHintByDueAt = (dueAt) => {
                         event.preventDefault();
                         event.stopImmediatePropagation();
 
-                        const typeLabel = (special.type === 'A') ? '開查' : '賬單';
+                        const typeLabel = (special.type === 'A') ? '開查' : '發票';
 
                         if (doNotCloseEnabled) {
                             const userChoice = await showSendInterceptDialog(typeLabel);
