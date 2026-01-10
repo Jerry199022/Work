@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CEC功能強化
 // @namespace    CEC Enhanced
-// @version      V74
+// @version      V75
 // @description  快捷操作按鈕、自動指派、IVP快速查詢、聯繫人彈窗優化、按鈕警示色、賬戶檢測、組件屏蔽、設置菜單、自動IVP查詢、URL精準匹配、快捷按鈕可編輯、(Related Cases)數據提取與增強排序功能、關聯案件提取器、回覆case快捷按鈕、已跟進case提示、全局暫停/恢復功能。
 // @author       Jerry Law
 // @match        https://upsdrive.lightning.force.com/*
@@ -18,7 +18,7 @@
 // ==/UserScript==
 
 /*
-V62 > V74
+V62 > V75
 更新內容：
 -添加開查/預付case提示
 -添加跟進面板
@@ -262,8 +262,7 @@ V53 > V54
     let sendButtonPendingSpecialType = null;
     let pcaCaseListOriginalRowKeys = null;
     let pcaCaseListIsSorted = false;
-
-
+    let ivpFocusTimeoutId = null;
 
     // =================================================================================
     // SECTION: 頁面級資源註冊與清理 (Page Resource Registry)
@@ -5338,24 +5337,29 @@ V53 > V54
             await autoQueryIVPOnLoad();
 
             // 3. [核心修復] 焦點強制鎖定機制
-            // 原因：Web 端的接收器腳本在填寫輸入框時會執行 focus()，這會導致 Web 窗口後發制人搶走焦點。
-            // 對策：我們在多個時間點強制將 IVP 窗口拉回最前，覆蓋 Web 的搶佔行為。
+            // 原因：Web 端在背景時容易被 Edge/Chromium 節流，短窗口下偶發無法完成自動查詢。
+            // 對策：不再 0/100/500ms 連續搶焦點；改成「只延後一次」搶回 IVP，給 Web 短暫前景窗口。
             if (GM_getValue('autoIVPQueryEnabled', DEFAULTS.autoIVPQueryEnabled) &&
                 GM_getValue('autoSwitchEnabled', DEFAULTS.autoSwitchEnabled) &&
-                GM_getValue('autoWebQueryEnabled', DEFAULTS.autoWebQueryEnabled) &
+                GM_getValue('autoWebQueryEnabled', DEFAULTS.autoWebQueryEnabled) &&
                 ivpWindowHandle && !ivpWindowHandle.closed) {
-                // (A) 立即聚焦
-                ivpWindowHandle.focus();
 
-                // (B) 500ms 後再次聚焦 (應對快速加載的 Web)
-                setTimeout(() => {
-                    if(ivpWindowHandle && !ivpWindowHandle.closed) ivpWindowHandle.focus();
-                }, 100);
+                if (ivpFocusTimeoutId) {
+                    clearTimeout(ivpFocusTimeoutId);
+                    ivpFocusTimeoutId = null;
+                }
 
-                // (C) 1500ms 後最終聚焦 (應對慢速加載的 Web)
-                setTimeout(() => {
-                    if(ivpWindowHandle && !ivpWindowHandle.closed) ivpWindowHandle.focus();
-                }, 500);
+                ivpFocusTimeoutId = setTimeout(() => {
+                    try {
+                        if (ivpWindowHandle && !ivpWindowHandle.closed) {
+                            ivpWindowHandle.focus();
+                        }
+                    } catch (e) {
+                        // ignore
+                    } finally {
+                        ivpFocusTimeoutId = null;
+                    }
+                }, 1200);
             }
         };
 
@@ -5903,7 +5907,7 @@ V53 > V54
     * @param {string} targetOrigin - 目標窗口的源。
     */
     function sendMessageWithRetries(windowHandle, messagePayload, targetOrigin) {
-        const MAX_RETRIES = 60;
+        const MAX_RETRIES = 120;
         const RETRY_INTERVAL = 2000; // 2000ms: 每次重試發送消息的間隔，確保目標窗口有足夠時間加載和響應。
         let attempt = 0;
         let intervalId = null;
@@ -6380,7 +6384,7 @@ V53 > V54
                 assignButton.style.setProperty('background-color', '#0070d2', 'important');
                 assignButton.style.setProperty('color', '#fff', 'important');
                 const cache = GM_getValue(ASSIGNMENT_CACHE_KEY, {});
-                const CACHE_TTL = 60 * 60 * 1000; // 60分鐘: 指派成功記錄的緩存有效期。
+                const CACHE_TTL = 10 * 60 * 60 * 1000; // 60分鐘: 指派成功記錄的緩存有效期。// 10小時
                 // [修改] 使用 caseId 作為緩存 key
                 cache[caseId] = {
                     timestamp: Date.now()
@@ -7740,7 +7744,7 @@ V53 > V54
             const entry = caseId ? cache[caseId] : null;
 
             if (entry && (Date.now() - entry.timestamp < CACHE_EXPIRATION_MS)) {
-                Log.info('Feature.AutoAssign', `緩存命中：此 Case (ID: ${caseId}) 在 60 分鐘內已被指派。`);
+                Log.info('Feature.AutoAssign', `緩存命中：此 Case (ID: ${caseId}) 在 10 小時內已被指派。`);
                 handleAutoAssign(caseUrl, true);
                 return;
             }
