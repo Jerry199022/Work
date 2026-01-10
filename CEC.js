@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CEC功能強化
 // @namespace    CEC Enhanced
-// @version      V73
+// @version      V74
 // @description  快捷操作按鈕、自動指派、IVP快速查詢、聯繫人彈窗優化、按鈕警示色、賬戶檢測、組件屏蔽、設置菜單、自動IVP查詢、URL精準匹配、快捷按鈕可編輯、(Related Cases)數據提取與增強排序功能、關聯案件提取器、回覆case快捷按鈕、已跟進case提示、全局暫停/恢復功能。
 // @author       Jerry Law
 // @match        https://upsdrive.lightning.force.com/*
@@ -18,7 +18,7 @@
 // ==/UserScript==
 
 /*
-V62 > V73
+V62 > V74
 更新內容：
 -添加開查/預付case提示
 -添加跟進面板
@@ -2544,7 +2544,7 @@ V53 > V54
                                     <div class="cec-settings-option-main"><label for="autoIVPQueryToggle" class="cec-settings-label">進入Case頁面自動查詢IVP</label><label class="cec-settings-switch"><input type="checkbox" id="autoIVPQueryToggle"><span class="cec-settings-slider"></span></label></div>
                                 </div>
                                 <div class="cec-settings-option">
-                                    <div class="cec-settings-option-main"><label for="autoSwitchToggle" class="cec-settings-label">點擊IVP按鈕自動切換窗口</label><label class="cec-settings-switch"><input type="checkbox" id="autoSwitchToggle"><span class="cec-settings-slider"></span></label></div>
+                                    <div class="cec-settings-option-main"><label for="autoSwitchToggle" class="cec-settings-label">檢測到追蹤號自動切換至IVP窗口</label><label class="cec-settings-switch"><input type="checkbox" id="autoSwitchToggle"><span class="cec-settings-slider"></span></label></div>
                                 </div>
                                 <div class="cec-settings-option">
                                     <div class="cec-settings-option-main"><label for="blockIVPToggle" class="cec-settings-label">屏蔽原生IVP卡片自動加載</label><label class="cec-settings-switch"><input type="checkbox" id="blockIVPToggle"><span class="cec-settings-slider"></span></label></div>
@@ -5340,7 +5340,10 @@ V53 > V54
             // 3. [核心修復] 焦點強制鎖定機制
             // 原因：Web 端的接收器腳本在填寫輸入框時會執行 focus()，這會導致 Web 窗口後發制人搶走焦點。
             // 對策：我們在多個時間點強制將 IVP 窗口拉回最前，覆蓋 Web 的搶佔行為。
-            if (ivpWindowHandle && !ivpWindowHandle.closed) {
+            if (GM_getValue('autoIVPQueryEnabled', DEFAULTS.autoIVPQueryEnabled) &&
+                GM_getValue('autoSwitchEnabled', DEFAULTS.autoSwitchEnabled) &&
+                GM_getValue('autoWebQueryEnabled', DEFAULTS.autoWebQueryEnabled) &
+                ivpWindowHandle && !ivpWindowHandle.closed) {
                 // (A) 立即聚焦
                 ivpWindowHandle.focus();
 
