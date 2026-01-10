@@ -24,12 +24,12 @@
     // 注釋數據
     // ================================================================
     const annotationsText = `
-#165 GLENN FOX RD|亞馬遜倉
-#7600 LTC PARKWAY|亞馬遜倉
-#27505 SW 132ND AVE|亞馬遜倉
-#4806 Cotter Ln|亞馬遜倉
-#2845 W 48th Pl|亞馬遜倉
-#550 OAK RIDGE ROAD|亞馬遜倉
+#165 GLENN FOX RD|亞馬遜倉庫
+#7600 LTC PARKWAY|亞馬遜倉庫
+#27505 SW 132ND AVE|亞馬遜倉庫
+#4806 Cotter Ln|亞馬遜倉庫
+#2845 W 48th Pl|亞馬遜倉庫
+#550 OAK RIDGE ROAD|亞馬遜倉庫
 #RASALAT-PPWK|清關文件送達給收件人
 #RETURN GOODS|退回包裹
 #SAT DELIVERY|星期六送貨
