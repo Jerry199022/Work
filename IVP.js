@@ -540,7 +540,7 @@
 #TRANSLATION|發票需要當地語言
 #UNDR CLRNCE|包裹正在清關處理中
 #UNLOAD SCAN|卸貨
-#UPS MIGRAT'N|轉交當地派送公司派送
+#UPS MIGRAT'N|貨物轉移中
 #VERIFY VALUE|貨件被暫扣以核實價值
 #WAREHOUSE SCAN|倉庫掃描
 #WILL CALL|收件人要求UPS扣貨並自提
