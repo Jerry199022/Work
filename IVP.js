@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IVP顯示注釋
 // @namespace    IVP顯示注釋
-// @version      V11
+// @version      V12
 // @description  IVP顯示注釋、一眼模式、定義字體顏色。
 // @author       Jerry Law
 // @match        *://ivp.inside.ups.com/*
@@ -1053,10 +1053,16 @@ PACKAGE WAS DRIVER RELEASED
     const annotations = annotationsText.trim().split('\n').filter(line => line.trim());
     const excludeList = excludeText.trim().split('\n').filter(line => line.trim()).map(text => text.toLowerCase());
     const annotationClassName = "tm-annotation-added";
-    const escapeReg = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    // 1. 轉義正則特殊字符
+    // 2. 將規則中的「空格」轉換為「[\s\u00A0]+」，以匹配網頁中的多個空格、換行或 NBSP
+    const escapeReg = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/ /g, '[\\s\\u00A0]+');
 
     // Key -> Note 映射
     const keyToNote = new Map();
+    // [V19.0] Key -> Original Key 映射 (用於精確大小寫比對)
+    const keyToOriginal = new Map();
+
     // 規則列表
     const regexRules = [];
     const processedNodes = new WeakSet();
@@ -1076,45 +1082,43 @@ PACKAGE WAS DRIVER RELEASED
             const trimmedKey = key.trim();
             if (!trimmedKey) return;
 
-            keyToNote.set(trimmedKey, note);
+            const lowerKey = trimmedKey.toLowerCase();
+            keyToNote.set(lowerKey, note);
+            keyToOriginal.set(lowerKey, trimmedKey); // 記錄原始寫法
 
             let pattern;
             const escapedKey = escapeReg(trimmedKey);
 
             if (isBoundary) {
-                // [V16.0 符號隔離策略]
+                // [V19.0 混合策略]
 
                 let leftBoundary;
                 let rightBoundary;
 
                 if (trimmedKey.length <= 3) {
                     // ==========================================
-                    // [短詞模式] (如 DE, US, CN, JP)
+                    // [短詞模式] (如 DE, US, CN)
                     // ==========================================
 
-                    // 左側：寬鬆。
+                    // 左側：寬鬆
                     leftBoundary = '(?<![a-zA-Z0-9])';
 
-                    // 右側：嚴格多重過濾。
-                    // 1. (?![a-zA-Z0-9\\.\\-]) : 基本邊界 (防止 CO., NO., JP-)
-                    // 2. (?![\\s]*[\\-\\/]) : [新增] 禁止後面跟 "橫線" 或 "斜線" (含空格)
-                    //    - JP - KANSAI -> Skip
-                    //    - JP/US -> Skip
-                    // 3. (?![\\s]+[A-Z0-9]) : 禁止後面跟 "空格 + 大寫字母/數字"
-                    //    - FL US -> Skip
-                    //    - US 02 -> Skip
-                    rightBoundary = '(?![a-zA-Z0-9\\.\\-])(?![\\s]*[\\-\\/])(?![\\s]+[A-Z0-9])';
-
+                    // 右側：極度嚴格
+                    // 1. (?![a-zA-Z0-9\\.\\-,]) : 禁止後面跟 逗號、點、橫線、字母數字
+                    // 2. (?![\\s]*[\\-\\/]) : 禁止後面跟 橫線/斜線 (JP - KANSAI)
+                    // 3. (?![\\s]+[A-Z0-9]) : 禁止後面跟 空白+字母/數字 (FL US, US 02)
+                    rightBoundary = '(?![a-zA-Z0-9\\.\\-,])(?![\\s]*[\\-\\/])(?![\\s]+[A-Z0-9])';
                 } else {
                     // ==========================================
-                    // [長詞模式] (如 BAHAMAS, ECUADOR)
+                    // [長詞模式] (如 BAHAMAS, DESTINATION)
                     // ==========================================
 
-                    // 左側：單行過濾。
+                    // 左側：單行過濾 (GUAYAS ECUADOR)
                     leftBoundary = '(?<![A-Z0-9]{3,}[ \\t])(?<![a-zA-Z0-9])';
 
                     // 右側：放寬正則，依賴 DOM 檢查
-                    rightBoundary = '(?![a-zA-Z0-9\\.\\-])';
+                    // [V19.0] 增加 \/ (斜線) 過濾，防止 Damage/Investig
+                    rightBoundary = '(?![a-zA-Z0-9\\.\\-\\/])';
                 }
 
                 pattern = leftBoundary + escapedKey + rightBoundary;
@@ -1144,7 +1148,8 @@ PACKAGE WAS DRIVER RELEASED
     regexRules.sort((a, b) => b.length - a.length);
 
     const allPatterns = regexRules.map(rule => rule.pattern).join("|");
-    const unionRegex = new RegExp(allPatterns, "g");
+    // 使用 'gi' 標誌，但在 annotateTextNode 中進行嚴格校驗
+    const unionRegex = new RegExp(allPatterns, "gi");
 
     const DEFAULTS = {
         tbodyMaxHeight: 375,
@@ -1167,10 +1172,7 @@ PACKAGE WAS DRIVER RELEASED
 
     const SCRIPT_STATE = {
         annotationsAreVisible: true,
-        isFullViewModeActive: false,
-        // [性能優化] 緩存設置值，避免高頻讀取 GM_
-        cachedHeight: DEFAULTS.tbodyMaxHeight,
-        cachedColor: DEFAULTS.annotationColor
+        isFullViewModeActive: false
     };
 
     const FULL_VIEW_STYLE_ID = 'ivp-full-view-dynamic-styles';
@@ -1203,8 +1205,7 @@ PACKAGE WAS DRIVER RELEASED
     function applyAnnotationColor() {
         const styleElement = document.getElementById('ivp-dynamic-annotation-style');
         if (!styleElement) return;
-        // [性能優化] 使用緩存值
-        const color = SCRIPT_STATE.cachedColor;
+        const color = GM_getValue('annotationColor', DEFAULTS.annotationColor);
         styleElement.textContent = `.tm-annotation-note { color: ${color} !important; }`;
     }
 
@@ -1295,8 +1296,7 @@ PACKAGE WAS DRIVER RELEASED
     }
 
     function applyTbodyHeight() {
-        // [性能優化] 使用緩存值
-        const height = SCRIPT_STATE.isFullViewModeActive ? 800 : SCRIPT_STATE.cachedHeight;
+        const height = SCRIPT_STATE.isFullViewModeActive ? 800 : GM_getValue('tbodyMaxHeight', DEFAULTS.tbodyMaxHeight);
         const tbody = document.querySelector(SELECTORS.movementTbody);
         if (tbody && tbody.style.maxHeight !== `${height}px`) {
             tbody.style.display = 'block';
@@ -1401,9 +1401,8 @@ PACKAGE WAS DRIVER RELEASED
     function createSettingsPanel() {
         if (document.getElementById('ivp-settings-modal')) return;
 
-        // [性能優化] 使用緩存值
-        const currentHeight = SCRIPT_STATE.cachedHeight;
-        const currentColor = SCRIPT_STATE.cachedColor;
+        const currentHeight = GM_getValue('tbodyMaxHeight', DEFAULTS.tbodyMaxHeight);
+        const currentColor = GM_getValue('annotationColor', DEFAULTS.annotationColor);
 
         const modalHTML = `
             <div id="ivp-settings-modal" class="ivp-settings-backdrop">
@@ -1490,8 +1489,6 @@ PACKAGE WAS DRIVER RELEASED
         heightInput.addEventListener('change', () => {
             const newHeight = parseInt(heightInput.value, 10) || DEFAULTS.tbodyMaxHeight;
             GM_setValue('tbodyMaxHeight', newHeight);
-            // [性能優化] 更新緩存
-            SCRIPT_STATE.cachedHeight = newHeight;
             triggerSeamlessHeightAdjustment();
         });
 
@@ -1499,18 +1496,12 @@ PACKAGE WAS DRIVER RELEASED
             const newColor = event.target.value;
             colorPreview.textContent = newColor.toUpperCase();
             GM_setValue('annotationColor', newColor);
-            // [性能優化] 更新緩存
-            SCRIPT_STATE.cachedColor = newColor;
             applyAnnotationColor();
         });
 
         resetBtn.addEventListener('click', () => {
             GM_setValue('tbodyMaxHeight', DEFAULTS.tbodyMaxHeight);
             GM_setValue('annotationColor', DEFAULTS.annotationColor);
-
-            // [性能優化] 更新緩存
-            SCRIPT_STATE.cachedHeight = DEFAULTS.tbodyMaxHeight;
-            SCRIPT_STATE.cachedColor = DEFAULTS.annotationColor;
 
             triggerSeamlessHeightAdjustment();
             applyAnnotationColor();
@@ -1523,70 +1514,51 @@ PACKAGE WAS DRIVER RELEASED
         showModal();
     }
 
-    // [V15.0 穿透式 DOM 檢查]
+    // 智能 DOM 檢查
     function isNextNodeAddressLine(textNode) {
-        // 輔助函數：檢查節點內容是否為地址延續 (字母或數字開頭)
-        const checkContent = (node) => {
-            if (!node) return null;
-            let text = "";
-            if (node.nodeType === Node.TEXT_NODE) {
-                text = node.nodeValue;
-            } else if (node.nodeType === Node.ELEMENT_NODE) {
-                // 遇到 BR，視為有效節點但無內容，返回特殊標記繼續找
-                if (node.tagName === 'BR') return 'CONTINUE';
-                // 忽略按鈕等無關元素
-                if (node.classList && (node.classList.contains('btn') || node.tagName === 'BUTTON' || node.tagName === 'EM')) return 'CONTINUE';
-                text = node.textContent;
-            } else {
-                return 'CONTINUE';
-            }
+        let currentNode = textNode;
+        let nextSibling = currentNode.nextSibling;
 
-            const trimmed = text.trim();
-            if (!trimmed) return 'CONTINUE'; // 空文本，繼續找
-
-            // 找到了有效文本，檢查是否以字母或數字開頭
-            // 如果是，則視為地址延續 -> 返回 true (跳過註釋)
-            // 如果不是 (例如是逗號)，則返回 false (允許註釋)
-            return /^[a-zA-Z0-9]/i.test(trimmed);
-        };
-
-        // 1. 檢查同級兄弟節點
-        let sibling = textNode.nextSibling;
-        while (sibling) {
-            const result = checkContent(sibling);
-            if (result === true || result === false) return result;
-            sibling = sibling.nextSibling;
-        }
-
-        // 2. 如果同級沒找到，且父元素是行內元素，則檢查父元素的兄弟
-        const parent = textNode.parentNode;
-        if (parent) {
+        if (!nextSibling && currentNode.parentNode) {
+            const parent = currentNode.parentNode;
             const parentTag = parent.tagName.toUpperCase();
-            // 允許跨越的行內標籤
             const inlineTags = ['SPAN', 'B', 'STRONG', 'I', 'EM', 'FONT', 'A', 'SMALL', 'BIG'];
 
             if (inlineTags.includes(parentTag)) {
-                let parentSibling = parent.nextSibling;
-                while (parentSibling) {
-                    const result = checkContent(parentSibling);
-                    if (result === true || result === false) return result;
-                    parentSibling = parentSibling.nextSibling;
-                }
+                nextSibling = parent.nextSibling;
             }
         }
 
-        // 默認：沒找到後續內容，視為結尾 -> 允許註釋
+        while (nextSibling) {
+            let textContent = "";
+
+            if (nextSibling.nodeType === Node.TEXT_NODE) {
+                textContent = nextSibling.nodeValue;
+            } else if (nextSibling.nodeType === Node.ELEMENT_NODE) {
+                if (nextSibling.tagName === 'BR') {
+                    nextSibling = nextSibling.nextSibling;
+                    continue;
+                }
+                if (nextSibling.tagName === 'BUTTON' || nextSibling.tagName === 'EM') {
+                     nextSibling = nextSibling.nextSibling;
+                     continue;
+                }
+                textContent = nextSibling.textContent;
+            }
+
+            const trimmed = textContent.trim();
+            if (trimmed.length > 0) {
+                return /^[A-Z0-9]/i.test(trimmed);
+            }
+
+            nextSibling = nextSibling.nextSibling;
+        }
+
         return false;
     }
 
     function annotateTextNode(node) {
-        if (!node || node.nodeType !== Node.TEXT_NODE || !node.nodeValue) return;
-
-        // [性能優化] 快速失敗檢查：如果文本不包含 大寫字母、數字 或 #，則直接跳過
-        // 這能過濾掉大量無關的空白符、純小寫標籤等，大幅減少正則執行次數
-        if (!/[A-Z0-9#]/.test(node.nodeValue)) return;
-
-        if (!node.nodeValue.trim()) return;
+        if (!node || node.nodeType !== Node.TEXT_NODE || !node.nodeValue || !node.nodeValue.trim()) return;
         if (node.parentNode && node.parentNode.closest && node.parentNode.closest("." + annotationClassName)) return;
 
         const text = node.nodeValue;
@@ -1602,16 +1574,36 @@ PACKAGE WAS DRIVER RELEASED
         while ((m = unionRegex.exec(text)) !== null) {
             const matchText = m[0];
             const matchStart = m.index;
+            const trimmedMatch = matchText.trim();
+            const lowerMatch = trimmedMatch.toLowerCase();
 
-            // [V15.0 邏輯應用]
-            // 對所有單個單詞的關鍵詞進行跨節點檢查
+            // 查找 Note
+            const noteContent = keyToNote.get(lowerMatch);
+            if (!noteContent) {
+                 lastIndex = matchStart + matchText.length;
+                 continue;
+            }
+
+            // [V19.0] 智能大小寫校驗
+            // 條件1: 網頁上的詞是全大寫 (如 DESTINATION, DAMAGE) -> 通過
+            // 條件2: 網頁上的詞與腳本設定的原始 Key 完全一致 (如 Oak Ridge) -> 通過
+            const originalKey = keyToOriginal.get(lowerMatch);
+            const isAllUpperCase = trimmedMatch === trimmedMatch.toUpperCase();
+            const isExactMatch = trimmedMatch === originalKey;
+
+            if (!isAllUpperCase && !isExactMatch) {
+                // 如果既不是全大寫，也不符合原始設定的大小寫 (例如 Destination vs DESTINATION)，則跳過
+                lastIndex = matchStart + matchText.length;
+                continue;
+            }
+
             const isSingleWord = !matchText.includes(' ');
 
             if (isSingleWord && isNextNodeAddressLine(node)) {
                 if (matchStart > lastIndex) {
                     frag.appendChild(document.createTextNode(text.slice(lastIndex, matchStart)));
                 }
-                frag.appendChild(document.createTextNode(matchText)); // 僅添加原文
+                frag.appendChild(document.createTextNode(matchText));
                 lastIndex = matchStart + matchText.length;
                 continue;
             }
@@ -1622,7 +1614,7 @@ PACKAGE WAS DRIVER RELEASED
             frag.appendChild(document.createTextNode(matchText));
             const noteSpan = document.createElement("span");
             noteSpan.className = "tm-annotation-note";
-            noteSpan.textContent = `(${keyToNote.get(matchText)})`;
+            noteSpan.textContent = `(${noteContent})`;
             frag.appendChild(noteSpan);
             lastIndex = matchStart + matchText.length;
         }
@@ -1638,7 +1630,7 @@ PACKAGE WAS DRIVER RELEASED
         node.parentNode.replaceChild(wrapper, node);
     }
 
-    function processElement(rootElement) {
+        function processElement(rootElement) {
         if (!rootElement || !rootElement.nodeType) return;
         if (rootElement.nodeName === "INPUT" || rootElement.nodeName === "TEXTAREA" || rootElement.isContentEditable) return;
         const forbiddenAncestorsSelector = 'INPUT, TEXTAREA, BUTTON, SELECT, OPTION, SCRIPT, STYLE, [contenteditable="true"]';
@@ -1687,38 +1679,24 @@ PACKAGE WAS DRIVER RELEASED
     }
 
     function observeDocument(doc) {
-        // [性能優化] 批量處理隊列
-        let batchNodes = new Set();
-        let rafId = null;
-
-        const processBatch = () => {
-            batchNodes.forEach(node => {
-                if (node.isConnected) {
-                    if (node.nodeType === Node.ELEMENT_NODE) processElement(node);
-                    else if (node.nodeType === Node.TEXT_NODE) annotateTextNode(node);
-                }
-            });
-            batchNodes.clear();
-            rafId = null;
-            triggerSeamlessHeightAdjustment();
-        };
-
         const observer = new MutationObserver(mutations => {
-            let hasChanges = false;
+            let hasMeaningfulChange = false;
             for (const m of mutations) {
                 if (m.type === "childList" && m.addedNodes.length > 0) {
-                    m.addedNodes.forEach(n => batchNodes.add(n));
-                    hasChanges = true;
+                    m.addedNodes.forEach(n => {
+                        if (n.nodeType === Node.ELEMENT_NODE) processElement(n);
+                        else if (n.nodeType === Node.TEXT_NODE) annotateTextNode(n);
+                    });
+                    hasMeaningfulChange = true;
                 }
                 else if (m.type === "characterData") {
-                    batchNodes.add(m.target);
-                    hasChanges = true;
+                    annotateTextNode(m.target);
+                    hasMeaningfulChange = true;
                 }
             }
 
-            if (hasChanges && !rafId) {
-                // [性能優化] 使用 requestAnimationFrame 進行批次處理
-                rafId = requestAnimationFrame(processBatch);
+            if (hasMeaningfulChange) {
+                triggerSeamlessHeightAdjustment();
             }
         });
 
@@ -1763,9 +1741,6 @@ PACKAGE WAS DRIVER RELEASED
         console.log("開始初始化註釋腳本");
 
         SCRIPT_STATE.isFullViewModeActive = GM_getValue('fullViewMode', false);
-        // [性能優化] 初始化時讀取一次
-        SCRIPT_STATE.cachedHeight = GM_getValue('tbodyMaxHeight', DEFAULTS.tbodyMaxHeight);
-        SCRIPT_STATE.cachedColor = GM_getValue('annotationColor', DEFAULTS.annotationColor);
 
         injectBaseStyles();
         injectDynamicStyles();
