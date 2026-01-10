@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CEC功能強化
 // @namespace    CEC Enhanced
-// @version      V75
+// @version      V76
 // @description  快捷操作按鈕、自動指派、IVP快速查詢、聯繫人彈窗優化、按鈕警示色、賬戶檢測、組件屏蔽、設置菜單、自動IVP查詢、URL精準匹配、快捷按鈕可編輯、(Related Cases)數據提取與增強排序功能、關聯案件提取器、回覆case快捷按鈕、已跟進case提示、全局暫停/恢復功能。
 // @author       Jerry Law
 // @match        https://upsdrive.lightning.force.com/*
@@ -2355,6 +2355,13 @@ V53 > V54
                 opacity: 0;
                 transition: opacity 0.3s ease;
                 border-radius: .25rem;
+            }
+            .uiTooltipAdvanced,
+            .tooltip.advanced-wrapper {
+                display: none !important;
+                visibility: hidden !important;
+                opacity: 0 !important;
+                pointer-events: none !important;
             }
         `;
 
@@ -4759,11 +4766,30 @@ V53 > V54
                     range.collapse(true);
                     selection.removeAllRanges();
                     selection.addRange(range);
+
+                    // [修復開始] 強制同步編輯器狀態
+                    // 模擬一次點擊事件，讓 TinyMCE 內核確認光標位置已變更
+                    // 這是防止菜單打開時光標回滾的關鍵
+                    try {
+                        const syncEventConfig = { bubbles: true, cancelable: true, view: iframe.contentWindow };
+                        // 派發 mousedown 和 mouseup 模擬點擊
+                        if (targetNode) {
+                            targetNode.dispatchEvent(new MouseEvent('mousedown', syncEventConfig));
+                            targetNode.dispatchEvent(new MouseEvent('mouseup', syncEventConfig));
+                        } else {
+                            editorBody.dispatchEvent(new MouseEvent('mousedown', syncEventConfig));
+                            editorBody.dispatchEvent(new MouseEvent('mouseup', syncEventConfig));
+                        }
+                        // 再次強制聚焦
+                        iframe.contentWindow.focus();
+                    } catch (e) { /* ignore */ }
+
+                    // 增加一個微小的延時，等待事件循環處理完畢
+                    await delay(50);
+                    // [修復結束]
+
                     Log.info('UI.Enhancement', `已執行歸零定位法 (跳過 ${linesFound} 行)`);
                 }
-            } catch (cursorError) {
-                Log.error('UI.Enhancement', `預定位光標錯誤: ${cursorError.message}`);
-            }
         }
 
         // 3. Pre-Conversion
