@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IVP顯示注釋
 // @namespace    IVP顯示注釋
-// @version      V12
+// @version      V13
 // @description  IVP顯示注釋、一眼模式、定義字體顏色。
 // @author       Jerry Law
 // @match        *://ivp.inside.ups.com/*
@@ -116,7 +116,7 @@
 #NO UPS CNTRL|不可控延遲
 #REFUSED|收貨人拒絕此包裹
 #PKG DELAYED|貨物延誤
-#DOC INSPECT|清關行檢查文件
+#DOC INSPECT|清關機構審閱文件
 #RE-PACK|重新包裝
 #PREF TO AP|包裹送到收件人選擇的提貨點
 #RTS PENDING|計劃退回發件人
@@ -184,7 +184,7 @@
 #ADD DEL DAY|延遲一天發貨
 #ADD MODIFY|地址修改
 #ADDL HANDLE|帳單調整，額外處理
-#ADDL HOLD|存在額外的停留原因
+#ADDL HOLD|因為左側狀態，暫停處理
 #ADDR CORRCTN|位址更正，重新安排送達
 #ADDR ERRORS|地址有多處錯誤，未送達
 #ADR DG HOLD ADR|危險品包裹被扣押
@@ -236,7 +236,7 @@
 #BLDG BURNED|建築物燒毀，未能送達
 #BNL MISLOAD|包裹未連結，錯誤裝載
 #BOND HLD UPS|準備替代地點的保稅文件 - UPS 報關行
-#BOND HOLD|準備替代報關行的保稅文件
+#BOND HOLD|正為第三方清關行準備清關文件
 #BREAKDOWN|機械故障
 #BREAKDOWN OP|財產發生故障
 #BREXIT|英國脫歐造成的混亂導致延誤
@@ -268,7 +268,7 @@
 #CIVIL UNREST|公民示威
 #CL AGY REJEC|清關行拒絕入境
 #CLAIM INVEST|損壞索賠調查中
-#CLAIM ISSUED|可索賠
+#CLAIM ISSUED|已批准索賠
 #CLIMATE CTRL|放置於溫控環境中
 #CLOSED 1|收件人地點關閉1
 #CLOSED 2|收件人地點關閉2
@@ -463,7 +463,7 @@
 #HELD PKG PU|收件人已領取被扣留的包裹
 #HIGH VALUE|高價值貨件
 #HIJACK/STOLN|包裹因車輛被竊或搶劫而遺失
-#HLD INSTRUCT|保留待指示
+#HLD INSTRUCT|暫停處理，正等待指示
 #HM10|危險品
 #HOLD FOR PU|寄件人要求保留待取件
 #HOLD RESOLVD|扣留已解決
@@ -525,7 +525,7 @@
 #REF TOO $$$|運費太貴，收件人拒收
 #REF TOO LATE|派送太晚，收件人拒收
 #REFUSED PAY|收件人拒付除關稅以外的所有費用
-#RELEASED|狀態釋放
+#RELEASED|左側狀態已解除
 #REMOTE AREA|偏遠地區
 #REQ LATE DEL|寄件者請求稍晚派送
 #RES DEL DATE|重新安排派送時間
@@ -548,7 +548,7 @@
 #SEC/SCR REQ|包裹需要做安檢
 #ICOD CHG DUE|交貨時需支付關稅
 #DEPARTED FROMFACILITY|貨物離開轉運地掃描
-#REGISTERED|在清關機構註冊
+#REGISTERED|提交清關
 #LOCATION SCAN|位置掃描
 #TRNSFR NOTIF|ERN REMARK更新
 #ICOD PAID|已付關稅
@@ -566,7 +566,7 @@
 #POA IMP REQ|需要提供POA文件
 #OFFSITE BROK|由第三方機構清關和派送
 #SIG OBTAINED|獲得簽名
-#NOT LATE|無遲到
+#NOT LATE|無遲到 - 已清除「延誤」標記
 #DESTINATION SCAN|目的地掃描
 #WAREHOUSE SCAN|倉庫掃描
 #LITHIUM LIB|包裹內有鋰電池被暫扣檢查
