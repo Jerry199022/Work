@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IVP顯示注釋
 // @namespace    IVP顯示注釋
-// @version      V8
+// @version      V10
 // @description  IVP顯示注釋、一眼模式、定義字體顏色。
 // @author       Jerry Law
 // @match        *://ivp.inside.ups.com/*
@@ -24,6 +24,18 @@
     // 注釋數據
     // ================================================================
     const annotationsText = `
+#165 GLENN FOX RD|亞馬遜倉
+#7600 LTC PARKWAY|亞馬遜倉
+#27505 SW 132ND AVE|亞馬遜倉
+#4806 Cotter Ln|亞馬遜倉
+#2845 W 48th Pl|亞馬遜倉
+#550 OAK RIDGE ROAD|亞馬遜倉
+#RASALAT-PPWK|清關文件送達給收件人
+#RETURN GOODS|退回包裹
+#SAT DELIVERY|星期六送貨
+#SAT AIR DEL|星期六空運送貨
+#NEVER ARRIVD|從未送達目的地
+#LIB BREAKDWN|因設施故障或停電而導致延誤
 #REC BY UPS|包裹已由UPS接收
 #TRADE INSPCT|政府檢查潛在的貿易違規行為
 #PHONE NO ANS|收件人沒有接聽電話
@@ -70,7 +82,7 @@
 #ADDRS INFO|驗證地址資訊
 #LIB LATE ARR|包裹延遲到達
 #POD REQUEST|交貨證明請求
-#TRL DEL CUST|運輸車被清關代理耽誤
+#TRL DEL CUST|海關檢測，無法預計釋放時間。
 #UNAUTH DRUGS|發現未經授權的藥物
 #RETAIL DISP|逾期未取被UPS回收
 #MISFLOW|錯誤分揀至不正確地點
@@ -85,6 +97,7 @@
 #REF DIDN ORD|收件人表示未下訂單拒絕接收
 #REF CANCELED|收件人表示已取消訂單拒絕接收
 #PKG AGING|快到取件限期
+#RESIDENTIAL|住宅
 #PKUP AGE OUT|逾期未取被UPS回收
 #NO CONTACT|無法聯繫收件人
 #VOID ENTRY|指示取消記錄
@@ -120,7 +133,7 @@
 #NON TRANS|不可運輸
 #UNAUTH PLANT|未經授權的植物
 #VALU DISPUTE|收件人對貨物價值有異議
-#VERIFY GOODS|驗貨暫扣
+#VERIFY GOODS|驗證貨品描述
 #NOT FINAL|預計1-2日派送
 #TRXFER TO PO|包裹轉移到郵局
 #OUT FOR DELV|計劃今天送貨
@@ -216,6 +229,7 @@
 #AWAITING REL|包裹正在清關過程中
 #AWAITS PU|等待提貨
 #AWT EXP PRC|等待出口處理
+#BILLING INFORMATION RECEIVED|已建立運單
 #BAD TRK INFO|無效或遺失的追蹤號碼
 #BILL OPT N/A|客戶沒有選擇付款方式/服務類型
 #BILLTYPE ERR|描述/內容不符合文件資格
@@ -254,7 +268,7 @@
 #CIVIL UNREST|公民示威
 #CL AGY REJEC|清關行拒絕入境
 #CLAIM INVEST|損壞索賠調查中
-#CLAIM ISSUED|已提出索賠
+#CLAIM ISSUED|可索賠
 #CLIMATE CTRL|放置於溫控環境中
 #CLOSED 1|收件人地點關閉1
 #CLOSED 2|收件人地點關閉2
@@ -455,7 +469,7 @@
 #HOLD RESOLVD|扣留已解決
 #HOLIDAY|因假日重新安排送貨
 #HUB NOT PROC|入站樞紐貨物未處理
-#IMP TAX #|清關時需要進口商的稅號
+#IMP TAX #|需要提供進口商的稅號
 #IMPT LIC REQ|需要進口許可證
 #INAD DESCRPT|商品描述不充分
 #INCOMPL MULT|一票多件未到齊
@@ -589,6 +603,7 @@
 #AT|奧地利
 #AZ|阿塞拜疆
 #BS|巴哈馬
+#BB|巴巴多斯
 #BD|孟加拉
 #BY|白俄羅斯
 #BZ|貝裡斯
@@ -791,6 +806,8 @@
 #AW|阿鲁巴
 #BQ|波奈,荷蘭屬加勒比
 #CW|庫拉索
+#KM|科摩羅
+#COMOROS|科摩羅 - KM
 #BONAIRE, SINT EUSTATIUS AND SABA|波奈,荷蘭屬加勒比 - BQ
 #ARUBA|阿鲁巴 - AW
 #CZECHIA|捷克 - CZ
@@ -811,6 +828,7 @@
 #BAHAMAS|巴哈馬 - BS
 #BANGLADESH|孟加拉 - BD
 #BELARUS|白俄羅斯 - BY
+#BARBADOS|巴巴多斯 - BB
 #BELIZE|貝裡斯 - BZ
 #BENIN|貝南 - BJ
 #BHUTAN|不丹 - BT
@@ -830,6 +848,7 @@
 #CAYMAN ISLANDS|開曼群島 - KY
 #CHILE|智利 - CL
 #HONG KONG SAR, CHINA|香港 - HK
+#CHINA MAINLAND|中國 - CN
 #COLOMBIA|哥倫比亞 - CO
 #DEMOCRATIC REPUBLIC OF THE CONGO|剛果 - CG
 #COOK ISLANDS|科克群島 - CK
@@ -900,6 +919,7 @@
 #MARTINIQUE|法屬馬丁尼克 - MQ
 #MEXICO|墨西哥 - MX
 #MOLDOVA|摩爾多瓦 - MD
+#MOLDOVA, REPUBLIC OF|摩爾多瓦 - MD
 #MONGOLIA|蒙古 - MN
 #MONTENEGRO|黑山 - ME
 #MOROCCO|摩洛哥 - MA
@@ -1012,6 +1032,7 @@
 #GUINEA-BISSAU|幾內亞比索 - GW
     `;
     const excludeText = `
+, PA
 DO NOT ANNOTATE
 Ship To
 Refundable : NO
@@ -1033,47 +1054,101 @@ PACKAGE WAS DRIVER RELEASED
     const excludeList = excludeText.trim().split('\n').filter(line => line.trim()).map(text => text.toLowerCase());
     const annotationClassName = "tm-annotation-added";
     const escapeReg = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    // Key -> Note 映射
     const keyToNote = new Map();
-    const wordBoundaryKeys = new Set();
+    // 規則列表
+    const regexRules = [];
     const processedNodes = new WeakSet();
 
+    // 解析註釋數據
     annotations.forEach(annotation => {
-        const [keys, note] = annotation.split("|");
-        if (keys && note) {
-            if (keys.startsWith('##')) {
-                const keysWithoutPrefix = keys.substring(2);
-                keysWithoutPrefix.split(",").forEach(key => {
-                    const trimmedKey = key.trim();
-                    if (trimmedKey) {
-                        keyToNote.set(trimmedKey, note);
-                        wordBoundaryKeys.add(trimmedKey);
-                    }
-                });
+        const firstPipeIndex = annotation.indexOf('|');
+        if (firstPipeIndex === -1) return;
+
+        const keysRaw = annotation.substring(0, firstPipeIndex);
+        const note = annotation.substring(firstPipeIndex + 1);
+
+        if (!keysRaw || !note) return;
+
+        // 定義處理單個 Key 的函數
+        const processKey = (key, isBoundary) => {
+            const trimmedKey = key.trim();
+            if (!trimmedKey) return;
+
+            keyToNote.set(trimmedKey, note);
+
+            let pattern;
+            const escapedKey = escapeReg(trimmedKey);
+
+            if (isBoundary) {
+                // [V16.0 符號隔離策略]
+
+                let leftBoundary;
+                let rightBoundary;
+
+                if (trimmedKey.length <= 3) {
+                    // ==========================================
+                    // [短詞模式] (如 DE, US, CN, JP)
+                    // ==========================================
+
+                    // 左側：寬鬆。
+                    leftBoundary = '(?<![a-zA-Z0-9])';
+
+                    // 右側：嚴格多重過濾。
+                    // 1. (?![a-zA-Z0-9\\.\\-]) : 基本邊界 (防止 CO., NO., JP-)
+                    // 2. (?![\\s]*[\\-\\/]) : [新增] 禁止後面跟 "橫線" 或 "斜線" (含空格)
+                    //    - JP - KANSAI -> Skip
+                    //    - JP/US -> Skip
+                    // 3. (?![\\s]+[A-Z0-9]) : 禁止後面跟 "空格 + 大寫字母/數字"
+                    //    - FL US -> Skip
+                    //    - US 02 -> Skip
+                    rightBoundary = '(?![a-zA-Z0-9\\.\\-])(?![\\s]*[\\-\\/])(?![\\s]+[A-Z0-9])';
+
+                } else {
+                    // ==========================================
+                    // [長詞模式] (如 BAHAMAS, ECUADOR)
+                    // ==========================================
+
+                    // 左側：單行過濾。
+                    leftBoundary = '(?<![A-Z0-9]{3,}[ \\t])(?<![a-zA-Z0-9])';
+
+                    // 右側：放寬正則，依賴 DOM 檢查
+                    rightBoundary = '(?![a-zA-Z0-9\\.\\-])';
+                }
+
+                pattern = leftBoundary + escapedKey + rightBoundary;
             } else {
-                keys.split(",").forEach(key => {
-                    if (key) {
-                        if (key.startsWith('#')) {
-                            const boundaryKey = key.substring(1);
-                            keyToNote.set(boundaryKey, note);
-                            wordBoundaryKeys.add(boundaryKey);
-                        } else {
-                            keyToNote.set(key, note);
-                        }
-                    }
-                });
+                pattern = escapedKey;
             }
+
+            regexRules.push({
+                key: trimmedKey,
+                pattern: pattern,
+                length: trimmedKey.length
+            });
+        };
+
+        if (keysRaw.startsWith('##')) {
+            const keysWithoutPrefix = keysRaw.substring(2);
+            keysWithoutPrefix.split(",").forEach(key => processKey(key, true));
+        } else if (keysRaw.startsWith('#')) {
+            const keyWithoutPrefix = keysRaw.substring(1);
+            processKey(keyWithoutPrefix, true);
+        } else {
+            keysRaw.split(",").forEach(key => processKey(key, false));
         }
     });
 
-    const keysSorted = Array.from(keyToNote.keys()).sort((a, b) => b.length - a.length);
-    const boundaryPatterns = keysSorted.filter(key => wordBoundaryKeys.has(key)).map(key => '(?<![a-zA-Z0-9])' + escapeReg(key) + '(?![a-zA-Z0-9,.:!?-]|.{1,4}[a-zA-Z0-9,.:!?-]|[\r\n])').join("|");
-    const normalPatterns = keysSorted.filter(key => !wordBoundaryKeys.has(key)).map(escapeReg).join("|");
-    const allPatterns = [boundaryPatterns, normalPatterns].filter(p => p).join("|");
+    // 統一按長度降序排序
+    regexRules.sort((a, b) => b.length - a.length);
+
+    const allPatterns = regexRules.map(rule => rule.pattern).join("|");
     const unionRegex = new RegExp(allPatterns, "g");
 
     const DEFAULTS = {
         tbodyMaxHeight: 375,
-        annotationColor: '#FF0000' // 默認注釋顏色為紅色
+        annotationColor: '#FF0000'
     };
 
     const SELECTORS = {
@@ -1092,7 +1167,10 @@ PACKAGE WAS DRIVER RELEASED
 
     const SCRIPT_STATE = {
         annotationsAreVisible: true,
-        isFullViewModeActive: false
+        isFullViewModeActive: false,
+        // [性能優化] 緩存設置值，避免高頻讀取 GM_
+        cachedHeight: DEFAULTS.tbodyMaxHeight,
+        cachedColor: DEFAULTS.annotationColor
     };
 
     const FULL_VIEW_STYLE_ID = 'ivp-full-view-dynamic-styles';
@@ -1104,7 +1182,6 @@ PACKAGE WAS DRIVER RELEASED
             .tm-fa-icon { font-family: "Font Awesome 5 Free", "Font Awesome 5 Solid", "FontAwesome", sans-serif !important; font-weight: 900 !important; display: inline-block !important; font-style: normal !important; font-variant: normal !important; text-rendering: auto !important; -webkit-font-smoothing: antialiased; }
             ${SELECTORS.buttonContainer} { position: relative !important; display: flex !important; align-items: center !important; }
             #call-complete { display: block !important; align-self: center !important; margin-left: auto !important; margin-right: 50px !important; }
-            /* [修改] 移除了 color: red !important; 規則，顏色將由動態樣式控制 */
             .tm-annotation-note { display: inline; margin-left: 5px; font-size: 1em; font-weight: bold; font-family: "Microsoft YaHei", "PingFang TC", sans-serif !important; }
             body.${CSS_CLASSES.annotationsHidden} .tm-annotation-note { display: none !important; }
         `;
@@ -1115,7 +1192,6 @@ PACKAGE WAS DRIVER RELEASED
         console.log("%c[UI] 基礎樣式表已注入。", "color: green; font-weight: bold;");
     }
 
-    // [新增] 注入用於動態修改顏色的專用 <style> 標籤
     function injectDynamicStyles() {
         const styleId = 'ivp-dynamic-annotation-style';
         if (document.getElementById(styleId)) return;
@@ -1124,11 +1200,11 @@ PACKAGE WAS DRIVER RELEASED
         document.head.appendChild(style);
     }
 
-    // [新增] 應用存儲的顏色到動態 <style> 標籤
     function applyAnnotationColor() {
         const styleElement = document.getElementById('ivp-dynamic-annotation-style');
         if (!styleElement) return;
-        const color = GM_getValue('annotationColor', DEFAULTS.annotationColor);
+        // [性能優化] 使用緩存值
+        const color = SCRIPT_STATE.cachedColor;
         styleElement.textContent = `.tm-annotation-note { color: ${color} !important; }`;
     }
 
@@ -1139,32 +1215,22 @@ PACKAGE WAS DRIVER RELEASED
         }
         if (SCRIPT_STATE.isFullViewModeActive) {
             const css = `
-                /* [修改] 進入一眼睇曬模式時，將整個頁面的根字體大小縮放至60% */
                 html {
                     font-size: 60% !important;
                 }
-
-                /* [新增] 針對 GSR Status 特定容器的佈局調整 */
-                /* 使用 :has 語法精確定位含有 GSR Status 結構的 container */
                 div.container:has(.row > .col-10.text-center) {
                     margin-top: 67rem !important;
-                    position: relative; /* 確保 z-index 生效 */
-                    z-index: 5; /* 防止被遮擋 */
+                    position: relative;
+                    z-index: 5;
                 }
-
-                /* [新增] 壓縮按鈕尺寸 */
                 .btnsmall {
                     padding: .001rem .3rem!important;
                     font-size: .775rem!important;
                 }
-
-                /* [新增] 調整水平分割線邊距 */
                 hr {
                     margin-top: -15px;
                     margin-bottom: 7px;
                 }
-
-                /* ... (保留你原有的其他樣式規則: 基礎隱藏、表格行高、Prev/Next 按鈕等) ... */
                 app-ivp-pd-trackingno-detail .ng-star-inserted > .row,
                 app-root > .ng-star-inserted > .row,
                 .ng-star-inserted.h5tracking,
@@ -1229,7 +1295,8 @@ PACKAGE WAS DRIVER RELEASED
     }
 
     function applyTbodyHeight() {
-        const height = SCRIPT_STATE.isFullViewModeActive ? 800 : GM_getValue('tbodyMaxHeight', DEFAULTS.tbodyMaxHeight);
+        // [性能優化] 使用緩存值
+        const height = SCRIPT_STATE.isFullViewModeActive ? 800 : SCRIPT_STATE.cachedHeight;
         const tbody = document.querySelector(SELECTORS.movementTbody);
         if (tbody && tbody.style.maxHeight !== `${height}px`) {
             tbody.style.display = 'block';
@@ -1334,8 +1401,9 @@ PACKAGE WAS DRIVER RELEASED
     function createSettingsPanel() {
         if (document.getElementById('ivp-settings-modal')) return;
 
-        const currentHeight = GM_getValue('tbodyMaxHeight', DEFAULTS.tbodyMaxHeight);
-        const currentColor = GM_getValue('annotationColor', DEFAULTS.annotationColor);
+        // [性能優化] 使用緩存值
+        const currentHeight = SCRIPT_STATE.cachedHeight;
+        const currentColor = SCRIPT_STATE.cachedColor;
 
         const modalHTML = `
             <div id="ivp-settings-modal" class="ivp-settings-backdrop">
@@ -1361,7 +1429,6 @@ PACKAGE WAS DRIVER RELEASED
                             </div>
                         </div>
                     </div>
-                    <!-- [新增] 設置面板頁腳和恢復默認按鈕 -->
                     <div class="ivp-settings-footer">
                         <button id="ivp-settings-reset" class="ivp-settings-reset-btn">恢復默認設定</button>
                     </div>
@@ -1381,18 +1448,11 @@ PACKAGE WAS DRIVER RELEASED
             .ivp-settings-option { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; }
             .ivp-settings-label { font-size: 1rem; color: #555; flex-grow: 1; margin-right: 16px; }
             .ivp-settings-divider { border: 0; border-top: 1px solid #eee; margin: 8px 0; }
-            .ivp-settings-switch { position: relative; display: inline-block; width: 50px; height: 28px; flex-shrink: 0; cursor: pointer; }
-            .ivp-settings-switch input { opacity: 0; width: 0; height: 0; }
-            .ivp-settings-slider { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; border-radius: 28px; transition: .4s; }
-            .ivp-settings-slider:before { position: absolute; content: ""; height: 20px; width: 20px; left: 4px; bottom: 4px; background-color: #fff; border-radius: 50%; transition: .4s; }
-            input:checked + .ivp-settings-slider { background-color: #0070d2; }
-            input:checked + .ivp-settings-slider:before { transform: translateX(22px); }
             .ivp-settings-input-group { display: flex; align-items: center; flex-shrink: 0; }
             .ivp-settings-input { width: 80px; padding: 4px 8px; border: 1px solid #ccc; border-radius: 4px; text-align: right; font-size: .95rem; }
             .ivp-settings-input-group span { margin-left: 8px; color: #777; }
             .ivp-settings-color-input { width: 40px; height: 28px; border: 1px solid #ccc; border-radius: 4px; cursor: pointer; padding: 2px; background-color: #fff; }
             .ivp-color-preview-text { font-family: monospace; background-color: #f0f0f0; padding: 4px 8px; border-radius: 4px; margin-right: 12px; }
-            /* [新增] 頁腳和恢復默認按鈕的樣式 */
             .ivp-settings-footer { padding: 16px 24px; border-top: 1px solid #e0e0e0; text-align: right; }
             .ivp-settings-reset-btn { background-color: #f8f9fa; border: 1px solid #dee2e6; color: #212529; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 0.9rem; transition: background-color .2s ease; }
             .ivp-settings-reset-btn:hover { background-color: #e2e6ea; }
@@ -1430,6 +1490,8 @@ PACKAGE WAS DRIVER RELEASED
         heightInput.addEventListener('change', () => {
             const newHeight = parseInt(heightInput.value, 10) || DEFAULTS.tbodyMaxHeight;
             GM_setValue('tbodyMaxHeight', newHeight);
+            // [性能優化] 更新緩存
+            SCRIPT_STATE.cachedHeight = newHeight;
             triggerSeamlessHeightAdjustment();
         });
 
@@ -1437,12 +1499,18 @@ PACKAGE WAS DRIVER RELEASED
             const newColor = event.target.value;
             colorPreview.textContent = newColor.toUpperCase();
             GM_setValue('annotationColor', newColor);
+            // [性能優化] 更新緩存
+            SCRIPT_STATE.cachedColor = newColor;
             applyAnnotationColor();
         });
 
         resetBtn.addEventListener('click', () => {
             GM_setValue('tbodyMaxHeight', DEFAULTS.tbodyMaxHeight);
             GM_setValue('annotationColor', DEFAULTS.annotationColor);
+
+            // [性能優化] 更新緩存
+            SCRIPT_STATE.cachedHeight = DEFAULTS.tbodyMaxHeight;
+            SCRIPT_STATE.cachedColor = DEFAULTS.annotationColor;
 
             triggerSeamlessHeightAdjustment();
             applyAnnotationColor();
@@ -1455,8 +1523,70 @@ PACKAGE WAS DRIVER RELEASED
         showModal();
     }
 
+    // [V15.0 穿透式 DOM 檢查]
+    function isNextNodeAddressLine(textNode) {
+        // 輔助函數：檢查節點內容是否為地址延續 (字母或數字開頭)
+        const checkContent = (node) => {
+            if (!node) return null;
+            let text = "";
+            if (node.nodeType === Node.TEXT_NODE) {
+                text = node.nodeValue;
+            } else if (node.nodeType === Node.ELEMENT_NODE) {
+                // 遇到 BR，視為有效節點但無內容，返回特殊標記繼續找
+                if (node.tagName === 'BR') return 'CONTINUE';
+                // 忽略按鈕等無關元素
+                if (node.classList && (node.classList.contains('btn') || node.tagName === 'BUTTON' || node.tagName === 'EM')) return 'CONTINUE';
+                text = node.textContent;
+            } else {
+                return 'CONTINUE';
+            }
+
+            const trimmed = text.trim();
+            if (!trimmed) return 'CONTINUE'; // 空文本，繼續找
+
+            // 找到了有效文本，檢查是否以字母或數字開頭
+            // 如果是，則視為地址延續 -> 返回 true (跳過註釋)
+            // 如果不是 (例如是逗號)，則返回 false (允許註釋)
+            return /^[a-zA-Z0-9]/i.test(trimmed);
+        };
+
+        // 1. 檢查同級兄弟節點
+        let sibling = textNode.nextSibling;
+        while (sibling) {
+            const result = checkContent(sibling);
+            if (result === true || result === false) return result;
+            sibling = sibling.nextSibling;
+        }
+
+        // 2. 如果同級沒找到，且父元素是行內元素，則檢查父元素的兄弟
+        const parent = textNode.parentNode;
+        if (parent) {
+            const parentTag = parent.tagName.toUpperCase();
+            // 允許跨越的行內標籤
+            const inlineTags = ['SPAN', 'B', 'STRONG', 'I', 'EM', 'FONT', 'A', 'SMALL', 'BIG'];
+
+            if (inlineTags.includes(parentTag)) {
+                let parentSibling = parent.nextSibling;
+                while (parentSibling) {
+                    const result = checkContent(parentSibling);
+                    if (result === true || result === false) return result;
+                    parentSibling = parentSibling.nextSibling;
+                }
+            }
+        }
+
+        // 默認：沒找到後續內容，視為結尾 -> 允許註釋
+        return false;
+    }
+
     function annotateTextNode(node) {
-        if (!node || node.nodeType !== Node.TEXT_NODE || !node.nodeValue || !node.nodeValue.trim()) return;
+        if (!node || node.nodeType !== Node.TEXT_NODE || !node.nodeValue) return;
+
+        // [性能優化] 快速失敗檢查：如果文本不包含 大寫字母、數字 或 #，則直接跳過
+        // 這能過濾掉大量無關的空白符、純小寫標籤等，大幅減少正則執行次數
+        if (!/[A-Z0-9#]/.test(node.nodeValue)) return;
+
+        if (!node.nodeValue.trim()) return;
         if (node.parentNode && node.parentNode.closest && node.parentNode.closest("." + annotationClassName)) return;
 
         const text = node.nodeValue;
@@ -1472,6 +1602,20 @@ PACKAGE WAS DRIVER RELEASED
         while ((m = unionRegex.exec(text)) !== null) {
             const matchText = m[0];
             const matchStart = m.index;
+
+            // [V15.0 邏輯應用]
+            // 對所有單個單詞的關鍵詞進行跨節點檢查
+            const isSingleWord = !matchText.includes(' ');
+
+            if (isSingleWord && isNextNodeAddressLine(node)) {
+                if (matchStart > lastIndex) {
+                    frag.appendChild(document.createTextNode(text.slice(lastIndex, matchStart)));
+                }
+                frag.appendChild(document.createTextNode(matchText)); // 僅添加原文
+                lastIndex = matchStart + matchText.length;
+                continue;
+            }
+
             if (matchStart > lastIndex) {
                 frag.appendChild(document.createTextNode(text.slice(lastIndex, matchStart)));
             }
@@ -1494,7 +1638,7 @@ PACKAGE WAS DRIVER RELEASED
         node.parentNode.replaceChild(wrapper, node);
     }
 
-        function processElement(rootElement) {
+    function processElement(rootElement) {
         if (!rootElement || !rootElement.nodeType) return;
         if (rootElement.nodeName === "INPUT" || rootElement.nodeName === "TEXTAREA" || rootElement.isContentEditable) return;
         const forbiddenAncestorsSelector = 'INPUT, TEXTAREA, BUTTON, SELECT, OPTION, SCRIPT, STYLE, [contenteditable="true"]';
@@ -1543,24 +1687,38 @@ PACKAGE WAS DRIVER RELEASED
     }
 
     function observeDocument(doc) {
+        // [性能優化] 批量處理隊列
+        let batchNodes = new Set();
+        let rafId = null;
+
+        const processBatch = () => {
+            batchNodes.forEach(node => {
+                if (node.isConnected) {
+                    if (node.nodeType === Node.ELEMENT_NODE) processElement(node);
+                    else if (node.nodeType === Node.TEXT_NODE) annotateTextNode(node);
+                }
+            });
+            batchNodes.clear();
+            rafId = null;
+            triggerSeamlessHeightAdjustment();
+        };
+
         const observer = new MutationObserver(mutations => {
-            let hasMeaningfulChange = false;
+            let hasChanges = false;
             for (const m of mutations) {
                 if (m.type === "childList" && m.addedNodes.length > 0) {
-                    m.addedNodes.forEach(n => {
-                        if (n.nodeType === Node.ELEMENT_NODE) processElement(n);
-                        else if (n.nodeType === Node.TEXT_NODE) annotateTextNode(n);
-                    });
-                    hasMeaningfulChange = true;
+                    m.addedNodes.forEach(n => batchNodes.add(n));
+                    hasChanges = true;
                 }
                 else if (m.type === "characterData") {
-                    annotateTextNode(m.target);
-                    hasMeaningfulChange = true;
+                    batchNodes.add(m.target);
+                    hasChanges = true;
                 }
             }
 
-            if (hasMeaningfulChange) {
-                triggerSeamlessHeightAdjustment();
+            if (hasChanges && !rafId) {
+                // [性能優化] 使用 requestAnimationFrame 進行批次處理
+                rafId = requestAnimationFrame(processBatch);
             }
         });
 
@@ -1605,6 +1763,9 @@ PACKAGE WAS DRIVER RELEASED
         console.log("開始初始化註釋腳本");
 
         SCRIPT_STATE.isFullViewModeActive = GM_getValue('fullViewMode', false);
+        // [性能優化] 初始化時讀取一次
+        SCRIPT_STATE.cachedHeight = GM_getValue('tbodyMaxHeight', DEFAULTS.tbodyMaxHeight);
+        SCRIPT_STATE.cachedColor = GM_getValue('annotationColor', DEFAULTS.annotationColor);
 
         injectBaseStyles();
         injectDynamicStyles();
