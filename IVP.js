@@ -229,7 +229,7 @@
 #AWAITING REL|包裹正在清關過程中
 #AWAITS PU|等待提貨
 #AWT EXP PRC|等待出口處理
-#BILLING INFORMATION RECEIVED|已建立運單
+#BILLING INFORMATION RECEIVED|建立運單
 #BAD TRK INFO|無效或遺失的追蹤號碼
 #BILL OPT N/A|客戶沒有選擇付款方式/服務類型
 #BILLTYPE ERR|描述/內容不符合文件資格
