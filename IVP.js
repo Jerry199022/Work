@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IVP顯示注釋
 // @namespace    IVP顯示注釋
-// @version      V10
+// @version      V11
 // @description  IVP顯示注釋、一眼模式、定義字體顏色。
 // @author       Jerry Law
 // @match        *://ivp.inside.ups.com/*
@@ -242,7 +242,7 @@
 #BREXIT|英國脫歐造成的混亂導致延誤
 #BRKRGE HOLD|海關扣留 (超出 UPS 控制範圍)
 #BROK ASSIGND|已指派報關行，現正運送中
-#BROK RELEASE|海關已放行，等待其他政府機構放行
+#BROK RELEASE|報關行已處理完畢，正等海關或政府單位審核放行
 #BROK UNRATED|貨件未經報關行評定
 #CALL REC|UPS 已聯繫收件人
 #CALL SENDER|UPS 已聯繫寄件人
