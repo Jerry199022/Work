@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         通用接收器
 // @namespace    Universal Receiver
-// @version      V13
-// @description  同時支持 IVP 內部系統與 UPS 官網的自動查詢接收器。整合 F10 注入與跨窗口通訊功能。
+// @version      V14
+// @description  同時支持 IVP 內部系統與 UPS 官網的自動查詢接收器。後臺保活功能。
 // @author       Jerry Law
 // @match        https://ivp.inside.ups.com/internal-visibility-portal*
 // @match        https://www.ups.com/track*
@@ -20,11 +20,10 @@
     const IS_UPS_WEB = CURRENT_HOST.includes('ups.com');
     const ALLOWED_ORIGIN = 'https://upsdrive.lightning.force.com';
 
-    console.log(`[Universal Receiver V13] 啟動於: ${CURRENT_HOST}`);
+    console.log(`[Universal Receiver V14] 啟動於: ${CURRENT_HOST}`);
     console.log(`[Mode] ${IS_IVP ? 'IVP Mode' : (IS_UPS_WEB ? 'UPS Web Mode' : 'Unknown Mode')}`);
 
     // --- 狀態變量 ---
-    // [修改說明] 移除了 lastProcessedTrackingNumber，僅保留時間戳用於過濾網絡重試包
     let lastProcessedTimestamp = 0;
 
     // --- 通用工具函數 ---
@@ -50,7 +49,35 @@
     }
 
     /**
-     * [核心新增] 檢測頁面當前是否已經顯示了目標追蹤號
+     * [核心新增] 後臺保活機制 (Web Worker Heartbeat)
+     * 每 1 分鐘 (60000ms) 發送一次心跳，防止瀏覽器將長期未使用的標籤頁判定為廢棄並釋放內存。
+     * 這能確保即使標籤頁在後臺，也能即時響應 postMessage。
+     */
+    function initKeepAlive() {
+        try {
+            // 創建一個內聯 Worker，每 60000ms (1分鐘) 發送一次心跳
+            const blob = new Blob([`
+                setInterval(() => {
+                    self.postMessage('tick');
+                }, 60000);
+            `], { type: 'application/javascript' });
+
+            const worker = new Worker(URL.createObjectURL(blob));
+
+            // 主線程接收心跳，保持狀態活躍
+            worker.onmessage = () => {
+                // 收到心跳，無需執行具體操作，事件本身的觸發即可維持活躍度
+            };
+
+            console.log(`[KeepAlive] 保活機制已啟動 - 頻率: 1分鐘/次`);
+
+        } catch (e) {
+            console.error('[KeepAlive] 啟動失敗:', e);
+        }
+    }
+
+    /**
+     * 檢測頁面當前是否已經顯示了目標追蹤號
      * @param {string} targetNumber - 新收到的追蹤號
      * @returns {boolean} - 如果頁面已顯示該號碼則返回 true
      */
@@ -202,7 +229,7 @@
             // 1. 時間戳檢查 (防止網絡重試包重複觸發)
             if (timestamp > lastProcessedTimestamp) {
 
-                // 2. [全新邏輯] DOM 檢測：檢查頁面是否已經顯示了這個號碼
+                // 2. DOM 檢測：檢查頁面是否已經顯示了這個號碼
                 const isAlreadyDisplayed = isTrackingNumberOnPage(trackingNumber);
 
                 if (isAlreadyDisplayed) {
@@ -230,27 +257,7 @@
         }
     }, false);
 
-    // --- F10 注入功能 (僅限 IVP 模式) ---
-    if (IS_IVP) {
-        window.addEventListener('keydown', function(e) {
-            if (e.key === 'F10' || e.keyCode === 121) {
-                e.preventDefault();
-                e.stopPropagation();
-
-                const trap = document.createElement('textarea');
-                Object.assign(trap.style, {
-                    position: 'fixed', top: '0', left: '0', opacity: '0', zIndex: '999999'
-                });
-                document.body.appendChild(trap);
-                trap.focus();
-
-                setTimeout(() => {
-                    const data = trap.value.trim();
-                    if (trap.parentNode) document.body.removeChild(trap);
-                    if (data) performIVPSearch(data);
-                }, 800);
-            }
-        });
-    }
+    // --- 啟動保活機制 ---
+    initKeepAlive();
 
 })();
