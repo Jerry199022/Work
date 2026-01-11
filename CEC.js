@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CEC功能強化
 // @namespace    CEC Enhanced
-// @version      V78
+// @version      V79
 // @description  快捷操作按鈕、自動指派、IVP快速查詢、聯繫人彈窗優化、按鈕警示色、賬戶檢測、組件屏蔽、設置菜單、自動IVP查詢、URL精準匹配、快捷按鈕可編輯、(Related Cases)數據提取與增強排序功能、關聯案件提取器、回覆case快捷按鈕、已跟進case提示、全局暫停/恢復功能。
 // @author       Jerry Law
 // @match        https://upsdrive.lightning.force.com/*
@@ -18,7 +18,7 @@
 // ==/UserScript==
 
 /*
-V74 > V78
+V74 > V79
 更新內容：
 -優化開查/預付case提示
 -優化跟進面板
@@ -372,10 +372,6 @@ V53 > V54
         const POPOVER_ID = 'fuPopover';
         const DROPDOWN_ID = 'fuFollowTimeMenu';
 
-        // Due time
-        const DEFAULT_DUE_HOUR = 23;
-        const DEFAULT_DUE_MIN = 59;
-
         // Quick day options
         const QUICK_DAYS_CASE_OTHER = [0, 1, 7, 14];
         const QUICK_DAYS_PANEL_PICKER = [1, 3, 7, 14];
@@ -390,7 +386,7 @@ V53 > V54
         let sanitizedOnce = false;
 
         // -----------------------------
-        // [新增] Fast refresh scheduler (減少 tab 切換延遲)
+        // Fast refresh scheduler
         // -----------------------------
         let __fuRenderTimer = null;
         let __fuRenderRaf = null;
@@ -412,11 +408,7 @@ V53 > V54
         const bindFollowUpPanelWatchers = () => {
             if (__fuWatchBound) return;
             __fuWatchBound = true;
-
-            // 你已確認 URL 會變：用 urlchange 即可即時刷新
             window.addEventListener('urlchange', () => scheduleRenderPanel(0), true);
-
-            // 保險：部分瀏覽器/情況下仍可能觸發到呢啲
             window.addEventListener('popstate', () => scheduleRenderPanel(0), true);
             window.addEventListener('hashchange', () => scheduleRenderPanel(0), true);
         };
@@ -428,37 +420,40 @@ V53 > V54
         const gmSet = (key, val) => { try { GM_setValue(key, val); } catch (e) { /* ignore */ } };
 
         // -----------------------------
-        // Date utilities
+        // Date utilities (核心修復)
         // -----------------------------
         const startOfDay = (d) => { const x = d ? new Date(d) : new Date(); x.setHours(0,0,0,0); return x; };
 
-        /**
-        * [功能1] Business Day：跳過週六日（面板 & Case 詳情頁都套用）
-        * - offsetBusinessDays: 0=今天（若週末則順延到週一），1=下一個工作日，2=下下個工作日...
-        */
-        const isWeekend = (dateObj) => {
-            const d = dateObj.getDay();
-            return d === 0 || d === 6; // Sun=0, Sat=6
-        };
+        // 智能工作日計算
+        const calcSmartDueDate = (offsetDays) => {
+            const d = new Date();
+            d.setHours(0, 0, 0, 0);
 
-        const startOfNextBusinessDay = (d) => {
-            const x = startOfDay(d || new Date());
-            while (isWeekend(x)) x.setDate(x.getDate() + 1);
-            return x;
-        };
-
-        const endOfBusinessDayWithOffset = (offsetBusinessDays) => {
-            let base = startOfNextBusinessDay(new Date());
-            let remaining = Math.max(0, Number(offsetBusinessDays) || 0);
-
-            while (remaining > 0) {
-                base.setDate(base.getDate() + 1);
-                while (isWeekend(base)) base.setDate(base.getDate() + 1);
-                remaining--;
+            // 情況 A：用戶點擊 "Today" (offset=0)
+            // 如果今天是週末，自動順延到下週一 (即：明天跟進)
+            if (offsetDays === 0) {
+                while (d.getDay() === 0 || d.getDay() === 6) {
+                    d.setDate(d.getDate() + 1);
+                }
+            } else {
+                // 情況 B：用戶點擊 "T+N"
+                // 從今天開始往後找 N 個工作日
+                // 修正：如果今天是週末，應該先跳到下個工作日作為起點，還是直接往後數？
+                // 通常邏輯：週日 + 1個工作日 = 週一。
+                // 算法：循環直到找到 N 個有效工作日。
+                let added = 0;
+                while (added < offsetDays) {
+                    d.setDate(d.getDate() + 1);
+                    // 只有週一到週五 (非0非6) 才算有效天數，計入 added
+                    if (d.getDay() !== 0 && d.getDay() !== 6) {
+                        added++;
+                    }
+                }
             }
 
-            base.setHours(DEFAULT_DUE_HOUR, DEFAULT_DUE_MIN, 59, 999);
-            return base.getTime();
+            // 設定為當天結束時間
+            d.setHours(23, 59, 59, 999);
+            return d.getTime();
         };
 
         const dayDiffFromToday = (dueAtMs) => {
@@ -479,11 +474,10 @@ V53 > V54
             if (key === 'today') return '今天跟進';
             if (key === 'tomorrow') return '明天跟進';
             if (key === 'dayafter') return '後天跟進';
-            if (key === 'later') return '4天後跟進';
+            if (key === 'later') return '往後跟進';
             return key;
         };
 
-        // [功能5] later 顯示日期：13 Jan
         const formatDueAtDDMon = (ms) => {
             const d = new Date(ms);
             const day = String(d.getDate()).padStart(2, '0');
@@ -529,11 +523,7 @@ V53 > V54
                     candidates = [];
                 }
                 for (const el of candidates) {
-                    try {
-                        if (!isElementVisible(el)) continue;
-                    } catch (e) {
-                        // ignore
-                    }
+                    try { if (!isElementVisible(el)) continue; } catch (e) { }
                     const t = (el.textContent || '').trim();
                     const n = normalizeCaseNo(t);
                     if (n) return n;
@@ -554,9 +544,7 @@ V53 > V54
         // Workspace OpenTab
         // -----------------------------
         const auraCb = (fn) => {
-            try {
-                if (UW.$A && typeof UW.$A.getCallback === 'function') return UW.$A.getCallback(fn);
-            } catch (e) { /* ignore */ }
+            try { if (UW.$A && typeof UW.$A.getCallback === 'function') return UW.$A.getCallback(fn); } catch (e) { /* ignore */ }
             return fn;
         };
 
@@ -576,10 +564,7 @@ V53 > V54
                     return;
                 }
                 UW.$A.createComponent('lightning:workspaceAPI', {}, auraCb((cmp, status) => {
-                    if (status !== 'SUCCESS' || !cmp) {
-                        wsInit = false;
-                        return;
-                    }
+                    if (status !== 'SUCCESS' || !cmp) { wsInit = false; return; }
                     wsCmp = cmp;
                     try {
                         const root = UW.$A.getRoot();
@@ -590,14 +575,10 @@ V53 > V54
                             root.set('v.body', body);
                         }
                     } catch (e2) { /* ignore */ }
-                    wsReady = true;
-                    wsInit = false;
-                    wsFlush();
+                    wsReady = true; wsInit = false; wsFlush();
                 }));
                 setTimeout(() => { if (!wsReady && wsInit) wsInit = false; }, 2000);
-            } catch (e) {
-                wsInit = false;
-            }
+            } catch (e) { wsInit = false; }
         };
 
         const openCaseInConsoleTab = (caseId, focus = true) => {
@@ -613,10 +594,7 @@ V53 > V54
                 } catch (e) { /* ignore */ }
                 return false;
             };
-            if (wsReady) {
-                if (!doOpen()) window.open(buildCaseUrl(caseId), '_blank');
-                return;
-            }
+            if (wsReady) { if (!doOpen()) window.open(buildCaseUrl(caseId), '_blank'); return; }
             wsQueue.push(() => { if (!doOpen()) window.open(buildCaseUrl(caseId), '_blank'); });
         };
 
@@ -645,12 +623,7 @@ V53 > V54
                 }
             }
             const out = [];
-            for (const k in map) {
-                if (map[k]) {
-                    delete map[k].__score;
-                    out.push(map[k]);
-                }
-            }
+            for (const k in map) { if (map[k]) { delete map[k].__score; out.push(map[k]); } }
             out.sort((a, b) => (a.dueAt - b.dueAt) || (a.createdAt - b.createdAt));
             return out;
         };
@@ -658,12 +631,7 @@ V53 > V54
         const loadItems = () => {
             const raw = gmGet(KEY_ITEMS, '[]');
             let arr;
-            try {
-                arr = JSON.parse(raw);
-                if (!Array.isArray(arr)) arr = [];
-            } catch (e) {
-                arr = [];
-            }
+            try { arr = JSON.parse(raw); if (!Array.isArray(arr)) arr = []; } catch (e) { arr = []; }
             if (!sanitizedOnce) {
                 sanitizedOnce = true;
                 const clean = sanitizeItems(arr);
@@ -699,11 +667,7 @@ V53 > V54
         const updateNote = (caseId, note) => {
             const items = sanitizeItems(loadItems());
             for (const it of items) {
-                if (it && it.caseId === caseId) {
-                    it.note = note || '';
-                    it.updatedAt = Date.now();
-                    break;
-                }
+                if (it && it.caseId === caseId) { it.note = note || ''; it.updatedAt = Date.now(); break; }
             }
             saveItems(items);
         };
@@ -711,11 +675,7 @@ V53 > V54
         const updateDueAt = (caseId, dueAt) => {
             const items = sanitizeItems(loadItems());
             for (const it of items) {
-                if (it && it.caseId === caseId) {
-                    it.dueAt = dueAt;
-                    it.updatedAt = Date.now();
-                    break;
-                }
+                if (it && it.caseId === caseId) { it.dueAt = dueAt; it.updatedAt = Date.now(); break; }
             }
             saveItems(items);
         };
@@ -740,8 +700,7 @@ V53 > V54
 
         const placeNear = (anchorEl, popEl, preferAbove, width = 260, height = 240) => {
             const rect = anchorEl.getBoundingClientRect();
-            const w = width;
-            const h = height;
+            const w = width; const h = height;
             const left = Math.max(10, Math.min(window.innerWidth - (w + 10), rect.left));
             let top;
             if (preferAbove) {
@@ -780,7 +739,7 @@ V53 > V54
         };
 
         // -----------------------------
-        // Header flash hint (保持原交互)
+        // Header flash hint
         // -----------------------------
         let __fuHeaderHintTimer1 = null;
         let __fuHeaderHintTimer2 = null;
@@ -826,17 +785,19 @@ V53 > V54
         };
 
         // -----------------------------
-        // Picker UI
+        // Picker UI (UI & Logic Update)
         // -----------------------------
-        const buildLaterPickerContent = (onPickDays, quickDays) => {
-            const days = (Array.isArray(quickDays) && quickDays.length) ? quickDays : [3, 4, 7, 14];
+        const buildLaterPickerContent = (onPickTimestamp, quickDays) => {
             const wrap = document.createElement('div');
 
+            // 1. Title
             const title = document.createElement('div');
             title.className = 'fu-pop-title';
-            title.textContent = '選擇天數';
+            title.textContent = '選擇跟進日期';
             wrap.appendChild(title);
 
+            // 2. Quick Buttons (T+N)
+            const days = (Array.isArray(quickDays) && quickDays.length) ? quickDays : [3, 4, 7, 14];
             const grid = document.createElement('div');
             grid.className = 'fu-pop-grid';
             days.forEach((d) => {
@@ -844,41 +805,121 @@ V53 > V54
                 btn.type = 'button';
                 btn.className = 'fu-pill';
                 btn.textContent = (d === 0) ? 'Today' : `T+${d}`;
-                btn.addEventListener('click', () => onPickDays(d));
+                btn.addEventListener('click', () => {
+                    const targetTs = calcSmartDueDate(d);
+                    onPickTimestamp(targetTs);
+                });
                 grid.appendChild(btn);
             });
             wrap.appendChild(grid);
 
-            const row = document.createElement('div');
-            row.className = 'fu-pop-row';
+            // 3. Calendar Container
+            const calContainer = document.createElement('div');
+            calContainer.className = 'fu-cal-wrap';
 
-            const input = document.createElement('input');
-            input.type = 'number';
-            input.step = '1';
-            input.placeholder = '自定 N（0=Today，1=T+1）';
-            row.appendChild(input);
+            let currDate = new Date();
+            let viewYear = currDate.getFullYear();
+            let viewMonth = currDate.getMonth();
+            const todayStr = `${currDate.getFullYear()}-${currDate.getMonth()}-${currDate.getDate()}`;
 
-            const ok = document.createElement('button');
-            ok.type = 'button';
-            ok.className = 'fu-btn-primary';
-            ok.textContent = '確定';
+            const renderCalendar = () => {
+                calContainer.innerHTML = '';
 
-            const commit = () => {
-                const n = parseInt(input.value, 10);
-                if (!Number.isFinite(n)) { input.focus(); return; }
-                if (n < 0) { input.value = '0'; input.focus(); return; }
-                onPickDays(n);
+                // Header
+                const header = document.createElement('div');
+                header.className = 'fu-cal-header';
+
+                const btnPrev = document.createElement('button');
+                btnPrev.className = 'fu-cal-nav';
+                btnPrev.textContent = '◂'; // [已修改] 實心三角
+                btnPrev.onclick = (e) => { e.stopPropagation(); changeMonth(-1); };
+
+                const label = document.createElement('span');
+                label.className = 'fu-cal-title';
+                label.textContent = `${viewYear}年 ${viewMonth + 1}月`;
+
+                const btnNext = document.createElement('button');
+                btnNext.className = 'fu-cal-nav';
+                btnNext.textContent = '▸'; // [已修改] 實心三角
+                btnNext.onclick = (e) => { e.stopPropagation(); changeMonth(1); };
+
+                header.appendChild(btnPrev);
+                header.appendChild(label);
+                header.appendChild(btnNext);
+                calContainer.appendChild(header);
+
+                // Weekdays
+                const weekdays = document.createElement('div');
+                weekdays.className = 'fu-cal-weekdays';
+                ['日', '一', '二', '三', '四', '五', '六'].forEach(d => {
+                    const span = document.createElement('span');
+                    span.textContent = d;
+                    weekdays.appendChild(span);
+                });
+                calContainer.appendChild(weekdays);
+
+                // Grid
+                const calGrid = document.createElement('div');
+                calGrid.className = 'fu-cal-grid';
+
+                const firstDay = new Date(viewYear, viewMonth, 1).getDay();
+                const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+
+                for (let i = 0; i < firstDay; i++) {
+                    calGrid.appendChild(document.createElement('div'));
+                }
+
+                for (let d = 1; d <= daysInMonth; d++) {
+                    const cell = document.createElement('div');
+                    cell.className = 'fu-cal-day';
+                    cell.textContent = d;
+
+                    const thisDateObj = new Date(viewYear, viewMonth, d);
+                    const thisDateStr = `${viewYear}-${viewMonth}-${d}`;
+
+                    if (thisDateStr === todayStr) {
+                        cell.classList.add('today');
+                        cell.title = '今天';
+                    }
+
+                    // 檢查是否為過去
+                    const now = new Date();
+                    now.setHours(0,0,0,0);
+                    if (thisDateObj < now) {
+                        cell.classList.add('disabled');
+                    } else {
+                        // [核心修復] 點擊事件
+                        cell.onclick = (e) => {
+                            e.stopPropagation();
+
+                            // 1. 如果選中的是週末，自動往後順延直到工作日
+                            while (thisDateObj.getDay() === 0 || thisDateObj.getDay() === 6) {
+                                thisDateObj.setDate(thisDateObj.getDate() + 1);
+                            }
+
+                            // 2. 設定時間並回調
+                            thisDateObj.setHours(23, 59, 59, 999);
+                            onPickTimestamp(thisDateObj.getTime());
+                        };
+                    }
+                    calGrid.appendChild(cell);
+                }
+                calContainer.appendChild(calGrid);
             };
 
-            ok.addEventListener('click', commit);
-            input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); commit(); } });
-            row.appendChild(ok);
-            wrap.appendChild(row);
+            const changeMonth = (offset) => {
+                viewMonth += offset;
+                if (viewMonth > 11) { viewMonth = 0; viewYear++; }
+                else if (viewMonth < 0) { viewMonth = 11; viewYear--; }
+                renderCalendar();
+            };
 
+            renderCalendar();
+            wrap.appendChild(calContainer);
             return wrap;
         };
 
-        const showChangeMenu = (anchorEl, onPickDays) => {
+        const showChangeMenu = (anchorEl, onPickTimestamp) => {
             removePopover();
             removeDropdown();
 
@@ -887,29 +928,11 @@ V53 > V54
             pop.className = 'fu-popover-global';
             placeNear(anchorEl, pop, true, 280, 260);
 
-            const title = document.createElement('div');
-            title.className = 'fu-pop-title';
-            title.textContent = '更改跟進時間';
-            pop.appendChild(title);
+            pop.appendChild(buildLaterPickerContent((pickedTs) => {
+                onPickTimestamp(pickedTs);
+                removePopover();
+            }, QUICK_DAYS_PANEL_PICKER));
 
-            const chips = document.createElement('div');
-            chips.className = 'fu-pop-chips';
-
-            const mkChip = (text, days) => {
-                const b = document.createElement('button');
-                b.type = 'button';
-                b.className = 'fu-chip';
-                b.textContent = text;
-                b.addEventListener('click', () => { onPickDays(days); removePopover(); });
-                return b;
-            };
-
-            chips.appendChild(mkChip('Today', 0));
-            chips.appendChild(mkChip('T+2', 2));
-            chips.appendChild(mkChip('T+10', 10));
-            pop.appendChild(chips);
-
-            pop.appendChild(buildLaterPickerContent((picked) => { onPickDays(picked); removePopover(); }, QUICK_DAYS_PANEL_PICKER));
             document.body.appendChild(pop);
             attachOutsideClose(pop, anchorEl, removePopover);
         };
@@ -917,7 +940,7 @@ V53 > V54
         // -----------------------------
         // Case page dropdown (Other stable, in-place)
         // -----------------------------
-        const renderOtherPickerInMenu = (menuEl, anchorEl, onPickDays) => {
+        const renderOtherPickerInMenu = (menuEl, anchorEl, onPickTimestamp) => {
             while (menuEl.firstChild) menuEl.removeChild(menuEl.firstChild);
 
             const head = document.createElement('div');
@@ -941,13 +964,14 @@ V53 > V54
                 buildFollowTimeMenu(menuEl, anchorEl, menuEl.__onPick);
             });
 
-            const content = buildLaterPickerContent((picked) => {
+            const content = buildLaterPickerContent((pickedTs) => {
                 removeDropdown();
-                onPickDays(picked);
+                onPickTimestamp(pickedTs);
             }, QUICK_DAYS_CASE_OTHER);
+
             content.className = 'fu-ddcontent';
             menuEl.appendChild(content);
-            menuEl.style.minWidth = '300px';
+            menuEl.style.minWidth = '250px';
         };
 
         const buildFollowTimeMenu = (menuEl, anchorEl, onPick) => {
@@ -963,7 +987,7 @@ V53 > V54
                 item.addEventListener('click', (e) => {
                     e.stopPropagation();
                     if (value === 'other') {
-                        renderOtherPickerInMenu(menuEl, anchorEl, (days) => onPick('other', days));
+                        renderOtherPickerInMenu(menuEl, anchorEl, (timestamp) => onPick('other', timestamp));
                         return;
                     }
                     removeDropdown();
@@ -1037,7 +1061,7 @@ V53 > V54
                 '.fu-chip { flex: 1 1 auto; border: 1px solid rgba(1,118,211,.35); background: rgba(1,118,211,.08); color: #014486; border-radius: 999px; padding: 6px 10px; cursor: pointer; font-size: 12px; font-weight: 700; }',
                 '.fu-chip:hover { background: rgba(1,118,211,.12); }',
                 '.fu-pop-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 10px; }',
-                '.fu-pill { border: 1px solid rgba(1,118,211,.28); background: rgba(1,118,211,.06); color: #014486; border-radius: 10px; padding: 8px 0; cursor: pointer; font-size: 12px; font-weight: 800; }',
+                '.fu-pill { border: 1px solid rgba(1,118,211,.28); background: rgba(1,118,211,.06); color: #014486; border-radius: 10px; padding: 7px 4px; cursor: pointer; font-size: 12px; font-weight: 800; }',
                 '.fu-pill:hover { background: rgba(1,118,211,.12); }',
                 '.fu-pop-row { display: flex; gap: 8px; align-items: center; }',
                 '.fu-pop-row input { flex: 1; font-size: 12px; padding: 8px 10px; border-radius: 10px; border: 1px solid rgba(0,0,0,.12); }',
@@ -1070,6 +1094,18 @@ V53 > V54
                 // [功能5] later 日期 badge（13 Jan）
                 `#${PANEL_ID} .fu-due { font-size: 12px; font-weight: 800; padding: 2px 6px; border-radius: 10px; background: rgba(0,0,0,.04); color: rgba(0,0,0,.72); flex: 0 0 auto; }`,
                 `#${PANEL_ID} .fu-row.fu-active .fu-due { background: rgba(0,0,0,.10); color: #000000; }`,
+                // --- 日曆組件樣式 ---
+                '.fu-cal-wrap { width: 100%; user-select: none; border: 1px solid #dddbda; border-radius: 4px; overflow: hidden; background: #fff; }',
+                '.fu-cal-header { display: flex; justify-content: space-between; align-items: center; background: #f3f2f2; padding: 5px 10px; border-bottom: 1px solid #dddbda; }',
+                '.fu-cal-title { font-weight: 700; font-size: 13px; color: #080707; }',
+                '.fu-cal-nav { background: none; border: none; cursor: pointer; color: #0070d2; padding: 0 8px; font-size: 16px; line-height: 1; }',
+                '.fu-cal-nav:hover { color: #005fb2; background: rgba(0,0,0,0.05); border-radius: 4px; }',
+                '.fu-cal-weekdays { display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; font-size: 11px; color: #514f4d; background: #fafaf9; padding: 4px 0; border-bottom: 1px solid #dddbda; }',
+                '.fu-cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); padding: 4px; gap: 2px; }',
+                '.fu-cal-day { height: 28px; display: flex; align-items: center; justify-content: center; font-size: 12px; cursor: pointer; border-radius: 3px; color: #181818; transition: all 0.1s; border: 1px solid transparent; }',
+                '.fu-cal-day:hover:not(.disabled) { background: #f3f9ff; color: #0176d3; font-weight: bold; border-color: #d8e6f3; }',
+                '.fu-cal-day.today { font-weight: bold; color: #0176d3; border: 1px solid #0176d3; }',
+                '.fu-cal-day.disabled { color: #ccc; cursor: default; }',
             ].join('\n');
 
             GM_addStyle(css);
@@ -1080,12 +1116,7 @@ V53 > V54
         // -----------------------------
         const loadUI = () => {
             const raw = gmGet(KEY_UI, '{}');
-            try {
-                const obj = JSON.parse(raw);
-                return (obj && typeof obj === 'object') ? obj : {};
-            } catch (e) {
-                return {};
-            }
+            try { const obj = JSON.parse(raw); return (obj && typeof obj === 'object') ? obj : {}; } catch (e) { return {}; }
         };
 
         const saveUI = (ui) => gmSet(KEY_UI, JSON.stringify(ui || {}));
@@ -1137,7 +1168,7 @@ V53 > V54
 
             const arrow = document.createElement('div');
             arrow.className = 'fu-arrow';
-            arrow.textContent = collapsed ? '▴' : '▾';
+            arrow.textContent = '▾';
             header.appendChild(arrow);
 
             panel.appendChild(header);
@@ -1162,10 +1193,7 @@ V53 > V54
             });
 
             // width resize
-            let resizingW = false;
-            let startX = 0;
-            let startW = 0;
-
+            let resizingW = false; let startX = 0; let startW = 0;
             const onMoveW = (ev) => {
                 if (!resizingW) return;
                 const dx = startX - ev.clientX;
@@ -1174,7 +1202,6 @@ V53 > V54
                 newW = Math.max(MIN_PANEL_WIDTH, Math.min(maxW2, newW));
                 panel.style.width = `${newW}px`;
             };
-
             const onUpW = () => {
                 if (!resizingW) return;
                 resizingW = false;
@@ -1184,22 +1211,15 @@ V53 > V54
                 ui3.width = parseInt(panel.style.width, 10) || DEFAULT_PANEL_WIDTH;
                 saveUI(ui3);
             };
-
             resizeLeft.addEventListener('mousedown', (ev) => {
-                resizingW = true;
-                startX = ev.clientX;
-                startW = panel.getBoundingClientRect().width;
+                resizingW = true; startX = ev.clientX; startW = panel.getBoundingClientRect().width;
                 document.addEventListener('mousemove', onMoveW, true);
                 document.addEventListener('mouseup', onUpW, true);
-                ev.preventDefault();
-                ev.stopPropagation();
+                ev.preventDefault(); ev.stopPropagation();
             });
 
             // height resize
-            let resizingH = false;
-            let startY = 0;
-            let startH = 0;
-
+            let resizingH = false; let startY = 0; let startH = 0;
             const onMoveH = (ev) => {
                 if (!resizingH) return;
                 const dy = startY - ev.clientY;
@@ -1208,7 +1228,6 @@ V53 > V54
                 newH = Math.max(MIN_PANEL_HEIGHT, Math.min(maxH2, newH));
                 body.style.height = `${newH}px`;
             };
-
             const onUpH = () => {
                 if (!resizingH) return;
                 resizingH = false;
@@ -1218,17 +1237,13 @@ V53 > V54
                 ui4.height = parseInt(body.style.height, 10) || DEFAULT_PANEL_HEIGHT;
                 saveUI(ui4);
             };
-
             resizeTop.addEventListener('mousedown', (ev) => {
                 const uiNow = loadUI();
                 if (uiNow && uiNow.collapsed) return;
-                resizingH = true;
-                startY = ev.clientY;
-                startH = body.getBoundingClientRect().height;
+                resizingH = true; startY = ev.clientY; startH = body.getBoundingClientRect().height;
                 document.addEventListener('mousemove', onMoveH, true);
                 document.addEventListener('mouseup', onUpH, true);
-                ev.preventDefault();
-                ev.stopPropagation();
+                ev.preventDefault(); ev.stopPropagation();
             });
 
             wsEnsure();
@@ -1252,7 +1267,6 @@ V53 > V54
             link.addEventListener('click', (e) => { e.preventDefault(); openCaseInConsoleTab(it.caseId, true); });
             row.appendChild(link);
 
-            // [功能5] 4天後跟進：顯示實際日期（13 Jan）
             if (bucketOf(it.dueAt) === 'later') {
                 const due = document.createElement('span');
                 due.className = 'fu-due';
@@ -1275,9 +1289,8 @@ V53 > V54
             btnChange.textContent = '📅';
             btnChange.addEventListener('click', (ev) => {
                 ev.stopPropagation();
-                showChangeMenu(btnChange, (pickedDays) => {
-                    const dueAt = endOfBusinessDayWithOffset(pickedDays); // Business day
-                    updateDueAt(it.caseId, dueAt);
+                showChangeMenu(btnChange, (timestamp) => {
+                    updateDueAt(it.caseId, timestamp);
                     renderPanel();
                 });
             });
@@ -1311,10 +1324,9 @@ V53 > V54
                 if (collapsed) panel.classList.add('fu-collapsed');
                 else panel.classList.remove('fu-collapsed');
             }
-            if (arrow) arrow.textContent = collapsed ? '▴' : '▾';
+            if (arrow) arrow.textContent = '▾';
             if (!body) return;
 
-            // 無論是否 collapsed，都先更新 header 命中狀態（功能4）
             const activeCaseNo = normalizeCaseNo(getCaseNumberFromVisibleHeader()) || null;
             let hit = false;
             if (activeCaseNo) {
@@ -1376,19 +1388,14 @@ V53 > V54
         };
 
         // -----------------------------
-        // [V65 方法] Case 頁按鈕注入：使用 Shadow 搜索 + 可見性判斷
+        // Case page button
         // -----------------------------
         const getActiveFollowWrap = () => {
             const selector = 'div[data-target-selection-name="sfdc:StandardButton.Case.Follow"]';
             const firstVisible = findElementInShadows(document.body, selector);
             if (firstVisible) return firstVisible;
-
             const all = findAllElementsInShadows(document.body, selector);
-            for (const el of all) {
-                try {
-                    if (isElementVisible(el)) return el;
-                } catch (e) { /* ignore */ }
-            }
+            for (const el of all) { try { if (isElementVisible(el)) return el; } catch (e) { } }
             return null;
         };
 
@@ -1425,13 +1432,9 @@ V53 > V54
 
             btn.addEventListener('click', (ev) => {
                 ev.stopPropagation();
+                if (document.getElementById(DROPDOWN_ID)) { removeDropdown(); return; }
 
-                if (document.getElementById(DROPDOWN_ID)) {
-                    removeDropdown();
-                    return;
-                }
-
-                showFollowTimeDropdown(btn, (choice, otherDays) => {
+                showFollowTimeDropdown(btn, (choice, resultValue) => {
                     const currentCaseId = btn.dataset.caseId || getCaseId();
                     const caseNo = getCaseNumberFromVisibleHeader();
                     if (!currentCaseId || !caseNo) {
@@ -1440,9 +1443,12 @@ V53 > V54
                         return;
                     }
 
-                    const dueAt = (choice === 'other')
-                    ? endOfBusinessDayWithOffset(otherDays)
-                    : endOfBusinessDayWithOffset(choice);
+                    let dueAt;
+                    if (choice === 'other') {
+                        dueAt = resultValue; // resultValue is timestamp
+                    } else {
+                        dueAt = calcSmartDueDate(choice); // choice is offset
+                    }
 
                     upsertItem({ caseId: currentCaseId, caseNo, dueAt });
                     renderPanel();
@@ -1460,11 +1466,7 @@ V53 > V54
 
         const ensureCaseButton = async () => {
             if (ensureCaseFollowTimeButton()) return true;
-            try {
-                await waitForElementWithObserver(document.body, 'div[data-target-selection-name="sfdc:StandardButton.Case.Follow"]', 12000);
-            } catch (e) {
-                // ignore timeout
-            }
+            try { await waitForElementWithObserver(document.body, 'div[data-target-selection-name="sfdc:StandardButton.Case.Follow"]', 12000); } catch (e) { }
             return ensureCaseFollowTimeButton();
         };
 
@@ -1478,9 +1480,8 @@ V53 > V54
             removeAllFloating();
             const root = document.getElementById(PANEL_ID);
             if (root) root.remove();
-
-            if (__fuRenderTimer) { try { clearTimeout(__fuRenderTimer); } catch (e) { /* ignore */ } }
-            if (__fuRenderRaf) { try { cancelAnimationFrame(__fuRenderRaf); } catch (e) { /* ignore */ } }
+            if (__fuRenderTimer) { try { clearTimeout(__fuRenderTimer); } catch (e) { } }
+            if (__fuRenderRaf) { try { cancelAnimationFrame(__fuRenderRaf); } catch (e) { } }
             __fuRenderTimer = null;
             __fuRenderRaf = null;
         };
@@ -4735,7 +4736,7 @@ V53 > V54
         if (insertionMode === 'logo') {
             try {
                 const iframe = await waitForElementWithObserver(document.body, EDITOR_IFRAME_SELECTOR, TIMEOUT);
-                await delay(50); // 延時，等待事件循環處理完畢
+                await delay(100); // 延時，等待事件循環處理完畢
                 if (iframe && iframe.contentDocument) {
                     iframe.contentWindow.focus();
                     const editorDoc = iframe.contentDocument;
