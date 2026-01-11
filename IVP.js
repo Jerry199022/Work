@@ -525,7 +525,7 @@
 #REF TOO $$$|運費太貴，收件人拒收
 #REF TOO LATE|派送太晚，收件人拒收
 #REFUSED PAY|收件人拒付除關稅以外的所有費用
-#RELEASED|狀態已解除
+#RELEASED|狀態解除
 #REMOTE AREA|偏遠地區
 #REQ LATE DEL|寄件者請求稍晚派送
 #RES DEL DATE|重新安排派送時間
