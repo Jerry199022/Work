@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IVP顯示注釋
 // @namespace    IVP顯示注釋
-// @version      V15
+// @version      V16
 // @description  IVP顯示注釋、一眼模式、定義字體顏色。
 // @author       Jerry Law
 // @match        *://ivp.inside.ups.com/*
@@ -32,6 +32,8 @@
 #2845 W 48th Pl|亞馬遜倉庫
 #550 OAK RIDGE ROAD|亞馬遜倉庫
 #RASALAT-PPWK|清關文件送達給收件人
+#OBSERVED PKG|主動監控的貨件
+#MONITORING|監控中
 #RETURN GOODS|退回包裹
 #SAT DELIVERY|星期六送貨
 #SAT AIR DEL|星期六空運送貨
@@ -1048,120 +1050,55 @@ User ID
 UPS ACCESS POINT
 Package ID
 PACKAGE WAS DRIVER RELEASED
+Search By:
 
 `;
 
     const annotations = annotationsText.trim().split('\n').filter(line => line.trim());
     const excludeList = excludeText.trim().split('\n').filter(line => line.trim()).map(text => text.toLowerCase());
     const annotationClassName = "tm-annotation-added";
-
-    // 1. 轉義正則特殊字符
-    // 2. 將規則中的「空格」轉換為「[\s\u00A0]+」，以匹配網頁中的多個空格、換行或 NBSP
-    const escapeReg = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/ /g, '[\\s\\u00A0]+');
-
-    // Key -> Note 映射
+    const escapeReg = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const keyToNote = new Map();
-    // [V19.0] Key -> Original Key 映射 (用於精確大小寫比對)
-    const keyToOriginal = new Map();
-
-    // 規則列表
-    const regexRules = [];
+    const wordBoundaryKeys = new Set();
     const processedNodes = new WeakSet();
 
-// 解析註釋數據
-    const commonExclusions = ["CITY", "HUB", "CI", "CP", "SENT", "PLEASE", "PI", "RE", "FW", "MSG"];
-    const commonExclusionsPattern = commonExclusions.join("|");
-
     annotations.forEach(annotation => {
-        const firstPipeIndex = annotation.indexOf('|');
-        if (firstPipeIndex === -1) return;
-
-        const keysRaw = annotation.substring(0, firstPipeIndex);
-        const note = annotation.substring(firstPipeIndex + 1);
-
-        if (!keysRaw || !note) return;
-
-        // 定義處理單個 Key 的函數
-        const processKey = (key, isBoundary) => {
-            const trimmedKey = key.trim();
-            if (!trimmedKey) return;
-
-            const lowerKey = trimmedKey.toLowerCase();
-            keyToNote.set(lowerKey, note);
-            keyToOriginal.set(lowerKey, trimmedKey); // 記錄原始寫法
-
-            let pattern;
-            const escapedKey = escapeReg(trimmedKey);
-
-            if (isBoundary) {
-                // [V19.0 混合策略]
-
-                let leftBoundary;
-                let rightBoundary;
-
-                if (trimmedKey.length <= 3) {
-                    // 左側：寬鬆
-                    leftBoundary = '(?<![a-zA-Z0-9])';
-
-                    // 右側：極度嚴格
-                    // 1. 基礎規則: 禁止後面跟 逗號、點、橫線、字母數字...
-                    rightBoundary = '(?![a-zA-Z0-9\\.\\-,])(?![\\s]*[\\-\\/])(?![\\s]+[A-Z0-9])';
-
-                    // [V19.2 通用規則 - 短詞]
-                    // 規則 A: 如果後面跟著 "空格+5位數字" (如 PA 19129)，視為地址郵編，不匹配
-                    rightBoundary += '(?![\\s\\u00A0]+\\d{5})';
-                    // 規則 B: 如果後面緊跟右括號 (如 HU))，視為括號結束，不匹配
-                    rightBoundary += '(?![\\s\\u00A0]*\\))';
-
-                } else {
-                    // ==========================================
-                    // [長詞模式] (如 BAHAMAS, DESTINATION, MEXICO)
-                    // ==========================================
-
-                    // 左側：單行過濾
-                    leftBoundary = '(?<![A-Z0-9]{3,}[ \\t])(?<![a-zA-Z0-9])';
-
-                    // 右側：放寬正則
-                    rightBoundary = '(?![a-zA-Z0-9\\.\\-\\/])';
-
-                    // 規則 C: 如果後面跟著 通用排除詞 (CITY, HUB...) 或 關鍵字本身 (GUATEMALA GUATEMALA)
-                    // (?![\\s\\u00A0,]+ ...) 允許中間有空格或逗號 (處理 MEXICO, CP)
-                    rightBoundary += `(?![\\s\\u00A0,]+(?:${commonExclusionsPattern}|${escapedKey})\\b)`;
-                }
-
-                pattern = leftBoundary + escapedKey + rightBoundary;
+        const [keys, note] = annotation.split("|");
+        if (keys && note) {
+            if (keys.startsWith('##')) {
+                const keysWithoutPrefix = keys.substring(2);
+                keysWithoutPrefix.split(",").forEach(key => {
+                    const trimmedKey = key.trim();
+                    if (trimmedKey) {
+                        keyToNote.set(trimmedKey, note);
+                        wordBoundaryKeys.add(trimmedKey);
+                    }
+                });
             } else {
-                pattern = escapedKey;
+                keys.split(",").forEach(key => {
+                    if (key) {
+                        if (key.startsWith('#')) {
+                            const boundaryKey = key.substring(1);
+                            keyToNote.set(boundaryKey, note);
+                            wordBoundaryKeys.add(boundaryKey);
+                        } else {
+                            keyToNote.set(key, note);
+                        }
+                    }
+                });
             }
-
-            regexRules.push({
-                key: trimmedKey,
-                pattern: pattern,
-                length: trimmedKey.length
-            });
-        };
-
-        if (keysRaw.startsWith('##')) {
-            const keysWithoutPrefix = keysRaw.substring(2);
-            keysWithoutPrefix.split(",").forEach(key => processKey(key, true));
-        } else if (keysRaw.startsWith('#')) {
-            const keyWithoutPrefix = keysRaw.substring(1);
-            processKey(keyWithoutPrefix, true);
-        } else {
-            keysRaw.split(",").forEach(key => processKey(key, false));
         }
     });
 
-    // 統一按長度降序排序
-    regexRules.sort((a, b) => b.length - a.length);
-
-    const allPatterns = regexRules.map(rule => rule.pattern).join("|");
-    // 使用 'gi' 標誌，但在 annotateTextNode 中進行嚴格校驗
-    const unionRegex = new RegExp(allPatterns, "gi");
+    const keysSorted = Array.from(keyToNote.keys()).sort((a, b) => b.length - a.length);
+    const boundaryPatterns = keysSorted.filter(key => wordBoundaryKeys.has(key)).map(key => '(?<![a-zA-Z0-9])' + escapeReg(key) + '(?![a-zA-Z0-9,.:!?-]|.{1,4}[a-zA-Z0-9,.:!?-]|[\r\n])').join("|");
+    const normalPatterns = keysSorted.filter(key => !wordBoundaryKeys.has(key)).map(escapeReg).join("|");
+    const allPatterns = [boundaryPatterns, normalPatterns].filter(p => p).join("|");
+    const unionRegex = new RegExp(allPatterns, "g");
 
     const DEFAULTS = {
         tbodyMaxHeight: 375,
-        annotationColor: '#FF0000'
+        annotationColor: '#FF0000' // 默認注釋顏色為紅色
     };
 
     const SELECTORS = {
@@ -1192,6 +1129,7 @@ PACKAGE WAS DRIVER RELEASED
             .tm-fa-icon { font-family: "Font Awesome 5 Free", "Font Awesome 5 Solid", "FontAwesome", sans-serif !important; font-weight: 900 !important; display: inline-block !important; font-style: normal !important; font-variant: normal !important; text-rendering: auto !important; -webkit-font-smoothing: antialiased; }
             ${SELECTORS.buttonContainer} { position: relative !important; display: flex !important; align-items: center !important; }
             #call-complete { display: block !important; align-self: center !important; margin-left: auto !important; margin-right: 50px !important; }
+            /* [修改] 移除了 color: red !important; 規則，顏色將由動態樣式控制 */
             .tm-annotation-note { display: inline; margin-left: 5px; font-size: 1em; font-weight: bold; font-family: "Microsoft YaHei", "PingFang TC", sans-serif !important; }
             body.${CSS_CLASSES.annotationsHidden} .tm-annotation-note { display: none !important; }
         `;
@@ -1202,6 +1140,7 @@ PACKAGE WAS DRIVER RELEASED
         console.log("%c[UI] 基礎樣式表已注入。", "color: green; font-weight: bold;");
     }
 
+    // [新增] 注入用於動態修改顏色的專用 <style> 標籤
     function injectDynamicStyles() {
         const styleId = 'ivp-dynamic-annotation-style';
         if (document.getElementById(styleId)) return;
@@ -1210,6 +1149,7 @@ PACKAGE WAS DRIVER RELEASED
         document.head.appendChild(style);
     }
 
+    // [新增] 應用存儲的顏色到動態 <style> 標籤
     function applyAnnotationColor() {
         const styleElement = document.getElementById('ivp-dynamic-annotation-style');
         if (!styleElement) return;
@@ -1224,22 +1164,32 @@ PACKAGE WAS DRIVER RELEASED
         }
         if (SCRIPT_STATE.isFullViewModeActive) {
             const css = `
+                /* [修改] 進入一眼睇曬模式時，將整個頁面的根字體大小縮放至60% */
                 html {
                     font-size: 60% !important;
                 }
+
+                /* [新增] 針對 GSR Status 特定容器的佈局調整 */
+                /* 使用 :has 語法精確定位含有 GSR Status 結構的 container */
                 div.container:has(.row > .col-10.text-center) {
                     margin-top: 67rem !important;
-                    position: relative;
-                    z-index: 5;
+                    position: relative; /* 確保 z-index 生效 */
+                    z-index: 5; /* 防止被遮擋 */
                 }
+
+                /* [新增] 壓縮按鈕尺寸 */
                 .btnsmall {
                     padding: .001rem .3rem!important;
                     font-size: .775rem!important;
                 }
+
+                /* [新增] 調整水平分割線邊距 */
                 hr {
                     margin-top: -15px;
                     margin-bottom: 7px;
                 }
+
+                /* ... (保留你原有的其他樣式規則: 基礎隱藏、表格行高、Prev/Next 按鈕等) ... */
                 app-ivp-pd-trackingno-detail .ng-star-inserted > .row,
                 app-root > .ng-star-inserted > .row,
                 .ng-star-inserted.h5tracking,
@@ -1436,6 +1386,7 @@ PACKAGE WAS DRIVER RELEASED
                             </div>
                         </div>
                     </div>
+                    <!-- [新增] 設置面板頁腳和恢復默認按鈕 -->
                     <div class="ivp-settings-footer">
                         <button id="ivp-settings-reset" class="ivp-settings-reset-btn">恢復默認設定</button>
                     </div>
@@ -1455,11 +1406,18 @@ PACKAGE WAS DRIVER RELEASED
             .ivp-settings-option { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; }
             .ivp-settings-label { font-size: 1rem; color: #555; flex-grow: 1; margin-right: 16px; }
             .ivp-settings-divider { border: 0; border-top: 1px solid #eee; margin: 8px 0; }
+            .ivp-settings-switch { position: relative; display: inline-block; width: 50px; height: 28px; flex-shrink: 0; cursor: pointer; }
+            .ivp-settings-switch input { opacity: 0; width: 0; height: 0; }
+            .ivp-settings-slider { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; border-radius: 28px; transition: .4s; }
+            .ivp-settings-slider:before { position: absolute; content: ""; height: 20px; width: 20px; left: 4px; bottom: 4px; background-color: #fff; border-radius: 50%; transition: .4s; }
+            input:checked + .ivp-settings-slider { background-color: #0070d2; }
+            input:checked + .ivp-settings-slider:before { transform: translateX(22px); }
             .ivp-settings-input-group { display: flex; align-items: center; flex-shrink: 0; }
             .ivp-settings-input { width: 80px; padding: 4px 8px; border: 1px solid #ccc; border-radius: 4px; text-align: right; font-size: .95rem; }
             .ivp-settings-input-group span { margin-left: 8px; color: #777; }
             .ivp-settings-color-input { width: 40px; height: 28px; border: 1px solid #ccc; border-radius: 4px; cursor: pointer; padding: 2px; background-color: #fff; }
             .ivp-color-preview-text { font-family: monospace; background-color: #f0f0f0; padding: 4px 8px; border-radius: 4px; margin-right: 12px; }
+            /* [新增] 頁腳和恢復默認按鈕的樣式 */
             .ivp-settings-footer { padding: 16px 24px; border-top: 1px solid #e0e0e0; text-align: right; }
             .ivp-settings-reset-btn { background-color: #f8f9fa; border: 1px solid #dee2e6; color: #212529; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 0.9rem; transition: background-color .2s ease; }
             .ivp-settings-reset-btn:hover { background-color: #e2e6ea; }
@@ -1522,49 +1480,6 @@ PACKAGE WAS DRIVER RELEASED
         showModal();
     }
 
-    // 智能 DOM 檢查
-    function isNextNodeAddressLine(textNode) {
-        let currentNode = textNode;
-        let nextSibling = currentNode.nextSibling;
-
-        if (!nextSibling && currentNode.parentNode) {
-            const parent = currentNode.parentNode;
-            const parentTag = parent.tagName.toUpperCase();
-            const inlineTags = ['SPAN', 'B', 'STRONG', 'I', 'EM', 'FONT', 'A', 'SMALL', 'BIG'];
-
-            if (inlineTags.includes(parentTag)) {
-                nextSibling = parent.nextSibling;
-            }
-        }
-
-        while (nextSibling) {
-            let textContent = "";
-
-            if (nextSibling.nodeType === Node.TEXT_NODE) {
-                textContent = nextSibling.nodeValue;
-            } else if (nextSibling.nodeType === Node.ELEMENT_NODE) {
-                if (nextSibling.tagName === 'BR') {
-                    nextSibling = nextSibling.nextSibling;
-                    continue;
-                }
-                if (nextSibling.tagName === 'BUTTON' || nextSibling.tagName === 'EM') {
-                     nextSibling = nextSibling.nextSibling;
-                     continue;
-                }
-                textContent = nextSibling.textContent;
-            }
-
-            const trimmed = textContent.trim();
-            if (trimmed.length > 0) {
-                return /^[A-Z0-9]/i.test(trimmed);
-            }
-
-            nextSibling = nextSibling.nextSibling;
-        }
-
-        return false;
-    }
-
     function annotateTextNode(node) {
         if (!node || node.nodeType !== Node.TEXT_NODE || !node.nodeValue || !node.nodeValue.trim()) return;
         if (node.parentNode && node.parentNode.closest && node.parentNode.closest("." + annotationClassName)) return;
@@ -1582,47 +1497,13 @@ PACKAGE WAS DRIVER RELEASED
         while ((m = unionRegex.exec(text)) !== null) {
             const matchText = m[0];
             const matchStart = m.index;
-            const trimmedMatch = matchText.trim();
-            const lowerMatch = trimmedMatch.toLowerCase();
-
-            // 查找 Note
-            const noteContent = keyToNote.get(lowerMatch);
-            if (!noteContent) {
-                 lastIndex = matchStart + matchText.length;
-                 continue;
-            }
-
-            // [V19.0] 智能大小寫校驗
-            // 條件1: 網頁上的詞是全大寫 (如 DESTINATION, DAMAGE) -> 通過
-            // 條件2: 網頁上的詞與腳本設定的原始 Key 完全一致 (如 Oak Ridge) -> 通過
-            const originalKey = keyToOriginal.get(lowerMatch);
-            const isAllUpperCase = trimmedMatch === trimmedMatch.toUpperCase();
-            const isExactMatch = trimmedMatch === originalKey;
-
-            if (!isAllUpperCase && !isExactMatch) {
-                // 如果既不是全大寫，也不符合原始設定的大小寫 (例如 Destination vs DESTINATION)，則跳過
-                lastIndex = matchStart + matchText.length;
-                continue;
-            }
-
-            const isSingleWord = !matchText.includes(' ');
-
-            if (isSingleWord && isNextNodeAddressLine(node)) {
-                if (matchStart > lastIndex) {
-                    frag.appendChild(document.createTextNode(text.slice(lastIndex, matchStart)));
-                }
-                frag.appendChild(document.createTextNode(matchText));
-                lastIndex = matchStart + matchText.length;
-                continue;
-            }
-
             if (matchStart > lastIndex) {
                 frag.appendChild(document.createTextNode(text.slice(lastIndex, matchStart)));
             }
             frag.appendChild(document.createTextNode(matchText));
             const noteSpan = document.createElement("span");
             noteSpan.className = "tm-annotation-note";
-            noteSpan.textContent = `(${noteContent})`;
+            noteSpan.textContent = `(${keyToNote.get(matchText)})`;
             frag.appendChild(noteSpan);
             lastIndex = matchStart + matchText.length;
         }
