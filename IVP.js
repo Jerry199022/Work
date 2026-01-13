@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IVP顯示注釋
 // @namespace    IVP顯示注釋
-// @version      V13
+// @version      V15
 // @description  IVP顯示注釋、一眼模式、定義字體顏色。
 // @author       Jerry Law
 // @match        *://ivp.inside.ups.com/*
@@ -25,6 +25,7 @@
     // ================================================================
     const annotationsText = `
 #165 GLENN FOX RD|亞馬遜倉庫
+#8255 NW 66TH STREET|亞馬遜倉庫
 #7600 LTC PARKWAY|亞馬遜倉庫
 #27505 SW 132ND AVE|亞馬遜倉庫
 #4806 Cotter Ln|亞馬遜倉庫
@@ -1067,7 +1068,10 @@ PACKAGE WAS DRIVER RELEASED
     const regexRules = [];
     const processedNodes = new WeakSet();
 
-    // 解析註釋數據
+// 解析註釋數據
+    const commonExclusions = ["CITY", "HUB", "CI", "CP", "SENT", "PLEASE", "PI", "RE", "FW", "MSG"];
+    const commonExclusionsPattern = commonExclusions.join("|");
+
     annotations.forEach(annotation => {
         const firstPipeIndex = annotation.indexOf('|');
         if (firstPipeIndex === -1) return;
@@ -1096,29 +1100,33 @@ PACKAGE WAS DRIVER RELEASED
                 let rightBoundary;
 
                 if (trimmedKey.length <= 3) {
-                    // ==========================================
-                    // [短詞模式] (如 DE, US, CN)
-                    // ==========================================
-
                     // 左側：寬鬆
                     leftBoundary = '(?<![a-zA-Z0-9])';
 
                     // 右側：極度嚴格
-                    // 1. (?![a-zA-Z0-9\\.\\-,]) : 禁止後面跟 逗號、點、橫線、字母數字
-                    // 2. (?![\\s]*[\\-\\/]) : 禁止後面跟 橫線/斜線 (JP - KANSAI)
-                    // 3. (?![\\s]+[A-Z0-9]) : 禁止後面跟 空白+字母/數字 (FL US, US 02)
+                    // 1. 基礎規則: 禁止後面跟 逗號、點、橫線、字母數字...
                     rightBoundary = '(?![a-zA-Z0-9\\.\\-,])(?![\\s]*[\\-\\/])(?![\\s]+[A-Z0-9])';
+
+                    // [V19.2 通用規則 - 短詞]
+                    // 規則 A: 如果後面跟著 "空格+5位數字" (如 PA 19129)，視為地址郵編，不匹配
+                    rightBoundary += '(?![\\s\\u00A0]+\\d{5})';
+                    // 規則 B: 如果後面緊跟右括號 (如 HU))，視為括號結束，不匹配
+                    rightBoundary += '(?![\\s\\u00A0]*\\))';
+
                 } else {
                     // ==========================================
-                    // [長詞模式] (如 BAHAMAS, DESTINATION)
+                    // [長詞模式] (如 BAHAMAS, DESTINATION, MEXICO)
                     // ==========================================
 
-                    // 左側：單行過濾 (GUAYAS ECUADOR)
+                    // 左側：單行過濾
                     leftBoundary = '(?<![A-Z0-9]{3,}[ \\t])(?<![a-zA-Z0-9])';
 
-                    // 右側：放寬正則，依賴 DOM 檢查
-                    // [V19.0] 增加 \/ (斜線) 過濾，防止 Damage/Investig
+                    // 右側：放寬正則
                     rightBoundary = '(?![a-zA-Z0-9\\.\\-\\/])';
+
+                    // 規則 C: 如果後面跟著 通用排除詞 (CITY, HUB...) 或 關鍵字本身 (GUATEMALA GUATEMALA)
+                    // (?![\\s\\u00A0,]+ ...) 允許中間有空格或逗號 (處理 MEXICO, CP)
+                    rightBoundary += `(?![\\s\\u00A0,]+(?:${commonExclusionsPattern}|${escapedKey})\\b)`;
                 }
 
                 pattern = leftBoundary + escapedKey + rightBoundary;
