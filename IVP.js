@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IVP顯示注釋
 // @namespace    IVP顯示注釋
-// @version      V16
+// @version      V17
 // @description  IVP顯示注釋、一眼模式、定義字體顏色。
 // @author       Jerry Law
 // @match        *://ivp.inside.ups.com/*
@@ -25,6 +25,7 @@
     // ================================================================
     const annotationsText = `
 #165 GLENN FOX RD|亞馬遜倉庫
+#6635 106 AVE SE|亞馬遜倉庫
 #8255 NW 66TH STREET|亞馬遜倉庫
 #7600 LTC PARKWAY|亞馬遜倉庫
 #27505 SW 132ND AVE|亞馬遜倉庫
@@ -35,6 +36,7 @@
 #OBSERVED PKG|主動監控的貨件
 #MONITORING|監控中
 #RETURN GOODS|退回包裹
+#POA/IRS|需要提供授權書及收件人稅號
 #SAT DELIVERY|星期六送貨
 #SAT AIR DEL|星期六空運送貨
 #NEVER ARRIVD|從未送達目的地
@@ -127,7 +129,7 @@
 #INCOMPL ADDR|地址不完整
 #UPDATED DEPARTURE|更新離開記錄
 #UPDATED ARRIVAL|更新到達記錄
-#NO CUSTOMS #|無關稅編號
+#NO CUSTOMS #|需要海關編號
 #IMPT FEE DUE|需支付進口到付費用
 #PENDING FDA|等待食品藥物管理局審查
 #NOT RELEASED|等待海關釋放
@@ -525,7 +527,7 @@
 #REF DUTY/VAT|收件人拒付關稅
 #REF NO COD|收件人拒絕付款
 #REF NO INVCE|沒有發票，收件人拒收
-#REF TOO $$$|運費太貴，收件人拒收
+#REF TOO $$$|費用太高，收件人拒收
 #REF TOO LATE|派送太晚，收件人拒收
 #REFUSED PAY|收件人拒付除關稅以外的所有費用
 #RELEASED|狀態解除
@@ -566,7 +568,7 @@
 #INTL VOL MGT|倉位緊張
 #SEC/SCR PASS|已通過安檢
 #SHORT LANDED|清關文件已到貨未到
-#POA IMP REQ|需要提供POA文件
+#POA IMP REQ|需要提供授權書（POA）
 #OFFSITE BROK|由第三方機構清關和派送
 #SIG OBTAINED|獲得簽名
 #NOT LATE|無遲到 - 已清除「延誤」標記
@@ -590,6 +592,7 @@
 #UNAUT ANIMAL|未經授權的動物
 #OPSYS HOLD|系统数据暂存
 #RECEPTION|接待處
+#P.O. BOX|不支援投遞到郵政信箱
 
 
 ####國家#######################################################################################################
@@ -1429,6 +1432,7 @@ Search By:
         styleSheet.textContent = modalCSS;
         document.head.appendChild(styleSheet);
 
+
         const modal = document.getElementById('ivp-settings-modal');
         const closeBtn = document.getElementById('ivp-settings-close');
         const heightInput = document.getElementById('tbodyMaxHeightInput');
@@ -1439,6 +1443,7 @@ Search By:
         const showModal = () => {
             setTimeout(() => modal.classList.add('visible'), 10);
         };
+
         const hideModal = () => {
             modal.classList.remove('visible');
             setTimeout(() => {
@@ -1449,10 +1454,13 @@ Search By:
         };
 
         closeBtn.addEventListener('click', hideModal);
+
         modal.addEventListener('click', (e) => {
             if (e.target === modal) hideModal();
         });
+
         heightInput.addEventListener('change', () => {
+            // [修正] 避免換行造成語法錯誤，並確保輸入無效時回落默認值
             const newHeight = parseInt(heightInput.value, 10) || DEFAULTS.tbodyMaxHeight;
             GM_setValue('tbodyMaxHeight', newHeight);
             triggerSeamlessHeightAdjustment();
@@ -1468,10 +1476,8 @@ Search By:
         resetBtn.addEventListener('click', () => {
             GM_setValue('tbodyMaxHeight', DEFAULTS.tbodyMaxHeight);
             GM_setValue('annotationColor', DEFAULTS.annotationColor);
-
             triggerSeamlessHeightAdjustment();
             applyAnnotationColor();
-
             heightInput.value = DEFAULTS.tbodyMaxHeight;
             colorPicker.value = DEFAULTS.annotationColor;
             colorPreview.textContent = DEFAULTS.annotationColor.toUpperCase();
@@ -1480,12 +1486,139 @@ Search By:
         showModal();
     }
 
+    // [新增] 判斷整句是否為地址行格式：門牌 + 街道,,城市,代碼(可選括號)
+    function isAddressLineFormat(text) {
+        const t = text.trim();
+        if (!t) return false;
+        if (!/^\d/.test(t)) return false;
+        if (t.indexOf(',,') === -1) return false;
+        return /^\d+[^,\r\n]*,,[^,\r\n]+,[A-Z]{2,3}(\([^)]*\))?$/.test(t);
+    }
+
+    // [新增] 通用規則：若文字是「標籤(含冒號)」後方段落中的短大寫值，則不做註釋
+    function isLabeledShortValueNode(textNode) {
+        const p = textNode && textNode.parentElement;
+        if (!p || p.tagName !== 'P') return false;
+
+        const value = (textNode.nodeValue || '').trim();
+        if (!/^[A-Z]{2,3}$/.test(value)) return false;
+
+        const prev = p.previousElementSibling;
+        if (!prev) return false;
+
+        const labelText = (prev.textContent || '').trim();
+        return labelText.includes(':');
+    }
+
+    // [新增] 取得 Ship To 區塊容器（存在 "Ship To" 標籤者）
+    function getShipToContainer(textNode) {
+        const p = textNode && textNode.parentElement;
+        if (!p) return null;
+
+        const container = p.closest('div.col.col-12');
+        if (!container) return null;
+
+        const strongList = container.querySelectorAll('strong');
+        for (const s of strongList) {
+            const t = (s.textContent || '').replace(/\s+/g, ' ').trim();
+            if (t === 'Ship To') return container;
+        }
+        return null;
+    }
+
+    // [新增] Ship To 區塊內：同一獨立行重複出現時，只注釋最後一次
+    function shouldAnnotateLastDuplicateLine(textNode, matchText) {
+        const container = getShipToContainer(textNode);
+        if (!container) return true;
+
+        const lineEl = textNode.parentElement && textNode.parentElement.closest('span.ng-star-inserted');
+        if (!lineEl) return true;
+
+        const lineText = (lineEl.textContent || '').replace(/\s+/g, ' ').trim();
+        if (lineText !== matchText) return true;
+
+        const list = Array.from(container.querySelectorAll('span.ng-star-inserted'))
+        .filter(el => (el.textContent || '').replace(/\s+/g, ' ').trim() === matchText);
+
+        if (list.length <= 1) return true;
+        return list[list.length - 1] === lineEl;
+    }
+
+    // [新增] 通用規則：含逗號的地址行內，若命中詞前面（忽略空白）緊接字母，視為片語一部分，跳過注釋
+    function isMatchInCommaAddressPhrase(text, matchStart, matchText) {
+        if (/^[A-Z]{2,3}$/.test(matchText)) return false;
+        const lineStart = text.lastIndexOf('\n', matchStart - 1) + 1;
+        let lineEnd = text.indexOf('\n', matchStart);
+        if (lineEnd === -1) lineEnd = text.length;
+
+        const line = text.slice(lineStart, lineEnd);
+        if (line.indexOf(',') === -1) return false;
+        if (line.trim() === matchText) return false;
+
+        let i = matchStart - 1;
+        while (i >= lineStart && /\s/.test(text[i])) i--;
+        if (i < lineStart) return false;
+
+        return /[A-Za-z]/.test(text[i]);
+    }
+
+
+    // [修改] 通用規則：用格式識別判斷逗號後兩位字母是否屬於州碼語境，避免硬編碼州碼
+    function isCommaSeparatedStateCode(text, matchStart, matchText) {
+        if (!/^[A-Z]{2}$/.test(matchText)) return false;
+
+        // 逗號語境：忽略空白後，左邊必須係逗號
+        let i = matchStart - 1;
+        while (i >= 0 && /\s/.test(text[i])) i--;
+        if (i < 0 || text[i] !== ',') return false;
+
+        // 取同一行範圍
+        const lineStart = text.lastIndexOf('\n', matchStart - 1) + 1;
+        let lineEnd = text.indexOf('\n', matchStart);
+        if (lineEnd === -1) lineEnd = text.length;
+
+        // 取命中後嘅尾綴內容
+        let j = matchStart + matchText.length;
+        while (j < lineEnd && /\s/.test(text[j])) j++;
+        const tail = text.slice(j, lineEnd);
+
+        // 若尾綴跟住另一段代碼（兩至三位字母），通常代表前者係州碼，後者係國別或其他代碼
+        if (/^[A-Z]{2,3}(\b|$)/.test(tail)) return true;
+
+        // 若尾綴跟住郵編數字（常見三至六位），通常代表州碼語境
+        if (/^\d{3,6}(\b|$)/.test(tail)) return true;
+
+        // 若尾綴有括號附加資訊（例如括號內代碼或數字），通常仍屬地址尾段結構
+        if (/^\([^)]{1,12}\)/.test(tail)) return true;
+
+        // 行尾情況：用斜線格式作為「國別碼」特徵，否則傾向當作州碼語境
+        const line = text.slice(lineStart, lineEnd);
+        if (tail.trim() === '') {
+            if (line.indexOf('/') !== -1) return false; // 斜線格式：行尾兩位字母更可能係國別或地區碼，允許註釋
+            return true; // 非斜線格式：行尾兩位字母更可能係州碼，跳過註釋
+        }
+
+        return false;
+    }
+
+
     function annotateTextNode(node) {
-        if (!node || node.nodeType !== Node.TEXT_NODE || !node.nodeValue || !node.nodeValue.trim()) return;
+        if (!node ||
+            node.nodeType !== Node.TEXT_NODE ||
+            !node.nodeValue ||
+            !node.nodeValue.trim()) return;
+
         if (node.parentNode && node.parentNode.closest && node.parentNode.closest("." + annotationClassName)) return;
 
         const text = node.nodeValue;
+
         if (excludeList.some(excludeItem => text.toLowerCase().includes(excludeItem))) return;
+
+        // [新增] 通用規則：符合地址行格式則整句不做註釋，避免代碼被注釋
+        if (isAddressLineFormat(text)) return;
+
+        // [新增] 通用規則：標籤冒號後方的短大寫值不註釋
+        if (isLabeledShortValueNode(node)) return;
 
         unionRegex.lastIndex = 0;
         if (!unionRegex.test(text)) return;
@@ -1494,23 +1627,50 @@ Search By:
         let lastIndex = 0;
         const frag = document.createDocumentFragment();
         let m;
+        let didAddNote = false;
+
         while ((m = unionRegex.exec(text)) !== null) {
             const matchText = m[0];
             const matchStart = m.index;
+
             if (matchStart > lastIndex) {
                 frag.appendChild(document.createTextNode(text.slice(lastIndex, matchStart)));
             }
+
             frag.appendChild(document.createTextNode(matchText));
+
+            // [新增] 通用規則：逗號後兩位代碼視為地址州碼語境，跳過註釋
+            if (isCommaSeparatedStateCode(text, matchStart, matchText)) {
+                lastIndex = matchStart + matchText.length;
+                continue;
+            }
+
+            // [新增] 通用規則：地址行片語內命中則不注釋（例如 WESTERN AUSTRALIA）
+            if (isMatchInCommaAddressPhrase(text, matchStart, matchText)) {
+                lastIndex = matchStart + matchText.length;
+                continue;
+            }
+
+            // [新增] 通用規則：Ship To 區塊重複獨立行，只注釋最後一次
+            if (!shouldAnnotateLastDuplicateLine(node, matchText)) {
+                lastIndex = matchStart + matchText.length;
+                continue;
+            }
+
             const noteSpan = document.createElement("span");
             noteSpan.className = "tm-annotation-note";
             noteSpan.textContent = `(${keyToNote.get(matchText)})`;
             frag.appendChild(noteSpan);
+            didAddNote = true;
+
             lastIndex = matchStart + matchText.length;
         }
 
         if (lastIndex < text.length) {
             frag.appendChild(document.createTextNode(text.slice(lastIndex)));
         }
+
+        if (!didAddNote) return;
 
         const wrapper = document.createElement("span");
         wrapper.classList.add(annotationClassName);
@@ -1519,20 +1679,24 @@ Search By:
         node.parentNode.replaceChild(wrapper, node);
     }
 
-        function processElement(rootElement) {
-        if (!rootElement || !rootElement.nodeType) return;
-        if (rootElement.nodeName === "INPUT" || rootElement.nodeName === "TEXTAREA" || rootElement.isContentEditable) return;
+    function processElement(rootElement) {
+        if (!rootElement ||
+            !rootElement.nodeType) return;
+
+        if (rootElement.nodeName === "INPUT" ||
+            rootElement.nodeName === "TEXTAREA" ||
+            rootElement.isContentEditable) return;
+
         const forbiddenAncestorsSelector = 'INPUT, TEXTAREA, BUTTON, SELECT, OPTION, SCRIPT, STYLE, [contenteditable="true"]';
         const walker = document.createTreeWalker(rootElement, NodeFilter.SHOW_TEXT, null);
         const nodes = [];
         let node;
+
         while ((node = walker.nextNode())) {
             const p = node.parentNode;
-
             if (p && p.closest(forbiddenAncestorsSelector)) {
                 continue;
             }
-
             if (!processedNodes.has(node)) {
                 nodes.push(node);
             }
@@ -1570,6 +1734,7 @@ Search By:
     function observeDocument(doc) {
         const observer = new MutationObserver(mutations => {
             let hasMeaningfulChange = false;
+
             for (const m of mutations) {
                 if (m.type === "childList" && m.addedNodes.length > 0) {
                     m.addedNodes.forEach(n => {
@@ -1605,6 +1770,7 @@ Search By:
         const iframeObserver = new MutationObserver(() => {
             document.querySelectorAll("iframe").forEach(observeIframe);
         });
+
         iframeObserver.observe(document.body, {
             childList: true,
             subtree: true
@@ -1620,6 +1786,7 @@ Search By:
                 observer.disconnect();
             }
         });
+
         initialObserver.observe(document.body, {
             childList: true,
             subtree: true
@@ -1636,7 +1803,9 @@ Search By:
         applyAnnotationColor();
         syncBodyClasses();
         applyOrRemoveFullViewStyles();
+
         GM_registerMenuCommand('設定', createSettingsPanel);
+
         waitForUIAndInjectButtons();
         startAnnotationEngine();
         startInstantHeightAdjuster();
@@ -1651,5 +1820,4 @@ Search By:
     } else {
         setTimeout(initializeScript, 100);
     }
-
 })();
