@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IVP顯示注釋
 // @namespace    IVP顯示注釋
-// @version      V17
+// @version      V18
 // @description  IVP顯示注釋、一眼模式、定義字體顏色。
 // @author       Jerry Law
 // @match        *://ivp.inside.ups.com/*
@@ -24,6 +24,7 @@
     // 注釋數據
     // ================================================================
     const annotationsText = `
+#PARKHURST SQUARE #1|亞馬遜倉庫
 #165 GLENN FOX RD|亞馬遜倉庫
 #6635 106 AVE SE|亞馬遜倉庫
 #8255 NW 66TH STREET|亞馬遜倉庫
@@ -51,10 +52,12 @@
 #OUT SVC AREA|所選的服務不適用於該目的地地址
 #LAST SELLER|需要賣家資料
 #LATE TOFC|拖車延遲
+#INSIDE DELIV|室內派送
+#DOCK|倉庫或裝卸區域
 #LOCAL CHOSEN|已在當地選擇派送
 #NO SAT ACC |不收取週六附加費
 #LBL DETACH|標籤從包裹脫落
-#NO LISTING|沒有收件地址信息
+#NO LISTING|需要收件地址信息
 #REF UPS BROK|拒絕UPS擔任報關代理
 #RTL NON DEL|無法派送至自提點
 #RGL HAZMAT|一般及預先通知的危險品貨件
@@ -768,6 +771,7 @@
 #UA|烏克蘭
 #AE|阿聯酋 - 阿拉伯聯合大公國
 #GB|英國
+#GU|美屬關島
 #US|美國
 #UY|烏拉圭
 #UZ|烏茲別克 - 烏茲別克斯坦
@@ -862,6 +866,7 @@
 #COTE D IVOIRE|象牙海岸 - CI
 #CROATIA|克羅埃西亞 - HR
 #CYPRUS|賽普勒斯 - CY
+#GUAM|美屬關島 - GU
 #CZECH REPUBLIC|捷克 - CZ
 #DENMARK|丹麥 - DK
 #DOMINICA|多明尼加 - DO
