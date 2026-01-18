@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CEC功能強化
 // @namespace    CEC Enhanced
-// @version      V79
+// @version      V83
 // @description  快捷操作按鈕、自動指派、IVP快速查詢、聯繫人彈窗優化、按鈕警示色、賬戶檢測、組件屏蔽、設置菜單、自動IVP查詢、URL精準匹配、快捷按鈕可編輯、(Related Cases)數據提取與增強排序功能、關聯案件提取器、回覆case快捷按鈕、已跟進case提示、全局暫停/恢復功能。
 // @author       Jerry Law
 // @match        https://upsdrive.lightning.force.com/*
@@ -18,6 +18,13 @@
 // ==/UserScript==
 
 /*
+V79 > V83
+更新內容：
+-模版插入定位優化
+-頁面自動滾動
+-聯繫人彈窗邏輯修復
+-LinkUP窗口名稱複製功能
+
 V74 > V79
 更新內容：
 -優化開查/預付case提示
@@ -124,6 +131,7 @@ V53 > V54
         pcaDoNotClosePromptEnabled: false,
         pcaCaseListHintEnabled: false,
         autoSwitchEnabled: true,
+        autoScrollAfterActionButtons: false,
         autoAssignUser: '',
         sentinelCloseEnabled: true,
         blockIVPCard: false,
@@ -244,6 +252,13 @@ V53 > V54
             label: '懸浮提示',
             selector: '.active.open.south.positioned.forceHoverPanel.uiPanel.uiPanel--default, .active.open.north.positioned.forceHoverPanel.uiPanel.uiPanel--default, .active.open.east.positioned.forceHoverPanel.uiPanel.uiPanel--default, lightning-button-icon.hover-button-icon-element',
             enabled: true,
+            isCore: false
+        }, {
+            id: 'remove_top_padding',
+            label: '移除Associate Contact按鈕頂部間距',
+            selector: '.slds-p-top_medium, .slds-p-top--medium',
+            customRule: 'padding-top: 0px !important;',
+            enabled: false,
             isCore: false
         }, ]
     };
@@ -1324,7 +1339,12 @@ V53 > V54
                 if (collapsed) panel.classList.add('fu-collapsed');
                 else panel.classList.remove('fu-collapsed');
             }
-            if (arrow) arrow.textContent = '▾';
+
+
+            if (arrow) {
+                arrow.textContent = collapsed ? '▴' : '▾';
+            }
+
             if (!body) return;
 
             const activeCaseNo = normalizeCaseNo(getCaseNumberFromVisibleHeader()) || null;
@@ -2400,32 +2420,59 @@ V53 > V54
 
     /**
     * @description 根據用戶配置啟用或禁用組件屏蔽（Clean Mode）的CSS樣式。
+    *              [升級版] 支持 customRule 屬性，可實現"修改樣式"而非單純"隱藏"。
     */
     function toggleCleanModeStyles() {
         const STYLE_ID = 'clean-mode-styles';
         const isEnabled = GM_getValue('cleanModeEnabled', DEFAULTS.cleanModeEnabled);
+
         const existingStyle = document.getElementById(STYLE_ID);
         if (existingStyle) {
             existingStyle.remove();
         }
+
         if (!isEnabled) {
             return;
         }
+
         const defaultConfig = DEFAULTS.cleanModeConfig.reduce((acc, item) => {
             acc[item.id] = item.enabled;
             return acc;
         }, {});
+
         const userConfig = GM_getValue('cleanModeUserConfig', defaultConfig);
-        const selectors = DEFAULTS.cleanModeConfig
-        .filter(item => userConfig[item.id])
-        .map(item => item.selector);
-        if (selectors.length === 0) {
+
+        // 分離：普通屏蔽項 (隱藏) vs 自定義樣式項 (修改)
+        const hideSelectors = [];
+        let customCssRules = '';
+
+        DEFAULTS.cleanModeConfig.forEach(item => {
+            // 只有當用戶勾選了該項時才處理
+            if (userConfig[item.id]) {
+                if (item.customRule) {
+                    // [新功能] 如果配置了 customRule，則應用特定的 CSS 規則 (例如 padding: 0)
+                    customCssRules += `${item.selector} { ${item.customRule} } \n`;
+                } else {
+                    // [舊邏輯] 否則默認為隱藏元素
+                    hideSelectors.push(item.selector);
+                }
+            }
+        });
+
+        let finalCss = customCssRules;
+
+        // 將所有需要隱藏的選擇器合併，統一應用 display: none
+        if (hideSelectors.length > 0) {
+            finalCss += hideSelectors.join(',\n') + ' { display: none !important; }';
+        }
+
+        if (!finalCss.trim()) {
             return;
         }
-        const cssRule = selectors.join(',\n') + ' { display: none !important; }';
+
         const styleElement = document.createElement('style');
         styleElement.id = STYLE_ID;
-        styleElement.textContent = cssRule;
+        styleElement.textContent = finalCss;
         document.head.appendChild(styleElement);
     }
 
@@ -2448,7 +2495,7 @@ V53 > V54
                             <button class="cec-settings-tab-button" data-tab="interface">界面</button>
                             <button class="cec-settings-tab-button" data-tab="automation">自動化</button>
                             <button class="cec-settings-tab-button" data-tab="buttons">快捷按鈕</button>
-                    <button class="cec-settings-tab-button" data-tab="pca">PCA</button>
+                            <button class="cec-settings-tab-button" data-tab="pca">PCA</button>
                         </div>
                         <div id="tab-general" class="cec-settings-tab-content active">
                            <div class="cec-settings-section">
@@ -2606,6 +2653,21 @@ V53 > V54
                                     <label class="cec-settings-label">Document Customer Contact</label>
                                     <ul id="docContact-list" class="cec-settings-comment-list"></ul>
                                     <button class="cec-settings-add-comment-button" data-key="documentContact">+ 添加選項</button>
+                                </div>
+                            </div>
+
+                            <hr class="cec-settings-divider">
+                            <div class="cec-settings-section">
+                                <h3 class="cec-settings-section-title">彈窗輔助</h3>
+                                <div class="cec-settings-option">
+                                    <div class="cec-settings-option-main">
+                                        <label for="autoScrollActionButtonsToggle" class="cec-settings-label">快捷按鈕注入後自動下移網頁</label>
+                                        <label class="cec-settings-switch">
+                                            <input type="checkbox" id="autoScrollActionButtonsToggle">
+                                            <span class="cec-settings-slider"></span>
+                                        </label>
+                                    </div>
+                                    <p class="cec-settings-description">在注入快捷按鈕後，自動將網頁下移 111px，以便查看被遮擋的內容。</p>
                                 </div>
                             </div>
                         </div>
@@ -3100,7 +3162,7 @@ V53 > V54
 
             const settings = {
                 showToast,
-                // ---- Tabs ----
+                // ---- 標籤頁 ----
                 initTabs: () => {
                     const tabs = modal.querySelectorAll('.cec-settings-tab-button');
                     const tabContents = modal.querySelectorAll('.cec-settings-tab-content');
@@ -3114,7 +3176,7 @@ V53 > V54
                     });
                 },
 
-                // ---- Clean Mode ----
+                // ---- 組件屏蔽模式 ----
                 defaultCleanModeConfig: DEFAULTS.cleanModeConfig.reduce((acc, item) => {
                     acc[item.id] = item.enabled;
                     return acc;
@@ -3123,13 +3185,13 @@ V53 > V54
                 currentUserConfig: null,
                 renderCleanModeList: null,
 
-                // ---- Auto Fill Texts ----
+                // ---- 自動填充文本 ----
                 autoFillTexts: null,
                 migrateAutoFillTexts: null,
                 renderCommentList: null,
                 setupCommentListHandlers: null,
 
-                // ---- Buttons Config ----
+                // ---- 按鈕配置 ----
                 currentButtons: null,
                 renderButtonList: null,
                 saveButtons: null,
@@ -3140,10 +3202,10 @@ V53 > V54
                 refresh: null
             };
 
-            // Tabs
+            // 標籤頁初始化
             settings.initTabs();
 
-            // Close events (避免重複綁定)
+            // 關閉事件 (避免重複綁定)
             document.getElementById('cec-settings-close').addEventListener('click', closeSettingsModal);
 
             let mouseDownTarget = null;
@@ -3162,7 +3224,7 @@ V53 > V54
             });
 
             // -----------------------
-            // Clean Mode handlers
+            // 組件屏蔽處理器
             // -----------------------
             const cleanModeToggle = document.getElementById('cleanModeToggle');
             const cleanModeCustomToggle = document.getElementById('cleanModeCustomToggle');
@@ -3214,7 +3276,7 @@ V53 > V54
             });
 
             // -----------------------
-            // Auto Fill Texts handlers
+            // 自動填充文本處理器
             // -----------------------
             settings.migrateAutoFillTexts = () => {
                 let current = GM_getValue('iwtAutoFillTexts', DEFAULTS.iwtAutoFillTexts);
@@ -3280,7 +3342,7 @@ V53 > V54
             settings.setupCommentListHandlers('documentContact', document.getElementById('docContact-list'), document.querySelector('[data-key=\"documentContact\"]'));
 
             // -----------------------
-            // Button Config handlers
+            // 按鈕配置處理器
             // -----------------------
             const buttonList = document.getElementById('button-config-list');
 
@@ -3394,12 +3456,12 @@ V53 > V54
             });
 
             // -----------------------
-            // Refresh function (each open)
+            // 刷新函數 (每次打開時執行)
             // -----------------------
             settings.refresh = () => {
-                // Core Toggles / Inputs
+                // 核心切換開關 / 輸入框
 
-                // Follow-Up Panel toggle (default: off)
+                // 跟進面板切換開關 (默認：關閉)
                 const followUpPanelToggle = document.getElementById('followUpPanelToggle');
                 if (followUpPanelToggle) {
                     followUpPanelToggle.checked = GM_getValue('followUpPanelEnabled', DEFAULTS.followUpPanelEnabled);
@@ -3453,7 +3515,7 @@ V53 > V54
                             injectPcaCaseListSortButtons(null);
                         }
                     } catch (e) {
-                        // ignore
+                        // 忽略
                     }
                     Log.info('UI.Settings', `設置已保存: pcaCaseListHintEnabled = ${value}`);
                     showToast();
@@ -3548,11 +3610,11 @@ V53 > V54
                     showToast();
                 };
 
-                // Clean Mode
+                // 組件屏蔽
                 cleanModeToggle.checked = GM_getValue('cleanModeEnabled', DEFAULTS.cleanModeEnabled);
                 settings.renderCleanModeList();
 
-                // Account highlight
+                // 賬戶高亮
                 const highlightModeGroup = document.getElementById('accountHighlightModeGroup');
                 const currentHighlightMode = GM_getValue('accountHighlightMode', 'pca');
                 const highlightRadio = highlightModeGroup.querySelector(`input[value="${currentHighlightMode}"]`);
@@ -3566,7 +3628,7 @@ V53 > V54
                     }
                 };
 
-                // Heights
+                // 高度設置
                 const caseHistoryInput = document.getElementById('caseHistoryHeightInput');
                 caseHistoryInput.value = GM_getValue('caseHistoryHeight', DEFAULTS.caseHistoryHeight);
                 caseHistoryInput.onchange = () => {
@@ -3595,18 +3657,29 @@ V53 > V54
                     showToast();
                 };
 
-                // Auto Fill Texts (Render)
+                // 自動填充文本 (渲染)
                 settings.autoFillTexts = settings.migrateAutoFillTexts();
                 settings.renderCommentList('reOpen', document.getElementById('reOpen-list'));
                 settings.renderCommentList('closeCase', document.getElementById('closeCase-list'));
                 settings.renderCommentList('documentContact', document.getElementById('docContact-list'));
 
-                // Buttons Config (Render)
+                // 按鈕配置 (渲染)
                 settings.currentButtons = GM_getValue('actionButtons', JSON.parse(JSON.stringify(DEFAULTS.actionButtons)));
                 settings.renderButtonList();
             };
 
-            // Store settings object
+            // 綁定自動下移開關
+            const autoScrollActionButtonsToggle = document.getElementById('autoScrollActionButtonsToggle');
+            if (autoScrollActionButtonsToggle) {
+                autoScrollActionButtonsToggle.checked = GM_getValue('autoScrollAfterActionButtons', DEFAULTS.autoScrollAfterActionButtons);
+                autoScrollActionButtonsToggle.onchange = () => {
+                    const value = autoScrollActionButtonsToggle.checked;
+                    GM_setValue('autoScrollAfterActionButtons', value);
+                    Log.info('UI.Settings', `設置已保存: autoScrollAfterActionButtons = ${value}`);
+                    showToast();
+                };
+            }
+            // 存儲設置對象
             modal._cecSettings = settings;
         }
 
@@ -3615,7 +3688,7 @@ V53 > V54
             modal._cecSettings.refresh();
         }
 
-        // Show modal
+        // 顯示模態框
         modal.style.display = 'flex';
         requestAnimationFrame(() => {
             modal.style.opacity = '1';
@@ -4732,1175 +4805,1243 @@ V53 > V54
             }
         } catch (e) {}
 
-        // 2. 光標預定位 (Logo 模式 - 歸零定位法)
+        // 2. 光標預定位 (Logo 模式 - 頂層遍歷鎖定法 - 最終精簡版)
         if (insertionMode === 'logo') {
             try {
                 const iframe = await waitForElementWithObserver(document.body, EDITOR_IFRAME_SELECTOR, TIMEOUT);
-                await delay(100); // 延時，等待事件循環處理完畢
+                await delay(100);
+
                 if (iframe && iframe.contentDocument) {
                     iframe.contentWindow.focus();
                     const editorDoc = iframe.contentDocument;
                     const editorBody = editorDoc.body;
-
-                    const targetLineNumber = 10;
-                    let linesFound = 0;
-                    let targetNode = null;
-
-                    const nodeFilter = {
-                        acceptNode: function(node) {
-                            const nodeName = node.nodeName.toUpperCase();
-                            if (nodeName === 'BR' || ['DIV', 'P', 'TABLE', 'H1', 'H2', 'H3'].includes(nodeName)) {
-                                return NodeFilter.FILTER_ACCEPT;
-                            }
-                            return NodeFilter.FILTER_SKIP;
-                        }
-                    };
-
-                    const walker = editorDoc.createTreeWalker(editorBody, NodeFilter.SHOW_ELEMENT, nodeFilter, false);
-                    while (linesFound < targetLineNumber && (targetNode = walker.nextNode())) {
-                        linesFound++;
-                    }
-
                     const selection = iframe.contentWindow.getSelection();
                     const range = editorDoc.createRange();
 
-                    if (targetNode) {
-                        range.setStartBefore(targetNode);
-                    } else {
-                        range.selectNodeContents(editorBody);
-                        range.collapse(false);
+                    let targetContainer = null;
+                    let logoTable = null;
+
+                    // --- 步驟 1: 嚴格尋找頂層 Logo (禁止深度查找) ---
+                    // 只遍歷 body 的直接子元素，確保找到的是最上面那個，絕不會鑽進歷史郵件裡
+                    const children = Array.from(editorBody.children);
+                    for (const child of children) {
+                        if (child.tagName === 'TABLE') {
+                            // 檢查特徵：class 包含 mce-item-table 或者內部有 ups-shield 圖片
+                            if (child.classList.contains('mce-item-table') || child.querySelector('img[src*="ups-shield.png"]')) {
+                                logoTable = child;
+                                break; // 找到第一個就停止，這絕對是頂部 Logo
+                            }
+                        }
                     }
+
+                    // 兜底：如果第一層沒找到 (極少見)，才嘗試普通搜索
+                    if (!logoTable) {
+                        logoTable = editorBody.querySelector('table.mce-item-table');
+                    }
+
+                    if (logoTable) {
+                        // 輔助函數：判斷節點是否"被佔用" (有內容、有樣式、或者是引用塊)
+                        // 如果下一個節點是這種情況，我們就不能復用它，必須在它前面插入新的
+                        const isOccupied = (node) => {
+                            if (!node || node.nodeType !== 1) return false;
+                            if (node.textContent.trim() !== '') return true; // 有文字
+                            if (node.hasAttribute('style')) return true; // 有樣式 (這是導致偏移的主因)
+                            if (['HR', 'BLOCKQUOTE', 'TABLE'].includes(node.tagName)) return true; // 是特殊標籤
+                            return false;
+                        };
+
+                        // --- 步驟 2: 處理 Spacer (4行BR) ---
+                        let spacerDiv = logoTable.nextElementSibling;
+
+                        // 驗證：必須是 DIV，且未被佔用，且包含多個 BR
+                        if (!spacerDiv || spacerDiv.tagName !== 'DIV' || isOccupied(spacerDiv) || spacerDiv.querySelectorAll('br').length < 2) {
+                            const newSpacer = editorDoc.createElement('div');
+                            newSpacer.innerHTML = '<br><br><br><br>';
+                            if (spacerDiv) editorBody.insertBefore(newSpacer, spacerDiv);
+                            else editorBody.appendChild(newSpacer);
+                            spacerDiv = newSpacer;
+                        }
+
+                        // --- 步驟 3: 處理 Bogus 1 (第1個空行) ---
+                        let bogus1 = spacerDiv.nextElementSibling;
+
+                        if (!bogus1 || bogus1.tagName !== 'DIV' || isOccupied(bogus1)) {
+                            const newBogus1 = editorDoc.createElement('div');
+                            newBogus1.innerHTML = '<br data-mce-bogus="1">';
+                            if (bogus1) editorBody.insertBefore(newBogus1, bogus1);
+                            else editorBody.appendChild(newBogus1);
+                            bogus1 = newBogus1;
+                        }
+
+                        // --- 步驟 4: 鎖定 Target (第2個空行) ---
+                        // [關鍵] 這裡改用 <p> 標籤，因為 TinyMCE 對 p 的支持最好，不會亂跳
+                        let targetP = bogus1.nextElementSibling;
+
+                        // 如果下一個節點不存在，或者被佔用(例如是 Original Message)，或者不是 P
+                        if (!targetP || targetP.tagName !== 'P' || isOccupied(targetP)) {
+                            const newP = editorDoc.createElement('p');
+                            newP.innerHTML = '<br>'; // 標準 br
+
+                            if (targetP) editorBody.insertBefore(newP, targetP);
+                            else editorBody.appendChild(newP);
+                            targetP = newP;
+                        }
+
+                        // --- 步驟 5: 清洗與鎖定 ---
+                        // 移除所有樣式，確保這是一個純淨的插入點
+                        targetP.removeAttribute('style');
+                        targetP.removeAttribute('class');
+                        targetP.removeAttribute('data-mce-bogus');
+                        targetP.innerHTML = '<br>';
+
+                        targetContainer = targetP;
+                        Log.info('UI.Enhancement', '已通過頂層遍歷鎖定並創建 P 標籤錨點。');
+
+                    } else {
+                        // --- 兜底：頂部插入 ---
+                        Log.warn('UI.Enhancement', '未找到 Logo，執行頂部插入。');
+                        const newP = editorDoc.createElement('p');
+                        newP.innerHTML = '<br>';
+                        editorBody.prepend(newP);
+                        targetContainer = newP;
+                    }
+
+                    // --- 步驟 6: 執行光標設置 ---
+                    if (targetContainer) {
+                        // 選中 P 標籤內部
+                        range.selectNodeContents(targetContainer);
+                        range.collapse(true); // 折疊到開頭
+
+                        selection.removeAllRanges();
+                        selection.addRange(range);
+
+                        targetContainer.scrollIntoView({ behavior: 'auto', block: 'center' });
+
+                        // 觸發事件，通知編輯器選區已變更
+                        try {
+                            const syncEventConfig = { bubbles: true, cancelable: true, view: iframe.contentWindow };
+                            targetContainer.dispatchEvent(new MouseEvent('mousedown', syncEventConfig));
+                            targetContainer.dispatchEvent(new MouseEvent('mouseup', syncEventConfig));
+                        } catch (e) {}
+                    }
+
+                    iframe.contentWindow.focus();
+                }
+            } catch (e) {
+                console.error('定位錯誤:', e);
+            }
+        }
+
+        // 3. Pre-Conversion
+        if (conversionMode !== 'off') {
+            try {
+                const iframe = findElementInShadows(document.body, EDITOR_IFRAME_SELECTOR);
+                if (iframe && iframe.contentDocument && iframe.contentWindow) {
+                    const win = iframe.contentWindow;
+                    const doc = iframe.contentDocument;
+                    const sel = win.getSelection();
+                    if (sel.rangeCount > 0) {
+                        const range = sel.getRangeAt(0);
+                        const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, null, false);
+                        let node;
+                        while (node = walker.nextNode()) {
+                            const position = range.comparePoint(node, 0);
+                            if (position !== 1) {
+                                const originalText = node.nodeValue;
+                                const convertedText = ChineseConverter.convert(originalText, conversionMode);
+                                if (originalText !== convertedText) {
+                                    node.nodeValue = convertedText;
+                                }
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                }
+            } catch (e) {
+                Log.warn('Converter', `Pre-Conversion 執行異常: ${e.message}`);
+            }
+        }
+
+        // 4. 執行插入
+        try {
+            const iconElement = await waitForElementWithObserver(document.body, BUTTON_ICON_SELECTOR, TIMEOUT);
+            clickableButton = iconElement.closest('a[role="button"]');
+            if (clickableButton.getAttribute('aria-expanded') !== 'true') {
+                clickableButton.click();
+                await waitForAttributeChange(clickableButton, 'aria-expanded', 'true', TIMEOUT);
+            }
+
+            const menuId = clickableButton.getAttribute('aria-controls');
+            const menuContainer = await waitForElementWithObserver(document.body, `[id="${menuId}"]`, TIMEOUT);
+            const targetOption = findElementInShadows(menuContainer, MENU_ITEM_SELECTOR);
+
+            if (targetOption) {
+                targetOption.click();
+                await delay(50);
+
+                if (!GM_getValue('postInsertionEnhancementsEnabled', DEFAULTS.postInsertionEnhancementsEnabled)) return;
+
+                const iframe = findElementInShadows(document.body, EDITOR_IFRAME_SELECTOR);
+                if (!iframe || !iframe.contentDocument) throw new Error('無法找到編輯器');
+
+                const structureReady = await waitForExpectedTemplateStructure(iframe, TIMEOUT);
+                if (!structureReady) throw new Error('未找到預期的模板結構');
+
+                const iframeWindow = iframe.contentWindow;
+                const iframeDocument = iframe.contentDocument;
+                const editorBody = iframeDocument.body;
+
+                const firstParagraph = editorBody.querySelector('p');
+                const targetContainerSpan = firstParagraph ? firstParagraph.querySelector('span') : null;
+
+                if (!targetContainerSpan || targetContainerSpan.getElementsByTagName('br').length === 0) {
+                    throw new Error('未找到預期的模板結構');
+                }
+
+                targetContainerSpan.dataset.cecTemplateZone = 'true';
+
+                // --- 5. 樣式同步 & 已有文本轉換 ---
+                if (conversionMode !== 'off') {
+                    try {
+                        const computedStyle = iframeWindow.getComputedStyle(targetContainerSpan);
+                        const targetFont = computedStyle.fontFamily;
+                        const targetSize = computedStyle.fontSize;
+
+                        const walker = iframeDocument.createTreeWalker(editorBody, NodeFilter.SHOW_TEXT, null, false);
+                        let node;
+                        while (node = walker.nextNode()) {
+                            const position = targetContainerSpan.compareDocumentPosition(node);
+                            if (position & Node.DOCUMENT_POSITION_PRECEDING) {
+                                const originalText = node.nodeValue;
+                                const convertedText = ChineseConverter.convert(originalText, conversionMode);
+                                if (originalText !== convertedText) {
+                                    node.nodeValue = convertedText;
+                                }
+                                const parent = node.parentElement;
+                                if (parent && ['P', 'DIV', 'SPAN', 'FONT', 'STRONG', 'B'].includes(parent.nodeName)) {
+                                    parent.style.fontFamily = targetFont;
+                                    parent.style.fontSize = targetSize;
+                                }
+                            }
+                        }
+                    } catch (e) {
+                        Log.warn('UI.Style', `樣式同步執行異常: ${e.message}`);
+                    }
+                }
+
+                // --- 6. 全局增強 ---
+                if (!editorBody.dataset.cecGlobalHandlersAttached) {
+
+                    const isCursorInTemplate = () => {
+                        const selection = iframeWindow.getSelection();
+                        if (!selection.rangeCount) return false;
+                        let node = selection.anchorNode;
+                        while (node && node !== editorBody) {
+                            if (node.nodeType === 1 && node.dataset.cecTemplateZone === 'true') {
+                                return true;
+                            }
+                            node = node.parentNode;
+                        }
+                        return false;
+                    };
+
+                    // A. 粘貼攔截器
+                    editorBody.addEventListener('paste', (event) => {
+                        if (isCursorInTemplate()) {
+                            const items = (event.clipboardData || iframeWindow.clipboardData).items;
+                            let hasImage = false;
+                            for (let i = 0; i < items.length; i++) {
+                                if (items[i].type.indexOf("image") !== -1) {
+                                    hasImage = true;
+                                    break;
+                                }
+                            }
+                            if (hasImage) return;
+
+                            event.preventDefault();
+                            event.stopPropagation();
+
+                            const textToPaste = (event.clipboardData || iframeWindow.clipboardData).getData('text/plain');
+                            const currentMode = editorBody.dataset.cecConversionMode;
+                            const finalPasteText = (currentMode && currentMode !== 'off')
+                            ? ChineseConverter.convert(textToPaste, currentMode)
+                            : textToPaste;
+
+                            const selection = iframeWindow.getSelection();
+                            const range = selection.getRangeAt(0);
+                            range.deleteContents();
+                            const fragment = iframeDocument.createDocumentFragment();
+                            const lines = finalPasteText.split('\n');
+                            lines.forEach((line, index) => {
+                                fragment.appendChild(iframeDocument.createTextNode(line));
+                                if (index < lines.length - 1) fragment.appendChild(iframeDocument.createElement('br'));
+                            });
+                            range.insertNode(fragment);
+                            range.collapse(false);
+                            selection.removeAllRanges();
+                            selection.addRange(range);
+                        }
+                    }, true);
+
+                    // B. Enter 鍵攔截器
+                    editorBody.addEventListener('keydown', (event) => {
+                        if (event.key === 'Enter') {
+                            if (isCursorInTemplate()) {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                const selection = iframeWindow.getSelection();
+                                const range = selection.getRangeAt(0);
+                                range.deleteContents();
+                                const br = iframeDocument.createElement('br');
+                                range.insertNode(br);
+                                range.setStartAfter(br);
+                                range.setEndAfter(br);
+                                selection.removeAllRanges();
+                                selection.addRange(range);
+                                br.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                            }
+                        }
+                    }, true);
+
+                    // C. [極致優化] 全局實時轉換監聽器
+                    const processQueue = new Set();
+                    let isProcessing = false;
+
+                    const processMutations = () => {
+                        isProcessing = false;
+                        const mode = editorBody.dataset.cecConversionMode;
+                        if (!mode || mode === 'off' || processQueue.size === 0) {
+                            processQueue.clear();
+                            return;
+                        }
+
+                        // 優化：緩存 templateZone，避免在循環中重複查詢 DOM
+                        const templateZone = editorBody.querySelector('[data-cec-template-zone="true"]');
+                        if (!templateZone) {
+                            processQueue.clear();
+                            return;
+                        }
+
+                        processQueue.forEach(textNode => {
+                            if (!textNode.isConnected) return;
+
+                            // 再次檢查內容 (Double Check)，防止 race condition
+                            const original = textNode.nodeValue;
+                            const converted = ChineseConverter.convert(original, mode);
+
+                            if (original === converted) return; // 再次確認無需轉換，跳過位置計算
+
+                            // 只有確定文字需要轉換時，才執行昂貴的邊界檢查 (Reflow)
+                            let shouldConvert = false;
+                            if (templateZone.contains(textNode)) shouldConvert = true;
+                            else {
+                                const position = templateZone.compareDocumentPosition(textNode);
+                                if (position & Node.DOCUMENT_POSITION_PRECEDING) shouldConvert = true;
+                            }
+
+                            if (shouldConvert) {
+                                // 執行轉換與光標恢復
+                                const selection = iframeWindow.getSelection();
+                                let savedOffset = null;
+                                if (selection.rangeCount > 0 && selection.anchorNode === textNode) {
+                                    savedOffset = selection.anchorOffset;
+                                }
+
+                                textNode.nodeValue = converted;
+
+                                if (savedOffset !== null) {
+                                    const newRange = iframeDocument.createRange();
+                                    const safeOffset = Math.min(savedOffset, converted.length);
+                                    newRange.setStart(textNode, safeOffset);
+                                    newRange.collapse(true);
+                                    selection.removeAllRanges();
+                                    selection.addRange(newRange);
+                                }
+                            }
+                        });
+
+                        processQueue.clear();
+                    };
+
+                    const scheduleProcessing = () => {
+                        if (!isProcessing) {
+                            isProcessing = true;
+                            requestAnimationFrame(processMutations);
+                        }
+                    };
+
+                    const globalObserver = new MutationObserver((mutations) => {
+                        const mode = editorBody.dataset.cecConversionMode;
+                        if (!mode || mode === 'off') return;
+
+                        let hasWork = false;
+
+                        for (const mutation of mutations) {
+                            // [核心過濾]
+                            // 在加入隊列前，先做一次輕量級的字串比對
+                            // 如果 original === converted，說明該次變動與繁簡轉換無關
+                            // (可能是光標移動導致編輯器重排 DOM，或者是輸入了標點符號/英文)
+                            // 直接忽略，避免後續昂貴的 DOM 計算
+
+                            if (mutation.type === 'characterData') {
+                                const node = mutation.target;
+                                if (node.nodeType === 3) {
+                                    const text = node.nodeValue;
+                                    // 只有當轉換前後不一致時，才視為有工作要做
+                                    if (text !== ChineseConverter.convert(text, mode)) {
+                                        processQueue.add(node);
+                                        hasWork = true;
+                                    }
+                                }
+                            } else if (mutation.type === 'childList') {
+                                if (mutation.addedNodes.length > 0) {
+                                    mutation.addedNodes.forEach(addedNode => {
+                                        if (addedNode.nodeType === 3) {
+                                            const text = addedNode.nodeValue;
+                                            if (text !== ChineseConverter.convert(text, mode)) {
+                                                processQueue.add(addedNode);
+                                                hasWork = true;
+                                            }
+                                        } else if (addedNode.nodeType === 1) {
+                                            const walker = iframeDocument.createTreeWalker(addedNode, NodeFilter.SHOW_TEXT, null, false);
+                                            let subNode;
+                                            while(subNode = walker.nextNode()) {
+                                                const text = subNode.nodeValue;
+                                                if (text !== ChineseConverter.convert(text, mode)) {
+                                                    processQueue.add(subNode);
+                                                    hasWork = true;
+                                                }
+                                            }
+                                        }
+                                    });
+                                }
+                            }
+                        }
+
+                        if (hasWork) {
+                            scheduleProcessing();
+                        }
+                    });
+
+                    PageResourceRegistry.addObserver(globalObserver);
+
+                    globalObserver.observe(editorBody, { childList: true, subtree: true, characterData: true });
+                    editorBody.dataset.cecGlobalHandlersAttached = 'true';
+                }
+
+                // 更新轉換模式
+                editorBody.dataset.cecConversionMode = conversionMode;
+
+                // --- 7. Post-Insertion 光標跳轉 ---
+                const userBrPosition = GM_getValue('cursorPositionBrIndex', DEFAULTS.cursorPositionBrIndex);
+                const brIndex = userBrPosition - 1;
+                const allBrTags = targetContainerSpan.getElementsByTagName('br');
+                if (allBrTags.length > brIndex && brIndex >= 0) {
+                    const targetPositionNode = allBrTags[brIndex];
+                    const selection = iframeWindow.getSelection();
+                    const range = iframeDocument.createRange();
+                    range.setStartBefore(targetPositionNode);
                     range.collapse(true);
                     selection.removeAllRanges();
                     selection.addRange(range);
 
-                    // 模擬一次點擊事件，讓 TinyMCE 內核確認光標位置已變更
-                    // 這是防止菜單打開時光標回滾的關鍵
-                    try {
-                        const syncEventConfig = { bubbles: true, cancelable: true, view: iframe.contentWindow };
-                        // 派發 mousedown 和 mouseup 模擬點擊
-                        if (targetNode) {
-                            targetNode.dispatchEvent(new MouseEvent('mousedown', syncEventConfig));
-                            targetNode.dispatchEvent(new MouseEvent('mouseup', syncEventConfig));
-                        } else {
-                            editorBody.dispatchEvent(new MouseEvent('mousedown', syncEventConfig));
-                            editorBody.dispatchEvent(new MouseEvent('mouseup', syncEventConfig));
-                        }
-                        // 再次強制聚焦
-                        iframe.contentWindow.focus();
-                    } catch (e) { /* ignore */ }
-
-                    await delay(50); // 微小的延時，等待事件循環處理完畢
-
-                    Log.info('UI.Enhancement', `已執行歸零定位法 (跳過 ${linesFound} 行)`);
+                    if (typeof targetPositionNode.scrollIntoView === 'function') {
+                        targetPositionNode.scrollIntoView({ behavior: 'auto', block: 'center' });
+                        requestAnimationFrame(() => { setTimeout(() => { window.scrollBy(0, VIEW_ADJUSTMENT_OFFSET_PX); }, 50); });
+                    }
                 }
-            } catch (e) {
-                console.error(e);
+                iframeWindow.focus();
+
+            } else {
+                throw new Error(`未找到標題為 "${templateTitle}" 的選項。`);
             }
+        } catch (error) {
+            Log.error('UI.Enhancement', `執行模板插入錯誤: ${error.message}`);
+            if (clickableButton && clickableButton.getAttribute('aria-expanded') === 'true') clickableButton.click();
+            throw error;
         }
-            // 3. Pre-Conversion
-            if (conversionMode !== 'off') {
-                try {
-                    const iframe = findElementInShadows(document.body, EDITOR_IFRAME_SELECTOR);
-                    if (iframe && iframe.contentDocument && iframe.contentWindow) {
-                        const win = iframe.contentWindow;
-                        const doc = iframe.contentDocument;
-                        const sel = win.getSelection();
-                        if (sel.rangeCount > 0) {
-                            const range = sel.getRangeAt(0);
-                            const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, null, false);
-                            let node;
-                            while (node = walker.nextNode()) {
-                                const position = range.comparePoint(node, 0);
-                                if (position !== 1) {
-                                    const originalText = node.nodeValue;
-                                    const convertedText = ChineseConverter.convert(originalText, conversionMode);
-                                    if (originalText !== convertedText) {
-                                        node.nodeValue = convertedText;
-                                    }
-                                } else {
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                } catch (e) {
-                    Log.warn('Converter', `Pre-Conversion 執行異常: ${e.message}`);
-                }
-            }
-
-            // 4. 執行插入
-            try {
-                const iconElement = await waitForElementWithObserver(document.body, BUTTON_ICON_SELECTOR, TIMEOUT);
-                clickableButton = iconElement.closest('a[role="button"]');
-                if (clickableButton.getAttribute('aria-expanded') !== 'true') {
-                    clickableButton.click();
-                    await waitForAttributeChange(clickableButton, 'aria-expanded', 'true', TIMEOUT);
-                }
-
-                const menuId = clickableButton.getAttribute('aria-controls');
-                const menuContainer = await waitForElementWithObserver(document.body, `[id="${menuId}"]`, TIMEOUT);
-                const targetOption = findElementInShadows(menuContainer, MENU_ITEM_SELECTOR);
-
-                if (targetOption) {
-                    targetOption.click();
-                    await delay(50);
-
-                    if (!GM_getValue('postInsertionEnhancementsEnabled', DEFAULTS.postInsertionEnhancementsEnabled)) return;
-
-                    const iframe = findElementInShadows(document.body, EDITOR_IFRAME_SELECTOR);
-                    if (!iframe || !iframe.contentDocument) throw new Error('無法找到編輯器');
-
-                    const structureReady = await waitForExpectedTemplateStructure(iframe, TIMEOUT);
-                    if (!structureReady) throw new Error('未找到預期的模板結構');
-
-                    const iframeWindow = iframe.contentWindow;
-                    const iframeDocument = iframe.contentDocument;
-                    const editorBody = iframeDocument.body;
-
-                    const firstParagraph = editorBody.querySelector('p');
-                    const targetContainerSpan = firstParagraph ? firstParagraph.querySelector('span') : null;
-
-                    if (!targetContainerSpan || targetContainerSpan.getElementsByTagName('br').length === 0) {
-                        throw new Error('未找到預期的模板結構');
-                    }
-
-                    targetContainerSpan.dataset.cecTemplateZone = 'true';
-
-                    // --- 5. 樣式同步 & 已有文本轉換 ---
-                    if (conversionMode !== 'off') {
-                        try {
-                            const computedStyle = iframeWindow.getComputedStyle(targetContainerSpan);
-                            const targetFont = computedStyle.fontFamily;
-                            const targetSize = computedStyle.fontSize;
-
-                            const walker = iframeDocument.createTreeWalker(editorBody, NodeFilter.SHOW_TEXT, null, false);
-                            let node;
-                            while (node = walker.nextNode()) {
-                                const position = targetContainerSpan.compareDocumentPosition(node);
-                                if (position & Node.DOCUMENT_POSITION_PRECEDING) {
-                                    const originalText = node.nodeValue;
-                                    const convertedText = ChineseConverter.convert(originalText, conversionMode);
-                                    if (originalText !== convertedText) {
-                                        node.nodeValue = convertedText;
-                                    }
-                                    const parent = node.parentElement;
-                                    if (parent && ['P', 'DIV', 'SPAN', 'FONT', 'STRONG', 'B'].includes(parent.nodeName)) {
-                                        parent.style.fontFamily = targetFont;
-                                        parent.style.fontSize = targetSize;
-                                    }
-                                }
-                            }
-                        } catch (e) {
-                            Log.warn('UI.Style', `樣式同步執行異常: ${e.message}`);
-                        }
-                    }
-
-                    // --- 6. 全局增強 ---
-                    if (!editorBody.dataset.cecGlobalHandlersAttached) {
-
-                        const isCursorInTemplate = () => {
-                            const selection = iframeWindow.getSelection();
-                            if (!selection.rangeCount) return false;
-                            let node = selection.anchorNode;
-                            while (node && node !== editorBody) {
-                                if (node.nodeType === 1 && node.dataset.cecTemplateZone === 'true') {
-                                    return true;
-                                }
-                                node = node.parentNode;
-                            }
-                            return false;
-                        };
-
-                        // A. 粘貼攔截器
-                        editorBody.addEventListener('paste', (event) => {
-                            if (isCursorInTemplate()) {
-                                const items = (event.clipboardData || iframeWindow.clipboardData).items;
-                                let hasImage = false;
-                                for (let i = 0; i < items.length; i++) {
-                                    if (items[i].type.indexOf("image") !== -1) {
-                                        hasImage = true;
-                                        break;
-                                    }
-                                }
-                                if (hasImage) return;
-
-                                event.preventDefault();
-                                event.stopPropagation();
-
-                                const textToPaste = (event.clipboardData || iframeWindow.clipboardData).getData('text/plain');
-                                const currentMode = editorBody.dataset.cecConversionMode;
-                                const finalPasteText = (currentMode && currentMode !== 'off')
-                                ? ChineseConverter.convert(textToPaste, currentMode)
-                                : textToPaste;
-
-                                const selection = iframeWindow.getSelection();
-                                const range = selection.getRangeAt(0);
-                                range.deleteContents();
-                                const fragment = iframeDocument.createDocumentFragment();
-                                const lines = finalPasteText.split('\n');
-                                lines.forEach((line, index) => {
-                                    fragment.appendChild(iframeDocument.createTextNode(line));
-                                    if (index < lines.length - 1) fragment.appendChild(iframeDocument.createElement('br'));
-                                });
-                                range.insertNode(fragment);
-                                range.collapse(false);
-                                selection.removeAllRanges();
-                                selection.addRange(range);
-                            }
-                        }, true);
-
-                        // B. Enter 鍵攔截器
-                        editorBody.addEventListener('keydown', (event) => {
-                            if (event.key === 'Enter') {
-                                if (isCursorInTemplate()) {
-                                    event.preventDefault();
-                                    event.stopPropagation();
-                                    const selection = iframeWindow.getSelection();
-                                    const range = selection.getRangeAt(0);
-                                    range.deleteContents();
-                                    const br = iframeDocument.createElement('br');
-                                    range.insertNode(br);
-                                    range.setStartAfter(br);
-                                    range.setEndAfter(br);
-                                    selection.removeAllRanges();
-                                    selection.addRange(range);
-                                    br.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-                                }
-                            }
-                        }, true);
-
-                        // C. [極致優化] 全局實時轉換監聽器
-                        const processQueue = new Set();
-                        let isProcessing = false;
-
-                        const processMutations = () => {
-                            isProcessing = false;
-                            const mode = editorBody.dataset.cecConversionMode;
-                            if (!mode || mode === 'off' || processQueue.size === 0) {
-                                processQueue.clear();
-                                return;
-                            }
-
-                            // 優化：緩存 templateZone，避免在循環中重複查詢 DOM
-                            const templateZone = editorBody.querySelector('[data-cec-template-zone="true"]');
-                            if (!templateZone) {
-                                processQueue.clear();
-                                return;
-                            }
-
-                            processQueue.forEach(textNode => {
-                                if (!textNode.isConnected) return;
-
-                                // 再次檢查內容 (Double Check)，防止 race condition
-                                const original = textNode.nodeValue;
-                                const converted = ChineseConverter.convert(original, mode);
-
-                                if (original === converted) return; // 再次確認無需轉換，跳過位置計算
-
-                                // 只有確定文字需要轉換時，才執行昂貴的邊界檢查 (Reflow)
-                                let shouldConvert = false;
-                                if (templateZone.contains(textNode)) shouldConvert = true;
-                                else {
-                                    const position = templateZone.compareDocumentPosition(textNode);
-                                    if (position & Node.DOCUMENT_POSITION_PRECEDING) shouldConvert = true;
-                                }
-
-                                if (shouldConvert) {
-                                    // 執行轉換與光標恢復
-                                    const selection = iframeWindow.getSelection();
-                                    let savedOffset = null;
-                                    if (selection.rangeCount > 0 && selection.anchorNode === textNode) {
-                                        savedOffset = selection.anchorOffset;
-                                    }
-
-                                    textNode.nodeValue = converted;
-
-                                    if (savedOffset !== null) {
-                                        const newRange = iframeDocument.createRange();
-                                        const safeOffset = Math.min(savedOffset, converted.length);
-                                        newRange.setStart(textNode, safeOffset);
-                                        newRange.collapse(true);
-                                        selection.removeAllRanges();
-                                        selection.addRange(newRange);
-                                    }
-                                }
-                            });
-
-                            processQueue.clear();
-                        };
-
-                        const scheduleProcessing = () => {
-                            if (!isProcessing) {
-                                isProcessing = true;
-                                requestAnimationFrame(processMutations);
-                            }
-                        };
-
-                        const globalObserver = new MutationObserver((mutations) => {
-                            const mode = editorBody.dataset.cecConversionMode;
-                            if (!mode || mode === 'off') return;
-
-                            let hasWork = false;
-
-                            for (const mutation of mutations) {
-                                // [核心過濾]
-                                // 在加入隊列前，先做一次輕量級的字串比對
-                                // 如果 original === converted，說明該次變動與繁簡轉換無關
-                                // (可能是光標移動導致編輯器重排 DOM，或者是輸入了標點符號/英文)
-                                // 直接忽略，避免後續昂貴的 DOM 計算
-
-                                if (mutation.type === 'characterData') {
-                                    const node = mutation.target;
-                                    if (node.nodeType === 3) {
-                                        const text = node.nodeValue;
-                                        // 只有當轉換前後不一致時，才視為有工作要做
-                                        if (text !== ChineseConverter.convert(text, mode)) {
-                                            processQueue.add(node);
-                                            hasWork = true;
-                                        }
-                                    }
-                                } else if (mutation.type === 'childList') {
-                                    if (mutation.addedNodes.length > 0) {
-                                        mutation.addedNodes.forEach(addedNode => {
-                                            if (addedNode.nodeType === 3) {
-                                                const text = addedNode.nodeValue;
-                                                if (text !== ChineseConverter.convert(text, mode)) {
-                                                    processQueue.add(addedNode);
-                                                    hasWork = true;
-                                                }
-                                            } else if (addedNode.nodeType === 1) {
-                                                const walker = iframeDocument.createTreeWalker(addedNode, NodeFilter.SHOW_TEXT, null, false);
-                                                let subNode;
-                                                while(subNode = walker.nextNode()) {
-                                                    const text = subNode.nodeValue;
-                                                    if (text !== ChineseConverter.convert(text, mode)) {
-                                                        processQueue.add(subNode);
-                                                        hasWork = true;
-                                                    }
-                                                }
-                                            }
-                                        });
-                                    }
-                                }
-                            }
-
-                            if (hasWork) {
-                                scheduleProcessing();
-                            }
-                        });
-
-                        PageResourceRegistry.addObserver(globalObserver);
-
-                        globalObserver.observe(editorBody, { childList: true, subtree: true, characterData: true });
-                        editorBody.dataset.cecGlobalHandlersAttached = 'true';
-                    }
-
-                    // 更新轉換模式
-                    editorBody.dataset.cecConversionMode = conversionMode;
-
-                    // --- 7. Post-Insertion 光標跳轉 ---
-                    const userBrPosition = GM_getValue('cursorPositionBrIndex', DEFAULTS.cursorPositionBrIndex);
-                    const brIndex = userBrPosition - 1;
-                    const allBrTags = targetContainerSpan.getElementsByTagName('br');
-                    if (allBrTags.length > brIndex && brIndex >= 0) {
-                        const targetPositionNode = allBrTags[brIndex];
-                        const selection = iframeWindow.getSelection();
-                        const range = iframeDocument.createRange();
-                        range.setStartBefore(targetPositionNode);
-                        range.collapse(true);
-                        selection.removeAllRanges();
-                        selection.addRange(range);
-
-                        if (typeof targetPositionNode.scrollIntoView === 'function') {
-                            targetPositionNode.scrollIntoView({ behavior: 'auto', block: 'center' });
-                            requestAnimationFrame(() => { setTimeout(() => { window.scrollBy(0, VIEW_ADJUSTMENT_OFFSET_PX); }, 50); });
-                        }
-                    }
-                    iframeWindow.focus();
-
-                } else {
-                    throw new Error(`未找到標題為 "${templateTitle}" 的選項。`);
-                }
-            } catch (error) {
-                Log.error('UI.Enhancement', `執行模板插入錯誤: ${error.message}`);
-                if (clickableButton && clickableButton.getAttribute('aria-expanded') === 'true') clickableButton.click();
-                throw error;
-            }
-        }
+    }
 
 
-        /**
+    /**
     * @description 根據模板列表，在指定位置注入快捷按鈕 (含 5 個模板按鈕 + 繁/簡 手動轉換按鈕)。
     *              [修改版 V4]
     *              1. 修復手動轉換後選區消失的問題 (增加選區恢復邏輯)。
     *              2. 保持綠色樣式、最右側位置及全局模式更新。
     */
-        function injectTemplateShortcutButtons(anchorLiElement, templates) {
-            const BOTTOM_OFFSET_PIXELS = 50;
+    function injectTemplateShortcutButtons(anchorLiElement, templates) {
+        const BOTTOM_OFFSET_PIXELS = 50;
 
-            const parentList = anchorLiElement.parentElement;
-            if (!parentList || parentList.dataset.shortcutsInjected === 'true') {
-                return;
-            }
-
-            parentList.style.display = 'flex';
-            parentList.style.flexWrap = 'nowrap';
-            parentList.style.height = 'auto';
-            parentList.style.alignItems = 'center';
-
-            anchorLiElement.style.borderRight = '1px solid #dddbda';
-            anchorLiElement.style.paddingRight = '0px';
-
-            const templatesToShow = templates.slice(1, 6);
-
-            // --- 0. 建立內層容器，令換行後每行起點對齊「最左模板按鈕」 ---
-            const shortcutWrapperLi = document.createElement('li');
-            Object.assign(shortcutWrapperLi.style, {
-                listStyle: 'none',
-                padding: '0',
-                margin: '0',
-                flex: '1 1 auto',
-                minWidth: '0'
-            });
-
-            const shortcutFlex = document.createElement('div');
-            Object.assign(shortcutFlex.style, {
-                display: 'flex',
-                flexWrap: 'wrap',
-                alignItems: 'center',
-                paddingLeft: '12px',
-                columnGap: '5px',
-                rowGap: '4px',
-                minWidth: '0'
-            });
-
-            shortcutWrapperLi.appendChild(shortcutFlex);
-            parentList.insertBefore(shortcutWrapperLi, anchorLiElement.nextSibling);
-
-            // --- 1. 注入 5 個模板快捷按鈕 ---
-            templatesToShow.reverse().forEach((templateTitle, index) => {
-                const newLi = anchorLiElement.cloneNode(true);
-                newLi.style.borderRight = 'none';
-                newLi.style.paddingRight = '0';
-                newLi.style.marginTop = '2px';
-                newLi.style.marginBottom = '2px';
-
-                const button = newLi.querySelector('button');
-                button.classList.add('cec-template-shortcut-button');
-                button.innerHTML = '';
-                const buttonText = templateTitle.substring(0, 10);
-                button.textContent = buttonText;
-                button.title = `Insert Template: ${templateTitle}`;
-
-                Object.assign(button.style, {
-                    marginLeft: '0px',
-                    width: '100px',
-                    height: '25px',
-                    padding: '0 8px',
-                    fontSize: '13px',
-                    backgroundColor: '#0070d2',
-                    color: '#ffffff',
-                    border: '1px solid #0070d2',
-                    whiteSpace: 'nowrap',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    borderRadius: '0px'
-                });
-
-                button.addEventListener('click', () => {
-                    clickTemplateOptionByTitle(templateTitle, buttonText);
-                });
-
-                shortcutFlex.insertBefore(newLi, shortcutFlex.firstChild);
-            });
-
-            // --- 2. 注入 [繁] [簡] 手動轉換按鈕 ---
-            const handleManualConvert = (targetMode) => {
-                const iframe = findElementInShadows(document.body, 'iframe.tox-edit-area__iframe');
-                if (!iframe || !iframe.contentDocument) return;
-
-                const win = iframe.contentWindow;
-                const doc = iframe.contentDocument;
-                const editorBody = doc.body;
-
-                const selection = win.getSelection();
-                const hasSelection = selection.rangeCount > 0 && !selection.isCollapsed;
-
-                // 獲取當前的全局轉換模式
-                const currentGlobalMode = editorBody.dataset.cecConversionMode;
-
-                if (hasSelection) {
-                    if (currentGlobalMode && currentGlobalMode !== 'off' && currentGlobalMode !== targetMode) {
-                        editorBody.dataset.cecConversionMode = 'off';
-                        Log.info('Converter', `手動模式(${targetMode})與全局模式(${currentGlobalMode})衝突，已關閉全局自動轉換。`);
-                    } else {
-                        Log.info('Converter', `手動模式(${targetMode})與全局模式一致，保持全局自動轉換開啟。`);
-                    }
-
-                    const range = selection.getRangeAt(0);
-                    const fragment = range.extractContents();
-
-                    let firstNode = fragment.firstChild;
-                    let lastNode = fragment.lastChild;
-
-                    const processNode = (node) => {
-                        if (node.nodeType === 3) {
-                            node.nodeValue = ChineseConverter.convert(node.nodeValue, targetMode);
-                        } else if (node.childNodes) {
-                            node.childNodes.forEach(processNode);
-                        }
-                    };
-                    processNode(fragment);
-
-                    range.insertNode(fragment);
-
-                    if (firstNode && lastNode) {
-                        const newRange = doc.createRange();
-                        newRange.setStartBefore(firstNode);
-                        newRange.setEndAfter(lastNode);
-                        selection.removeAllRanges();
-                        selection.addRange(newRange);
-                    }
-                } else {
-                    // 如果沒有選中文字，則直接切換全局模式
-                    editorBody.dataset.cecConversionMode = targetMode;
-                    Log.info('Converter', `未選中文字，已切換全局轉換模式為 ${targetMode}。`);
-                }
-            };
-
-            const createConvertButton = (text, mode) => {
-                const li = anchorLiElement.cloneNode(true);
-                li.style.borderRight = 'none';
-                li.style.paddingRight = '0';
-                li.style.marginTop = '2px';
-                li.style.marginBottom = '2px';
-
-                const btn = li.querySelector('button');
-                btn.textContent = text;
-                btn.title = `將選中文字轉換為${text}，並設置全局模式`;
-
-                Object.assign(btn.style, {
-                    marginLeft: '0px',
-                    width: '45px',
-                    height: '25px',
-                    padding: '0',
-                    fontSize: '13px',
-                    backgroundColor: '#2e844a',
-                    color: '#ffffff',
-                    border: '1px solid #2e844a',
-                    borderRadius: '0px'
-                });
-
-                btn.addEventListener('mousedown', (e) => {
-                    e.preventDefault(); // 防止失去焦點
-                    handleManualConvert(mode);
-                });
-
-                return li;
-            };
-
-            const btnS2T = createConvertButton('轉繁', 's2t');
-            const btnT2S = createConvertButton('轉簡', 't2s');
-
-            shortcutFlex.appendChild(btnS2T);
-            shortcutFlex.appendChild(btnT2S);
-
-            parentList.dataset.shortcutsInjected = 'true';
-            Log.info('UI.Enhancement', `模板快捷按鈕及 [繁][簡] 按鈕注入成功。`);
-
-            setTimeout(() => repositionComposerToBottom(BOTTOM_OFFSET_PIXELS), 100);
+        const parentList = anchorLiElement.parentElement;
+        if (!parentList || parentList.dataset.shortcutsInjected === 'true') {
+            return;
         }
 
+        parentList.style.display = 'flex';
+        parentList.style.flexWrap = 'nowrap';
+        parentList.style.height = 'auto';
+        parentList.style.alignItems = 'center';
 
-        /**
+        anchorLiElement.style.borderRight = '1px solid #dddbda';
+        anchorLiElement.style.paddingRight = '0px';
+
+        const templatesToShow = templates.slice(1, 6);
+
+        // --- 0. 建立內層容器，令換行後每行起點對齊「最左模板按鈕」 ---
+        const shortcutWrapperLi = document.createElement('li');
+        Object.assign(shortcutWrapperLi.style, {
+            listStyle: 'none',
+            padding: '0',
+            margin: '0',
+            flex: '1 1 auto',
+            minWidth: '0'
+        });
+
+        const shortcutFlex = document.createElement('div');
+        Object.assign(shortcutFlex.style, {
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'center',
+            paddingLeft: '12px',
+            columnGap: '5px',
+            rowGap: '4px',
+            minWidth: '0'
+        });
+
+        shortcutWrapperLi.appendChild(shortcutFlex);
+        parentList.insertBefore(shortcutWrapperLi, anchorLiElement.nextSibling);
+
+        // --- 1. 注入 5 個模板快捷按鈕 ---
+        templatesToShow.reverse().forEach((templateTitle, index) => {
+            const newLi = anchorLiElement.cloneNode(true);
+            newLi.style.borderRight = 'none';
+            newLi.style.paddingRight = '0';
+            newLi.style.marginTop = '2px';
+            newLi.style.marginBottom = '2px';
+
+            const button = newLi.querySelector('button');
+            button.classList.add('cec-template-shortcut-button');
+            button.innerHTML = '';
+            const buttonText = templateTitle.substring(0, 10);
+            button.textContent = buttonText;
+            button.title = `Insert Template: ${templateTitle}`;
+
+            Object.assign(button.style, {
+                marginLeft: '0px',
+                width: '100px',
+                height: '25px',
+                padding: '0 8px',
+                fontSize: '13px',
+                backgroundColor: '#0070d2',
+                color: '#ffffff',
+                border: '1px solid #0070d2',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                borderRadius: '0px'
+            });
+
+            button.addEventListener('click', () => {
+                clickTemplateOptionByTitle(templateTitle, buttonText);
+            });
+
+            shortcutFlex.insertBefore(newLi, shortcutFlex.firstChild);
+        });
+
+        // --- 2. 注入 [繁] [簡] 手動轉換按鈕 ---
+        const handleManualConvert = (targetMode) => {
+            const iframe = findElementInShadows(document.body, 'iframe.tox-edit-area__iframe');
+            if (!iframe || !iframe.contentDocument) return;
+
+            const win = iframe.contentWindow;
+            const doc = iframe.contentDocument;
+            const editorBody = doc.body;
+
+            const selection = win.getSelection();
+            const hasSelection = selection.rangeCount > 0 && !selection.isCollapsed;
+
+            // 獲取當前的全局轉換模式
+            const currentGlobalMode = editorBody.dataset.cecConversionMode;
+
+            if (hasSelection) {
+                if (currentGlobalMode && currentGlobalMode !== 'off' && currentGlobalMode !== targetMode) {
+                    editorBody.dataset.cecConversionMode = 'off';
+                    Log.info('Converter', `手動模式(${targetMode})與全局模式(${currentGlobalMode})衝突，已關閉全局自動轉換。`);
+                } else {
+                    Log.info('Converter', `手動模式(${targetMode})與全局模式一致，保持全局自動轉換開啟。`);
+                }
+
+                const range = selection.getRangeAt(0);
+                const fragment = range.extractContents();
+
+                let firstNode = fragment.firstChild;
+                let lastNode = fragment.lastChild;
+
+                const processNode = (node) => {
+                    if (node.nodeType === 3) {
+                        node.nodeValue = ChineseConverter.convert(node.nodeValue, targetMode);
+                    } else if (node.childNodes) {
+                        node.childNodes.forEach(processNode);
+                    }
+                };
+                processNode(fragment);
+
+                range.insertNode(fragment);
+
+                if (firstNode && lastNode) {
+                    const newRange = doc.createRange();
+                    newRange.setStartBefore(firstNode);
+                    newRange.setEndAfter(lastNode);
+                    selection.removeAllRanges();
+                    selection.addRange(newRange);
+                }
+            } else {
+                // 如果沒有選中文字，則直接切換全局模式
+                editorBody.dataset.cecConversionMode = targetMode;
+                Log.info('Converter', `未選中文字，已切換全局轉換模式為 ${targetMode}。`);
+            }
+        };
+
+        const createConvertButton = (text, mode) => {
+            const li = anchorLiElement.cloneNode(true);
+            li.style.borderRight = 'none';
+            li.style.paddingRight = '0';
+            li.style.marginTop = '2px';
+            li.style.marginBottom = '2px';
+
+            const btn = li.querySelector('button');
+            btn.textContent = text;
+            btn.title = `將選中文字轉換為${text}，並設置全局模式`;
+
+            Object.assign(btn.style, {
+                marginLeft: '0px',
+                width: '45px',
+                height: '25px',
+                padding: '0',
+                fontSize: '13px',
+                backgroundColor: '#2e844a',
+                color: '#ffffff',
+                border: '1px solid #2e844a',
+                borderRadius: '0px'
+            });
+
+            btn.addEventListener('mousedown', (e) => {
+                e.preventDefault(); // 防止失去焦點
+                handleManualConvert(mode);
+            });
+
+            return li;
+        };
+
+        const btnS2T = createConvertButton('轉繁', 's2t');
+        const btnT2S = createConvertButton('轉簡', 't2s');
+
+        shortcutFlex.appendChild(btnS2T);
+        shortcutFlex.appendChild(btnT2S);
+
+        parentList.dataset.shortcutsInjected = 'true';
+        Log.info('UI.Enhancement', `模板快捷按鈕及 [繁][簡] 按鈕注入成功。`);
+
+        setTimeout(() => repositionComposerToBottom(BOTTOM_OFFSET_PIXELS), 100);
+    }
+
+
+    /**
     * @description 查找並將郵件編輯器組件滾動到視口底部，並應用一個額外的偏移量。
     * @param {number} [offset=0] - 滾動完成後的額外垂直偏移量（像素）。
     */
-        function repositionComposerToBottom(offset = 0) {
-            const composerContainer = findElementInShadows(document.body, 'flexipage-component2[data-component-id="flexipage_tabset7"]');
+    function repositionComposerToBottom(offset = 0) {
+        const composerContainer = findElementInShadows(document.body, 'flexipage-component2[data-component-id="flexipage_tabset7"]');
 
-            if (composerContainer && composerContainer.dataset.cecScrolled !== 'true') {
-                try {
-                    composerContainer.scrollIntoView({
-                        block: 'end',
-                        inline: 'nearest'
-                    });
+        if (composerContainer && composerContainer.dataset.cecScrolled !== 'true') {
+            try {
+                composerContainer.scrollIntoView({
+                    block: 'end',
+                    inline: 'nearest'
+                });
 
-                    if (offset !== 0) {
-                        window.scrollBy(0, offset);
-                    }
-
-                    composerContainer.dataset.cecScrolled = 'true';
-                    Log.info('UI.Enhancement', `回覆郵件框架已滾動至窗口底部 (額外偏移量: ${offset}px)。`);
-                } catch (error) {
-                    Log.error('UI.Enhancement', `嘗試滾動郵件框架時出錯: ${error.message}`);
+                if (offset !== 0) {
+                    window.scrollBy(0, offset);
                 }
+
+                composerContainer.dataset.cecScrolled = 'true';
+                Log.info('UI.Enhancement', `回覆郵件框架已滾動至窗口底部 (額外偏移量: ${offset}px)。`);
+            } catch (error) {
+                Log.error('UI.Enhancement', `嘗試滾動郵件框架時出錯: ${error.message}`);
             }
         }
+    }
 
-        /**
+    /**
     * @description 從頁面中提取追踪號碼，並觸發自動IVP/Web查詢（如果已啟用）。
     */
-        async function extractTrackingNumberAndTriggerIVP() {
-            const TRACKING_CACHE_KEY = CACHE_POLICY.TRACKING.KEY;
-            const CACHE_TTL_MS = CACHE_POLICY.TRACKING.TTL_MS; // 60分鐘: 追踪號緩存有效期。
-            const caseId = getCaseIdFromUrl(location.href);
-            if (!caseId) {
-                Log.warn('Feature.Query', `無法從當前 URL 提取 Case ID，追踪號緩存功能跳過。`);
-                return;
-            }
+    async function extractTrackingNumberAndTriggerIVP() {
+        const TRACKING_CACHE_KEY = CACHE_POLICY.TRACKING.KEY;
+        const CACHE_TTL_MS = CACHE_POLICY.TRACKING.TTL_MS; // 60分鐘: 追踪號緩存有效期。
+        const caseId = getCaseIdFromUrl(location.href);
+        if (!caseId) {
+            Log.warn('Feature.Query', `無法從當前 URL 提取 Case ID，追踪號緩存功能跳過。`);
+            return;
+        }
 
-            const cache = GM_getValue(TRACKING_CACHE_KEY, {});
+        const cache = GM_getValue(TRACKING_CACHE_KEY, {});
 
-            const purgeResult = purgeExpiredCacheEntries(cache, CACHE_TTL_MS);
-            if (purgeResult.changed) {
-                GM_setValue(TRACKING_CACHE_KEY, purgeResult.cache);
-                Log.info('Feature.Query', `已清理過期的追踪號緩存條目（removed: ${purgeResult.removed}）。`);
-            }
-            const entry = cache[caseId];
+        const purgeResult = purgeExpiredCacheEntries(cache, CACHE_TTL_MS);
+        if (purgeResult.changed) {
+            GM_setValue(TRACKING_CACHE_KEY, purgeResult.cache);
+            Log.info('Feature.Query', `已清理過期的追踪號緩存條目（removed: ${purgeResult.removed}）。`);
+        }
+        const entry = cache[caseId];
 
-            // 輔助函數：執行所有啟用的自動查詢
-            const triggerAutoQueries = async () => {
-                // 1. 啟動 Web 查詢
-                await autoQueryWebOnLoad();
+        // 輔助函數：執行所有啟用的自動查詢
+        const triggerAutoQueries = async () => {
+            // 1. 啟動 Web 查詢
+            await autoQueryWebOnLoad();
 
-                // 2. 啟動 IVP 查詢
-                await autoQueryIVPOnLoad();
+            // 2. 啟動 IVP 查詢
+            await autoQueryIVPOnLoad();
 
-                // 3. [核心修復] 焦點強制鎖定機制
-                // 原因：Web 端在背景時容易被 Edge/Chromium 節流，短窗口下偶發無法完成自動查詢。
-                // 對策：不再 0/100/500ms 連續搶焦點；改成「只延後一次」搶回 IVP，給 Web 短暫前景窗口。
-                if (GM_getValue('autoIVPQueryEnabled', DEFAULTS.autoIVPQueryEnabled) &&
-                    GM_getValue('autoSwitchEnabled', DEFAULTS.autoSwitchEnabled) &&
-                    GM_getValue('autoWebQueryEnabled', DEFAULTS.autoWebQueryEnabled) &&
-                    ivpWindowHandle && !ivpWindowHandle.closed) {
+            // 3. [核心修復] 焦點強制鎖定機制
+            // 原因：Web 端在背景時容易被 Edge/Chromium 節流，短窗口下偶發無法完成自動查詢。
+            // 對策：不再 0/100/500ms 連續搶焦點；改成「只延後一次」搶回 IVP，給 Web 短暫前景窗口。
+            if (GM_getValue('autoIVPQueryEnabled', DEFAULTS.autoIVPQueryEnabled) &&
+                GM_getValue('autoSwitchEnabled', DEFAULTS.autoSwitchEnabled) &&
+                GM_getValue('autoWebQueryEnabled', DEFAULTS.autoWebQueryEnabled) &&
+                ivpWindowHandle && !ivpWindowHandle.closed) {
 
-                    if (ivpFocusTimeoutId) {
-                        clearTimeout(ivpFocusTimeoutId);
+                if (ivpFocusTimeoutId) {
+                    clearTimeout(ivpFocusTimeoutId);
+                    ivpFocusTimeoutId = null;
+                }
+
+                ivpFocusTimeoutId = setTimeout(() => {
+                    try {
+                        if (ivpWindowHandle && !ivpWindowHandle.closed) {
+                            ivpWindowHandle.focus();
+                        }
+                    } catch (e) {
+                        // ignore
+                    } finally {
                         ivpFocusTimeoutId = null;
                     }
-
-                    ivpFocusTimeoutId = setTimeout(() => {
-                        try {
-                            if (ivpWindowHandle && !ivpWindowHandle.closed) {
-                                ivpWindowHandle.focus();
-                            }
-                        } catch (e) {
-                            // ignore
-                        } finally {
-                            ivpFocusTimeoutId = null;
-                        }
-                    }, 1200);
-                }
-            };
-
-            if (entry && (Date.now() - entry.timestamp < CACHE_TTL_MS)) {
-                foundTrackingNumber = entry.trackingNumber;
-                Log.info('Feature.Query', `從緩存中成功讀取追踪號 (Case ID: ${caseId}): ${foundTrackingNumber}`);
-                triggerAutoQueries();
-                return;
+                }, 1200);
             }
+        };
 
-            const trackingRegex = /(1Z[A-Z0-9]{16})/;
-            const selector = 'td[data-label="IDENTIFIER VALUE"] a, a[href*="/lightning/r/Shipment_Identifier"]';
-            try {
-                const element = await waitForElement(document.body, selector, 10000);
-                if (element && element.textContent) {
-                    const match = element.textContent.trim().match(trackingRegex);
-                    if (match) {
-                        const extractedNumber = match[0];
-                        Log.info('Feature.Query', `成功提取追踪號: ${extractedNumber}`);
-                        foundTrackingNumber = extractedNumber;
-                        cache[caseId] = {
-                            trackingNumber: extractedNumber,
-                            timestamp: Date.now()
-                        };
-                        GM_setValue(TRACKING_CACHE_KEY, cache);
-                        Log.info('Feature.Query', `追踪號已為 Case ID ${caseId} 寫入緩存，有效期60分鐘。`);
-
-                        triggerAutoQueries();
-                    }
-                }
-            } catch (error) {
-                Log.warn('Feature.Query', `在10秒內未找到追踪號元素，自動查詢將不會觸發。`);
-            }
+        if (entry && (Date.now() - entry.timestamp < CACHE_TTL_MS)) {
+            foundTrackingNumber = entry.trackingNumber;
+            Log.info('Feature.Query', `從緩存中成功讀取追踪號 (Case ID: ${caseId}): ${foundTrackingNumber}`);
+            triggerAutoQueries();
+            return;
         }
 
-        /**
+        const trackingRegex = /(1Z[A-Z0-9]{16})/;
+        const selector = 'td[data-label="IDENTIFIER VALUE"] a, a[href*="/lightning/r/Shipment_Identifier"]';
+        try {
+            const element = await waitForElement(document.body, selector, 10000);
+            if (element && element.textContent) {
+                const match = element.textContent.trim().match(trackingRegex);
+                if (match) {
+                    const extractedNumber = match[0];
+                    Log.info('Feature.Query', `成功提取追踪號: ${extractedNumber}`);
+                    foundTrackingNumber = extractedNumber;
+                    cache[caseId] = {
+                        trackingNumber: extractedNumber,
+                        timestamp: Date.now()
+                    };
+                    GM_setValue(TRACKING_CACHE_KEY, cache);
+                    Log.info('Feature.Query', `追踪號已為 Case ID ${caseId} 寫入緩存，有效期60分鐘。`);
+
+                    triggerAutoQueries();
+                }
+            }
+        } catch (error) {
+            Log.warn('Feature.Query', `在10秒內未找到追踪號元素，自動查詢將不會觸發。`);
+        }
+    }
+
+    /**
     * @description 初始化對 "I Want To..." 組件的監控，以便在組件出現或刷新時注入自定義按鈕。
     */
-        function initIWantToModuleWatcher() {
-            const ANCHOR_SELECTOR = 'c-cec-i-want-to-container lightning-layout.slds-var-p-bottom_small';
-            let initialInjectionDone = false;
-            waitForElementWithObserver(document.body, ANCHOR_SELECTOR, 20000) // 20000ms: 等待 "I Want To" 組件出現的超時。
-                .then(anchorElement => {
-                if (anchorElement.dataset.customButtonsInjected !== 'true') {
-                    injectIWantToButtons(anchorElement);
-                    initialInjectionDone = true;
-                }
-            })
-                .catch(() => {
-                Log.warn('Feature.IWT', `未找到 "I Want To..." 組件容器，自動化按鈕未注入。`);
-            });
-            const checkAndReInject = () => {
-                if (isScriptPaused || !initialInjectionDone) return;
-                const anchorElement = findElementInShadows(document.body, ANCHOR_SELECTOR);
-                if (anchorElement && anchorElement.dataset.customButtonsInjected !== 'true') {
-                    injectIWantToButtons(anchorElement);
-                }
-            };
-            iwtModuleObserver = new MutationObserver(debounce(checkAndReInject, 350)); // 350ms: 防抖延遲，處理組件快速刷新的情況。
-            PageResourceRegistry.addObserver(iwtModuleObserver);
-            iwtModuleObserver.observe(document.body, {
-                childList: true,
-                subtree: true
-            });
-        }
+    function initIWantToModuleWatcher() {
+        const ANCHOR_SELECTOR = 'c-cec-i-want-to-container lightning-layout.slds-var-p-bottom_small';
+        let initialInjectionDone = false;
+        waitForElementWithObserver(document.body, ANCHOR_SELECTOR, 20000) // 20000ms: 等待 "I Want To" 組件出現的超時。
+            .then(anchorElement => {
+            if (anchorElement.dataset.customButtonsInjected !== 'true') {
+                injectIWantToButtons(anchorElement);
+                initialInjectionDone = true;
+            }
+        })
+            .catch(() => {
+            Log.warn('Feature.IWT', `未找到 "I Want To..." 組件容器，自動化按鈕未注入。`);
+        });
+        const checkAndReInject = () => {
+            if (isScriptPaused || !initialInjectionDone) return;
+            const anchorElement = findElementInShadows(document.body, ANCHOR_SELECTOR);
+            if (anchorElement && anchorElement.dataset.customButtonsInjected !== 'true') {
+                injectIWantToButtons(anchorElement);
+            }
+        };
+        iwtModuleObserver = new MutationObserver(debounce(checkAndReInject, 350)); // 350ms: 防抖延遲，處理組件快速刷新的情況。
+        PageResourceRegistry.addObserver(iwtModuleObserver);
+        iwtModuleObserver.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
+    }
 
-        /**
+    /**
     * @description 處理 "Re-Open Case" 自動化流程的第二階段。
     * @param {string} comment - 要填寫的評論。
     */
-        async function handleStageTwoReOpen(comment) {
-            const reOpenCaseComponent = await waitForElementWithObserver(document.body, 'c-cec-re-open-case', 5000); // 5000ms: 等待組件超時。
-            await new Promise(resolve => setTimeout(resolve, 500)); // 500ms: 等待組件內部元素渲染。
-            if (comment) {
-                const commentBox = await waitForElementWithObserver(reOpenCaseComponent, 'textarea[name="commentField"]', 5000);
-                simulateTyping(commentBox, comment);
-            }
-            await new Promise(resolve => setTimeout(resolve, 500)); // 500ms: 等待UI響應輸入。
-            const finalSubmitButton = await waitForElementWithObserver(reOpenCaseComponent, '.slds-card__footer button.slds-button_brand', 5000);
-            finalSubmitButton.click();
-            showCompletionToast(reOpenCaseComponent, 'Re-Open Case: 操作成功！請等待網頁更新！');
+    async function handleStageTwoReOpen(comment) {
+        const reOpenCaseComponent = await waitForElementWithObserver(document.body, 'c-cec-re-open-case', 5000); // 5000ms: 等待組件超時。
+        await new Promise(resolve => setTimeout(resolve, 500)); // 500ms: 等待組件內部元素渲染。
+        if (comment) {
+            const commentBox = await waitForElementWithObserver(reOpenCaseComponent, 'textarea[name="commentField"]', 5000);
+            simulateTyping(commentBox, comment);
         }
+        await new Promise(resolve => setTimeout(resolve, 500)); // 500ms: 等待UI響應輸入。
+        const finalSubmitButton = await waitForElementWithObserver(reOpenCaseComponent, '.slds-card__footer button.slds-button_brand', 5000);
+        finalSubmitButton.click();
+        showCompletionToast(reOpenCaseComponent, 'Re-Open Case: 操作成功！請等待網頁更新！');
+    }
 
-        /**
+    /**
     * @description 處理 "Close this Case" 自動化流程的第二階段。
     *              [重構版] 增加 mode 參數，支持 'normal' (500ms 延時) 和 'fast' (50ms 延時) 兩種執行速度。
     * @param {string} comment - 要填寫的評論。
     * @param {'normal'|'fast'} [mode='normal'] - 執行模式，決定了操作間的延時。
     */
-        async function handleStageTwoCloseCase(comment, mode = 'normal') {
-            // 根據模式確定延時時間
-            const delay = mode === 'fast' ? 10 : 800;
-            Log.info('Feature.IWT.CloseCase', `以 "${mode}" 模式執行 Close Case，延時: ${delay}ms。`);
+    async function handleStageTwoCloseCase(comment, mode = 'normal') {
+        // 根據模式確定延時時間
+        const delay = mode === 'fast' ? 10 : 800;
+        Log.info('Feature.IWT.CloseCase', `以 "${mode}" 模式執行 Close Case，延時: ${delay}ms。`);
 
-            const closeCaseComponent = await waitForElementWithObserver(document.body, 'c-cec-close-case', 5000);
-            await new Promise(resolve => setTimeout(resolve, delay));
-            await selectComboboxOption(closeCaseComponent, 'button[aria-label="Case Sub Status"]', 'Request Completed');
-            if (comment) {
-                const commentBox = await waitForElementWithObserver(closeCaseComponent, 'textarea.slds-textarea', 5000);
-                simulateTyping(commentBox, comment);
-            }
-            await new Promise(resolve => setTimeout(resolve, delay));
-            const finalSubmitButton = await waitForElementWithObserver(closeCaseComponent, '.slds-card__footer button.slds-button_brand', 5000);
-            finalSubmitButton.click();
-            showCompletionToast(closeCaseComponent, 'Close Case: 操作成功！請等待網頁更新！');
+        const closeCaseComponent = await waitForElementWithObserver(document.body, 'c-cec-close-case', 5000);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        await selectComboboxOption(closeCaseComponent, 'button[aria-label="Case Sub Status"]', 'Request Completed');
+        if (comment) {
+            const commentBox = await waitForElementWithObserver(closeCaseComponent, 'textarea.slds-textarea', 5000);
+            simulateTyping(commentBox, comment);
         }
+        await new Promise(resolve => setTimeout(resolve, delay));
+        const finalSubmitButton = await waitForElementWithObserver(closeCaseComponent, '.slds-card__footer button.slds-button_brand', 5000);
+        finalSubmitButton.click();
+        showCompletionToast(closeCaseComponent, 'Close Case: 操作成功！請等待網頁更新！');
+    }
 
-        /**
+    /**
     * @description 處理 "Document Customer Contact" 自動化流程的第二階段。
     * @param {string} comment - 要填寫的評論。
     */
-        async function handleStageTwoDocumentContact(comment) {
-            const docContactComponent = await waitForElementWithObserver(document.body, 'c-cec-document-customer-contact', 5000);
-            await new Promise(resolve => setTimeout(resolve, 100));
-            const radioButtonSelector = 'input[value="Spoke with customer"]';
-            const radioButton = await waitForElementWithObserver(docContactComponent, radioButtonSelector, 5000);
-            await new Promise(resolve => setTimeout(resolve, 100)); // 100ms: 點擊前短暫延時，確保事件監聽器已激活。
-            radioButton.click();
-            if (comment) {
-                try {
-                    const commentBox = await waitForElementWithObserver(docContactComponent, 'textarea.slds-textarea', 5000);
-                    simulateTyping(commentBox, comment);
-                } catch (error) {
-                    // 忽略錯誤，某些情況下可能沒有評論框
-                }
+    async function handleStageTwoDocumentContact(comment) {
+        const docContactComponent = await waitForElementWithObserver(document.body, 'c-cec-document-customer-contact', 5000);
+        await new Promise(resolve => setTimeout(resolve, 100));
+        const radioButtonSelector = 'input[value="Spoke with customer"]';
+        const radioButton = await waitForElementWithObserver(docContactComponent, radioButtonSelector, 5000);
+        await new Promise(resolve => setTimeout(resolve, 100)); // 100ms: 點擊前短暫延時，確保事件監聽器已激活。
+        radioButton.click();
+        if (comment) {
+            try {
+                const commentBox = await waitForElementWithObserver(docContactComponent, 'textarea.slds-textarea', 5000);
+                simulateTyping(commentBox, comment);
+            } catch (error) {
+                // 忽略錯誤，某些情況下可能沒有評論框
             }
-            await new Promise(resolve => setTimeout(resolve, 100));
-            const finalSubmitButton = await waitForElementWithObserver(docContactComponent, '.slds-card__footer button.slds-button_brand', 5000);
-            finalSubmitButton.click();
-            showCompletionToast(docContactComponent, 'Document Contact: 操作成功！請等待網頁更新！');
         }
+        await new Promise(resolve => setTimeout(resolve, 100));
+        const finalSubmitButton = await waitForElementWithObserver(docContactComponent, '.slds-card__footer button.slds-button_brand', 5000);
+        finalSubmitButton.click();
+        showCompletionToast(docContactComponent, 'Document Contact: 操作成功！請等待網頁更新！');
+    }
 
-        /**
+    /**
     * @description 執行一個完整的 "I Want To..." 自動化流程。
     * @param {object} config - 流程配置對象。
     * @param {string} config.searchText - 要在搜索框中輸入的文本。
     * @param {Function} [config.stageTwoHandler] - 處理第二階段的函數。
     * @param {string} [config.finalComment] - 傳遞給第二階段處理函數的評論。
     */
-        async function automateIWantToAction(config) {
-            const {
-                searchText,
-                stageTwoHandler,
-                finalComment
-            } = config;
-            Log.info('Feature.IWT', `啟動自動化流程: "${searchText}"。`);
-            try {
-                const searchInput = await waitForElementWithObserver(document.body, 'c-ceclookup input.slds-combobox__input', 5000);
-                const dropdownTrigger = searchInput.closest('.slds-dropdown-trigger');
-                if (!dropdownTrigger) throw new Error('無法找到下拉列表的觸發容器 .slds-dropdown-trigger');
-                searchInput.focus();
-                simulateTyping(searchInput, searchText);
-                await waitForAttributeChange(dropdownTrigger, 'aria-expanded', 'true', 5000);
-                await new Promise(resolve => setTimeout(resolve, 200)); // 200ms: 等待搜索結果加載。
-                simulateKeyEvent(searchInput, 'ArrowDown', 40);
-                await new Promise(resolve => setTimeout(resolve, 100)); // 100ms: 模擬按鍵後的延遲。
-                simulateKeyEvent(searchInput, 'Enter', 13);
-                const firstSubmitButton = await waitForButtonToBeEnabled('lightning-button.submit_button button');
-                firstSubmitButton.click();
-                if (stageTwoHandler && typeof stageTwoHandler === 'function') {
-                    await stageTwoHandler(finalComment);
-                    Log.info('Feature.IWT', `自動化流程: "${searchText}" 已成功完成。`);
-                }
-            } catch (error) {
-                Log.error('Feature.IWT', `流程 "${searchText}" 在 "第一階段" 失敗: ${error.message}`);
+    async function automateIWantToAction(config) {
+        const {
+            searchText,
+            stageTwoHandler,
+            finalComment
+        } = config;
+        Log.info('Feature.IWT', `啟動自動化流程: "${searchText}"。`);
+        try {
+            const searchInput = await waitForElementWithObserver(document.body, 'c-ceclookup input.slds-combobox__input', 5000);
+            const dropdownTrigger = searchInput.closest('.slds-dropdown-trigger');
+            if (!dropdownTrigger) throw new Error('無法找到下拉列表的觸發容器 .slds-dropdown-trigger');
+            searchInput.focus();
+            simulateTyping(searchInput, searchText);
+            await waitForAttributeChange(dropdownTrigger, 'aria-expanded', 'true', 5000);
+            await new Promise(resolve => setTimeout(resolve, 200)); // 200ms: 等待搜索結果加載。
+            simulateKeyEvent(searchInput, 'ArrowDown', 40);
+            await new Promise(resolve => setTimeout(resolve, 100)); // 100ms: 模擬按鍵後的延遲。
+            simulateKeyEvent(searchInput, 'Enter', 13);
+            const firstSubmitButton = await waitForButtonToBeEnabled('lightning-button.submit_button button');
+            firstSubmitButton.click();
+            if (stageTwoHandler && typeof stageTwoHandler === 'function') {
+                await stageTwoHandler(finalComment);
+                Log.info('Feature.IWT', `自動化流程: "${searchText}" 已成功完成。`);
             }
+        } catch (error) {
+            Log.error('Feature.IWT', `流程 "${searchText}" 在 "第一階段" 失敗: ${error.message}`);
         }
+    }
 
-        /**
+    /**
     * @description 向 "I Want To..." 組件下方注入自定義的、帶有下拉選項的自動化操作按鈕。
     *              [最終版] 為 "Close this Case (Auto)" 按鈕及其下拉選項，都增加了長按2秒觸發快速模式的功能。
     * @param {HTMLElement} anchorElement - 用於定位的錨點元素。
     */
-        function injectIWantToButtons(anchorElement) {
-            if (anchorElement.dataset.customButtonsInjected === 'true') {
-                return;
-            }
-            const buttonContainer = document.createElement('div');
-            buttonContainer.className = 'slds-grid slds-wrap';
-            const styles = GM_getValue('iWantToButtonStyles', DEFAULTS.iWantToButtonStyles);
-            Object.assign(buttonContainer.style, styles);
-
-            let settings = GM_getValue('iwtAutoFillTexts', DEFAULTS.iwtAutoFillTexts);
-            if (settings && settings.reOpen && typeof settings.reOpen === 'string') {
-                Log.info('Feature.IWT', '檢測到舊版 IWT 按鈕數據格式，正在動態遷移。');
-                for (const key in settings) {
-                    if (typeof settings[key] === 'string') {
-                        settings[key] = [settings[key]];
-                    }
-                }
-            }
-            const autoFillTexts = settings;
-
-            const handleOutsideClick = (e, dropdownMenu, trigger) => {
-                if (!trigger.contains(e.target)) {
-                    dropdownMenu.classList.remove('show');
-                    document.removeEventListener('click', trigger.__outsideClickListener);
-                    delete trigger.__outsideClickListener;
-                }
-            };
-
-            // 抽離出可複用的長按事件綁定邏輯
-            const applyLongPressHandler = (element, config, comment) => {
-                let pressTimer = null;
-                let longPressTriggered = false;
-
-                const startPress = (event) => {
-                    if (event.button !== 0) return;
-                    longPressTriggered = false;
-                    pressTimer = setTimeout(() => {
-                        longPressTriggered = true;
-                        Log.info('Feature.IWT.LongPress', '長按觸發快速模式。');
-                        automateIWantToAction({
-                            searchText: config.searchText,
-                            stageTwoHandler: (c) => config.handler(c, 'fast'),
-                            finalComment: comment
-                        });
-                        // 如果是下拉菜單項，觸發後需要關閉菜單
-                        const dropdownMenu = element.closest('.cec-iwt-dropdown-menu');
-                        if (dropdownMenu) {
-                            dropdownMenu.classList.remove('show');
-                        }
-                    }, 1500);
-                };
-
-                const cancelPress = () => {
-                    clearTimeout(pressTimer);
-                };
-
-                const endPress = (event) => {
-                    if (event.button !== 0) return;
-                    clearTimeout(pressTimer);
-                    if (!longPressTriggered) {
-                        Log.info('Feature.IWT.LongPress', '單擊觸發普通模式。');
-                        automateIWantToAction({
-                            searchText: config.searchText,
-                            stageTwoHandler: (c) => config.handler(c, 'normal'),
-                            finalComment: comment
-                        });
-                    }
-                };
-
-                element.addEventListener('mousedown', startPress);
-                element.addEventListener('mouseup', endPress);
-                element.addEventListener('mouseleave', cancelPress);
-            };
-
-
-            const buttonConfigs = [{
-                name: 'Re-Open Case (Auto)',
-                title: '自動執行 "Re-Open Case"',
-                actionKey: 'reOpen',
-                searchText: 'Re-Open Case',
-                handler: handleStageTwoReOpen
-            }, {
-                name: 'Close this Case (Auto)',
-                title: '單擊: 普通模式 | 長按2秒: 極速模式',
-                actionKey: 'closeCase',
-                searchText: 'Close this Case',
-                handler: handleStageTwoCloseCase
-            }, {
-                name: 'Document Customer Contact (Auto)',
-                title: '自動執行 "Document Customer Contact"',
-                actionKey: 'documentContact',
-                searchText: 'Document Customer Contact',
-                handler: handleStageTwoDocumentContact
-            }];
-
-            buttonConfigs.forEach(config => {
-                const layoutItem = document.createElement('div');
-                layoutItem.className = 'slds-var-p-right_xx-small slds-size_4-of-12';
-                const commentOptions = autoFillTexts[config.actionKey] || [];
-
-                // 分支 1: 單一按鈕模式
-                if (commentOptions.length === 1) {
-                    const directButton = document.createElement('button');
-                    directButton.title = config.title;
-                    directButton.className = 'slds-button slds-button_stretch cec-iwt-button-override';
-                    directButton.textContent = config.name;
-
-                    if (config.actionKey === 'closeCase') {
-                        applyLongPressHandler(directButton, config, commentOptions[0]);
-                    } else {
-                        directButton.addEventListener('click', () => {
-                            automateIWantToAction({
-                                searchText: config.searchText,
-                                stageTwoHandler: config.handler,
-                                finalComment: commentOptions[0]
-                            });
-                        });
-                    }
-
-                    layoutItem.appendChild(directButton);
-                    injectedIWTButtons[config.name] = directButton;
-
-                    // 分支 2: 下拉菜單模式
-                } else {
-                    const dropdownTrigger = document.createElement('div');
-                    dropdownTrigger.className = 'cec-iwt-dropdown-trigger';
-
-                    const mainButton = document.createElement('button');
-                    mainButton.title = config.title;
-                    mainButton.className = 'slds-button slds-button_stretch cec-iwt-button-override';
-                    mainButton.innerHTML = `${config.name} <span class="cec-dropdown-arrow">▼</span>`;
-
-                    const dropdownMenu = document.createElement('ul');
-                    dropdownMenu.className = 'cec-iwt-dropdown-menu';
-
-                    if (commentOptions.length > 1) {
-                        commentOptions.forEach(comment => {
-                            const item = document.createElement('li');
-                            item.className = 'cec-iwt-dropdown-item';
-                            item.textContent = comment;
-
-                            // [核心修正] 為下拉菜單中的 "Close Case" 選項應用長按邏輯
-                            if (config.actionKey === 'closeCase') {
-                                // 阻止默認的 mousedown 行為，防止觸發菜單關閉
-                                item.addEventListener('mousedown', (e) => e.stopPropagation());
-                                applyLongPressHandler(item, config, comment);
-                            } else {
-                                item.addEventListener('click', () => {
-                                    automateIWantToAction({
-                                        searchText: config.searchText,
-                                        stageTwoHandler: config.handler,
-                                        finalComment: comment
-                                    });
-                                    dropdownMenu.classList.remove('show');
-                                });
-                            }
-                            dropdownMenu.appendChild(item);
-                        });
-                    } else { // 零選項的情況
-                        const disabledItem = document.createElement('li');
-                        disabledItem.className = 'cec-iwt-dropdown-item';
-                        disabledItem.textContent = '無可用評論';
-                        disabledItem.style.color = '#ccc';
-                        disabledItem.style.cursor = 'not-allowed';
-                        dropdownMenu.appendChild(disabledItem);
-                    }
-
-                    mainButton.addEventListener('click', (e) => {
-                        e.stopPropagation();
-                        document.querySelectorAll('.cec-iwt-dropdown-menu.show').forEach(menu => {
-                            if (menu !== dropdownMenu) menu.classList.remove('show');
-                        });
-                        dropdownMenu.classList.toggle('show');
-                        if (dropdownMenu.classList.contains('show')) {
-                            if (!dropdownTrigger.__outsideClickListener) {
-                                dropdownTrigger.__outsideClickListener = (event) => handleOutsideClick(event, dropdownMenu, dropdownTrigger);
-                                document.addEventListener('click', dropdownTrigger.__outsideClickListener);
-                            }
-                        } else {
-                            if (dropdownTrigger.__outsideClickListener) {
-                                document.removeEventListener('click', dropdownTrigger.__outsideClickListener);
-                                delete dropdownTrigger.__outsideClickListener;
-                            }
-                        }
-                    });
-
-                    dropdownTrigger.appendChild(mainButton);
-                    dropdownTrigger.appendChild(dropdownMenu);
-                    layoutItem.appendChild(dropdownTrigger);
-                    injectedIWTButtons[config.name] = mainButton;
-                }
-                buttonContainer.appendChild(layoutItem);
-            });
-
-            anchorElement.insertAdjacentElement('afterend', buttonContainer);
-            anchorElement.dataset.customButtonsInjected = 'true';
-            Log.info('Feature.IWT', `"I Want To..." 自動化按鈕注入成功（Close Case 已全面支持長按）。`);
-            initAssignButtonMonitor();
+    function injectIWantToButtons(anchorElement) {
+        if (anchorElement.dataset.customButtonsInjected === 'true') {
+            return;
         }
+        const buttonContainer = document.createElement('div');
+        buttonContainer.className = 'slds-grid slds-wrap';
+        const styles = GM_getValue('iWantToButtonStyles', DEFAULTS.iWantToButtonStyles);
+        Object.assign(buttonContainer.style, styles);
 
-        /**
+        let settings = GM_getValue('iwtAutoFillTexts', DEFAULTS.iwtAutoFillTexts);
+        if (settings && settings.reOpen && typeof settings.reOpen === 'string') {
+            Log.info('Feature.IWT', '檢測到舊版 IWT 按鈕數據格式，正在動態遷移。');
+            for (const key in settings) {
+                if (typeof settings[key] === 'string') {
+                    settings[key] = [settings[key]];
+                }
+            }
+        }
+        const autoFillTexts = settings;
+
+        const handleOutsideClick = (e, dropdownMenu, trigger) => {
+            if (!trigger.contains(e.target)) {
+                dropdownMenu.classList.remove('show');
+                document.removeEventListener('click', trigger.__outsideClickListener);
+                delete trigger.__outsideClickListener;
+            }
+        };
+
+        // 抽離出可複用的長按事件綁定邏輯
+        const applyLongPressHandler = (element, config, comment) => {
+            let pressTimer = null;
+            let longPressTriggered = false;
+
+            const startPress = (event) => {
+                if (event.button !== 0) return;
+                longPressTriggered = false;
+                pressTimer = setTimeout(() => {
+                    longPressTriggered = true;
+                    Log.info('Feature.IWT.LongPress', '長按觸發快速模式。');
+                    automateIWantToAction({
+                        searchText: config.searchText,
+                        stageTwoHandler: (c) => config.handler(c, 'fast'),
+                        finalComment: comment
+                    });
+                    // 如果是下拉菜單項，觸發後需要關閉菜單
+                    const dropdownMenu = element.closest('.cec-iwt-dropdown-menu');
+                    if (dropdownMenu) {
+                        dropdownMenu.classList.remove('show');
+                    }
+                }, 1500);
+            };
+
+            const cancelPress = () => {
+                clearTimeout(pressTimer);
+            };
+
+            const endPress = (event) => {
+                if (event.button !== 0) return;
+                clearTimeout(pressTimer);
+                if (!longPressTriggered) {
+                    Log.info('Feature.IWT.LongPress', '單擊觸發普通模式。');
+                    automateIWantToAction({
+                        searchText: config.searchText,
+                        stageTwoHandler: (c) => config.handler(c, 'normal'),
+                        finalComment: comment
+                    });
+                }
+            };
+
+            element.addEventListener('mousedown', startPress);
+            element.addEventListener('mouseup', endPress);
+            element.addEventListener('mouseleave', cancelPress);
+        };
+
+
+        const buttonConfigs = [{
+            name: 'Re-Open Case (Auto)',
+            title: '自動執行 "Re-Open Case"',
+            actionKey: 'reOpen',
+            searchText: 'Re-Open Case',
+            handler: handleStageTwoReOpen
+        }, {
+            name: 'Close this Case (Auto)',
+            title: '單擊: 普通模式 | 長按2秒: 極速模式',
+            actionKey: 'closeCase',
+            searchText: 'Close this Case',
+            handler: handleStageTwoCloseCase
+        }, {
+            name: 'Document Customer Contact (Auto)',
+            title: '自動執行 "Document Customer Contact"',
+            actionKey: 'documentContact',
+            searchText: 'Document Customer Contact',
+            handler: handleStageTwoDocumentContact
+        }];
+
+        buttonConfigs.forEach(config => {
+            const layoutItem = document.createElement('div');
+            layoutItem.className = 'slds-var-p-right_xx-small slds-size_4-of-12';
+            const commentOptions = autoFillTexts[config.actionKey] || [];
+
+            // 分支 1: 單一按鈕模式
+            if (commentOptions.length === 1) {
+                const directButton = document.createElement('button');
+                directButton.title = config.title;
+                directButton.className = 'slds-button slds-button_stretch cec-iwt-button-override';
+                directButton.textContent = config.name;
+
+                if (config.actionKey === 'closeCase') {
+                    applyLongPressHandler(directButton, config, commentOptions[0]);
+                } else {
+                    directButton.addEventListener('click', () => {
+                        automateIWantToAction({
+                            searchText: config.searchText,
+                            stageTwoHandler: config.handler,
+                            finalComment: commentOptions[0]
+                        });
+                    });
+                }
+
+                layoutItem.appendChild(directButton);
+                injectedIWTButtons[config.name] = directButton;
+
+                // 分支 2: 下拉菜單模式
+            } else {
+                const dropdownTrigger = document.createElement('div');
+                dropdownTrigger.className = 'cec-iwt-dropdown-trigger';
+
+                const mainButton = document.createElement('button');
+                mainButton.title = config.title;
+                mainButton.className = 'slds-button slds-button_stretch cec-iwt-button-override';
+                mainButton.innerHTML = `${config.name} <span class="cec-dropdown-arrow">▼</span>`;
+
+                const dropdownMenu = document.createElement('ul');
+                dropdownMenu.className = 'cec-iwt-dropdown-menu';
+
+                if (commentOptions.length > 1) {
+                    commentOptions.forEach(comment => {
+                        const item = document.createElement('li');
+                        item.className = 'cec-iwt-dropdown-item';
+                        item.textContent = comment;
+
+                        // [核心修正] 為下拉菜單中的 "Close Case" 選項應用長按邏輯
+                        if (config.actionKey === 'closeCase') {
+                            // 阻止默認的 mousedown 行為，防止觸發菜單關閉
+                            item.addEventListener('mousedown', (e) => e.stopPropagation());
+                            applyLongPressHandler(item, config, comment);
+                        } else {
+                            item.addEventListener('click', () => {
+                                automateIWantToAction({
+                                    searchText: config.searchText,
+                                    stageTwoHandler: config.handler,
+                                    finalComment: comment
+                                });
+                                dropdownMenu.classList.remove('show');
+                            });
+                        }
+                        dropdownMenu.appendChild(item);
+                    });
+                } else { // 零選項的情況
+                    const disabledItem = document.createElement('li');
+                    disabledItem.className = 'cec-iwt-dropdown-item';
+                    disabledItem.textContent = '無可用評論';
+                    disabledItem.style.color = '#ccc';
+                    disabledItem.style.cursor = 'not-allowed';
+                    dropdownMenu.appendChild(disabledItem);
+                }
+
+                mainButton.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    document.querySelectorAll('.cec-iwt-dropdown-menu.show').forEach(menu => {
+                        if (menu !== dropdownMenu) menu.classList.remove('show');
+                    });
+                    dropdownMenu.classList.toggle('show');
+                    if (dropdownMenu.classList.contains('show')) {
+                        if (!dropdownTrigger.__outsideClickListener) {
+                            dropdownTrigger.__outsideClickListener = (event) => handleOutsideClick(event, dropdownMenu, dropdownTrigger);
+                            document.addEventListener('click', dropdownTrigger.__outsideClickListener);
+                        }
+                    } else {
+                        if (dropdownTrigger.__outsideClickListener) {
+                            document.removeEventListener('click', dropdownTrigger.__outsideClickListener);
+                            delete dropdownTrigger.__outsideClickListener;
+                        }
+                    }
+                });
+
+                dropdownTrigger.appendChild(mainButton);
+                dropdownTrigger.appendChild(dropdownMenu);
+                layoutItem.appendChild(dropdownTrigger);
+                injectedIWTButtons[config.name] = mainButton;
+            }
+            buttonContainer.appendChild(layoutItem);
+        });
+
+        anchorElement.insertAdjacentElement('afterend', buttonContainer);
+        anchorElement.dataset.customButtonsInjected = 'true';
+        Log.info('Feature.IWT', `"I Want To..." 自動化按鈕注入成功（Close Case 已全面支持長按）。`);
+        initAssignButtonMonitor();
+    }
+
+    /**
     * @description 根據 "Assign Case to Me" 按鈕的狀態，更新自定義 "I Want To..." 按鈕的禁用狀態。
     * @param {boolean} isAssignButtonDisabled - "Assign Case to Me" 按鈕是否被禁用。
     */
-        function updateIWTButtonStates(isAssignButtonDisabled) {
-            const buttonsToUpdate = [injectedIWTButtons['Close this Case (Auto)'], injectedIWTButtons['Document Customer Contact (Auto)']];
-            buttonsToUpdate.forEach(button => {
-                if (button) {
-                    button.disabled = isAssignButtonDisabled;
-                }
-            });
-            const state = isAssignButtonDisabled ? '禁用' : '啟用';
-            Log.info('Feature.IWT', `聯動狀態更新，自動化按鈕已設置為 ${state} 狀態。`);
-        }
+    function updateIWTButtonStates(isAssignButtonDisabled) {
+        const buttonsToUpdate = [injectedIWTButtons['Close this Case (Auto)'], injectedIWTButtons['Document Customer Contact (Auto)']];
+        buttonsToUpdate.forEach(button => {
+            if (button) {
+                button.disabled = isAssignButtonDisabled;
+            }
+        });
+        const state = isAssignButtonDisabled ? '禁用' : '啟用';
+        Log.info('Feature.IWT', `聯動狀態更新，自動化按鈕已設置為 ${state} 狀態。`);
+    }
 
-        /**
+    /**
     * @description 初始化對 "Assign Case to Me" 按鈕的狀態監控，以實現與自定義按鈕的狀態聯動。
     */
-        async function initAssignButtonMonitor() {
-            const ASSIGN_BUTTON_SELECTORS = [
-                'button[title="Assign Case to Me"]',
-                'button[aria-label="Assign Case to Me"]',
-                'button[title="Assign Case to Me"], button[aria-label="Assign Case to Me"]'
-            ];
-            try {
-                const assignButton = await waitForElementWithObserver(document.body, ASSIGN_BUTTON_SELECTORS[0], 20000);
-                // [增強] Selector 回退，提升抗 UI 變動能力
-                const finalAssignButton = assignButton || findFirstElementInShadows(document.body, ASSIGN_BUTTON_SELECTORS);
-                if (!finalAssignButton) {
-                    throw new Error('未找到 "Assign Case to Me" 按鈕（已嘗試回退選擇器）。');
-                } // 20000ms: 等待指派按鈕出現的超時。
-                const initialStateDisabled = finalAssignButton.disabled || finalAssignButton.getAttribute('aria-disabled') === 'true';
-                updateIWTButtonStates(initialStateDisabled);
-                assignButtonObserver = new MutationObserver(() => {
-                    if (isScriptPaused) return;
-                    const currentStateDisabled = finalAssignButton.disabled || finalAssignButton.getAttribute('aria-disabled') === 'true';
-                    updateIWTButtonStates(currentStateDisabled);
-                });
-                PageResourceRegistry.addObserver(assignButtonObserver);
-                assignButtonObserver.observe(finalAssignButton, {
-                    attributes: true,
-                    attributeFilter: ['disabled', 'aria-disabled']
-                });
-                Log.info('Feature.IWT', `"Assign Case to Me" 按鈕狀態監控已啟動，實現狀態聯動。`);
-            } catch (error) {
-                Log.warn('Feature.IWT', `未找到 "Assign Case to Me" 按鈕，狀態聯動功能未啟動。`);
-                updateIWTButtonStates(false);
-            }
+    async function initAssignButtonMonitor() {
+        const ASSIGN_BUTTON_SELECTORS = [
+            'button[title="Assign Case to Me"]',
+            'button[aria-label="Assign Case to Me"]',
+            'button[title="Assign Case to Me"], button[aria-label="Assign Case to Me"]'
+        ];
+        try {
+            const assignButton = await waitForElementWithObserver(document.body, ASSIGN_BUTTON_SELECTORS[0], 20000);
+            // [增強] Selector 回退，提升抗 UI 變動能力
+            const finalAssignButton = assignButton || findFirstElementInShadows(document.body, ASSIGN_BUTTON_SELECTORS);
+            if (!finalAssignButton) {
+                throw new Error('未找到 "Assign Case to Me" 按鈕（已嘗試回退選擇器）。');
+            } // 20000ms: 等待指派按鈕出現的超時。
+            const initialStateDisabled = finalAssignButton.disabled || finalAssignButton.getAttribute('aria-disabled') === 'true';
+            updateIWTButtonStates(initialStateDisabled);
+            assignButtonObserver = new MutationObserver(() => {
+                if (isScriptPaused) return;
+                const currentStateDisabled = finalAssignButton.disabled || finalAssignButton.getAttribute('aria-disabled') === 'true';
+                updateIWTButtonStates(currentStateDisabled);
+            });
+            PageResourceRegistry.addObserver(assignButtonObserver);
+            assignButtonObserver.observe(finalAssignButton, {
+                attributes: true,
+                attributeFilter: ['disabled', 'aria-disabled']
+            });
+            Log.info('Feature.IWT', `"Assign Case to Me" 按鈕狀態監控已啟動，實現狀態聯動。`);
+        } catch (error) {
+            Log.warn('Feature.IWT', `未找到 "Assign Case to Me" 按鈕，狀態聯動功能未啟動。`);
+            updateIWTButtonStates(false);
         }
+    }
 
-        /**
+    /**
     * @description 一個帶有重試和備選選項機制的安全點擊函數，用於填充下拉框。
     * @param {HTMLElement} modalRoot - 彈窗的根節點。
     * @param {string} buttonSelector - 下拉框觸發按鈕的選擇器。
     * @param {string[]} itemValues - 備選的選項 `data-value` 列表。
     * @returns {Promise<boolean>} 如果成功選擇則返回 true。
     */
-        async function safeClickWithOptions(modalRoot, buttonSelector, itemValues) {
-            if (!itemValues || !Array.isArray(itemValues)) {
-                return true;
-            }
-            const options = itemValues.filter(item => item !== null && item !== undefined);
-            if (options.length === 0) {
-                return true;
-            }
-
-            for (const option of options) {
-                try {
-                    const itemSelector = `lightning-base-combobox-item[data-value="${option}"]`;
-                    for (let i = 0; i < 2; i++) {
-                        try {
-                            const button = await waitForElementWithObserver(modalRoot, buttonSelector, 10); // 10ms: 快速查找按鈕。
-                            button.dispatchEvent(new MouseEvent("click", {
-                                bubbles: true
-                            }));
-                            await new Promise(resolve => setTimeout(resolve, 5)); // 5ms: 等待菜單渲染。
-
-                            const item = await waitForElementWithObserver(document.body, itemSelector, 10); // 10ms: 快速查找選項。
-                            item.dispatchEvent(new MouseEvent("click", {
-                                bubbles: true
-                            }));
-                            await new Promise(resolve => setTimeout(resolve, 5)); // 5ms: 點擊後的UI反應延遲。
-                            return true;
-                        } catch (error) {
-                            if (i === 1) throw error;
-                            document.body.click();
-                            await new Promise(resolve => setTimeout(resolve, 5));
-                        }
-                    }
-                } catch (error) {
-                    Log.warn('UI.ModalButtons', `選擇選項 "${option}" 失敗，將嘗試下一個備選項。錯誤: ${error.message}`);
-                }
-            }
-            throw new Error(`所有備選選項 [${options.join(', ')}] 都選擇失敗`);
+    async function safeClickWithOptions(modalRoot, buttonSelector, itemValues) {
+        if (!itemValues || !Array.isArray(itemValues)) {
+            return true;
+        }
+        const options = itemValues.filter(item => item !== null && item !== undefined);
+        if (options.length === 0) {
+            return true;
         }
 
-        /**
-    * @description 在彈出窗口的底部注入快捷操作按鈕。
-    * @param {HTMLElement} footer - 彈窗的 footer 元素。
-    */
-        function addModalActionButtons(footer) {
-            if (footer.querySelector(".custom-action-button-container")) {
-                return;
-            }
-            const modalRoot = footer.getRootNode()?.host;
-            if (!modalRoot) return;
-            const saveButtonWrapper = findElementInShadows(footer, 'lightning-button[variant="brand"]');
-            if (!saveButtonWrapper) {
-                return;
-            }
-            footer.style.display = 'flex';
-            footer.style.justifyContent = 'flex-end';
-            footer.style.alignItems = 'center';
-            const buttonContainer = document.createElement("div");
-            buttonContainer.className = "custom-action-button-container";
-            buttonContainer.style.display = 'flex';
-            buttonContainer.style.flexWrap = 'wrap';
-            buttonContainer.style.justifyContent = 'flex-end';
-            buttonContainer.style.marginRight = '0px';
+        for (const option of options) {
+            try {
+                const itemSelector = `lightning-base-combobox-item[data-value="${option}"]`;
+                for (let i = 0; i < 2; i++) {
+                    try {
+                        const button = await waitForElementWithObserver(modalRoot, buttonSelector, 10); // 10ms: 快速查找按鈕。
+                        button.dispatchEvent(new MouseEvent("click", {
+                            bubbles: true
+                        }));
+                        await new Promise(resolve => setTimeout(resolve, 5)); // 5ms: 等待菜單渲染。
 
-            const styleString = `
-            font-size: 13px;
-            padding: 1.5px 4px;
-            margin: 4px;
-            border-radius: 4px;
-            width: 40px;
-            height: 33px;
-            background-color: #0070d2;
-            color: #ffffff;
-            border: 1px solid #0070d2;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            margin-right: 2px;
-            justify-content: center;
-        `;
+                        const item = await waitForElementWithObserver(document.body, itemSelector, 10); // 10ms: 快速查找選項。
+                        item.dispatchEvent(new MouseEvent("click", {
+                            bubbles: true
+                        }));
+                        await new Promise(resolve => setTimeout(resolve, 5)); // 5ms: 點擊後的UI反應延遲。
+                        return true;
+                    } catch (error) {
+                        if (i === 1) throw error;
+                        document.body.click();
+                        await new Promise(resolve => setTimeout(resolve, 5));
+                    }
+                }
+            } catch (error) {
+                Log.warn('UI.ModalButtons', `選擇選項 "${option}" 失敗，將嘗試下一個備選項。錯誤: ${error.message}`);
+            }
+        }
+        throw new Error(`所有備選選項 [${options.join(', ')}] 都選擇失敗`);
+    }
+
+    /**
+        * @description 在彈出窗口的底部注入快捷操作按鈕。
+        *              [優化] 按鈕注入成功後，延遲 500ms 自動將網頁下移 111px。
+        * @param {HTMLElement} footer - 彈窗的 footer 元素。
+        */
+    function addModalActionButtons(footer) {
+        // 防止重複注入
+        if (footer.querySelector(".custom-action-button-container")) {
+            return;
+        }
+
+        const modalRoot = footer.getRootNode()?.host;
+        if (!modalRoot) return;
+
+        const saveButtonWrapper = findElementInShadows(footer, 'lightning-button[variant="brand"]');
+        if (!saveButtonWrapper) {
+            return;
+        }
+
+        // 設置 Footer 樣式
+        footer.style.display = 'flex';
+        footer.style.justifyContent = 'flex-end';
+        footer.style.alignItems = 'center';
+
+        const buttonContainer = document.createElement("div");
+        buttonContainer.className = "custom-action-button-container";
+        buttonContainer.style.display = 'flex';
+        buttonContainer.style.flexWrap = 'wrap';
+        buttonContainer.style.justifyContent = 'flex-end';
+        buttonContainer.style.marginRight = '0px';
+
+        const styleString = `
+                font-size: 13px;
+                padding: 1.5px 4px;
+                margin: 4px;
+                border-radius: 4px;
+                width: 40px;
+                height: 33px;
+                background-color: #0070d2;
+                color: #ffffff;
+                border: 1px solid #0070d2;
+                cursor: pointer;
+                display: flex;
+                align-items: center;
+                margin-right: 2px;
+                justify-content: center;
+            `;
 
         const buttonsConfig = GM_getValue('actionButtons', DEFAULTS.actionButtons);
 
@@ -5909,6 +6050,8 @@ V53 > V54
             btn.textContent = config.name;
             btn.className = "slds-button";
             btn.style.cssText = styleString;
+
+            // 綁定點擊事件 (填充下拉框)
             btn.addEventListener("click", async () => {
                 try {
                     await safeClickWithOptions(modalRoot, 'button[aria-label*="Case Category"]', config.category);
@@ -5920,6 +6063,7 @@ V53 > V54
             });
             buttonContainer.appendChild(btn);
 
+            // 每 7 個按鈕換行
             if ((index + 1) % 7 === 0 && (index + 1) < buttonsConfig.length) {
                 const flexBreaker = document.createElement('div');
                 flexBreaker.style.flexBasis = '100%';
@@ -5928,969 +6072,1071 @@ V53 > V54
             }
         });
 
+        // 將按鈕容器插入到 Save 按鈕之前
         footer.insertBefore(buttonContainer, saveButtonWrapper);
         Log.info('UI.ModalButtons', `快捷操作按鈕已成功注入彈窗。`);
+
+        // [修改] 根據設置決定是否執行下移
+        if (GM_getValue('autoScrollAfterActionButtons', DEFAULTS.autoScrollAfterActionButtons)) {
+            setTimeout(() => {
+                window.scrollBy({
+                    top: 111,
+                    behavior: 'smooth'
+                });
+                Log.info('UI.Scroll', '快捷按鈕注入完畢，頁面已自動下移 111px。');
+            }, 500);
+        }
     }
 
-        /**
+    /**
     * @description 帶重試機制地向目標窗口發送消息，直到收到確認回執。
     * @param {Window} windowHandle - 目標窗口句柄。
     * @param {object} messagePayload - 要發送的消息負載。
     * @param {string} targetOrigin - 目標窗口的源。
     */
-        function sendMessageWithRetries(windowHandle, messagePayload, targetOrigin) {
-            const MAX_RETRIES = 120;
-            const RETRY_INTERVAL = 2000; // 2000ms: 每次重試發送消息的間隔，確保目標窗口有足夠時間加載和響應。
-            let attempt = 0;
-            let intervalId = null;
-            const trySendMessage = () => {
-                if (attempt >= MAX_RETRIES || !windowHandle || windowHandle.closed) {
-                    if (attempt >= MAX_RETRIES) {
-                        Log.error('Feature.IVP', `發送消息至 IVP 窗口達到最大重試次數，已停止。`);
-                    }
-                    if (intervalId) clearInterval(intervalId);
-                    window.removeEventListener('message', confirmationListener);
-                    return;
+    function sendMessageWithRetries(windowHandle, messagePayload, targetOrigin) {
+        const MAX_RETRIES = 120;
+        const RETRY_INTERVAL = 2000; // 2000ms: 每次重試發送消息的間隔，確保目標窗口有足夠時間加載和響應。
+        let attempt = 0;
+        let intervalId = null;
+        const trySendMessage = () => {
+            if (attempt >= MAX_RETRIES || !windowHandle || windowHandle.closed) {
+                if (attempt >= MAX_RETRIES) {
+                    Log.error('Feature.IVP', `發送消息至 IVP 窗口達到最大重試次數，已停止。`);
                 }
-                windowHandle.postMessage(messagePayload, targetOrigin);
-                attempt++;
-            };
-            trySendMessage();
-            intervalId = setInterval(trySendMessage, RETRY_INTERVAL);
-            const confirmationListener = (event) => {
-                if (event.origin !== targetOrigin) return;
-                if (event.data && event.data.type === 'CEC_REQUEST_RECEIVED' && event.data.payload && event.data.payload.timestamp === messagePayload.payload.timestamp) {
-                    if (intervalId) clearInterval(intervalId);
-                    Log.info('Feature.IVP', `收到 IVP 窗口的接收確認。`);
-                    window.removeEventListener('message', confirmationListener);
-                }
-            };
-            window.addEventListener('message', confirmationListener);
-        }
+                if (intervalId) clearInterval(intervalId);
+                window.removeEventListener('message', confirmationListener);
+                return;
+            }
+            windowHandle.postMessage(messagePayload, targetOrigin);
+            attempt++;
+        };
+        trySendMessage();
+        intervalId = setInterval(trySendMessage, RETRY_INTERVAL);
+        const confirmationListener = (event) => {
+            if (event.origin !== targetOrigin) return;
+            if (event.data && event.data.type === 'CEC_REQUEST_RECEIVED' && event.data.payload && event.data.payload.timestamp === messagePayload.payload.timestamp) {
+                if (intervalId) clearInterval(intervalId);
+                Log.info('Feature.IVP', `收到 IVP 窗口的接收確認。`);
+                window.removeEventListener('message', confirmationListener);
+            }
+        };
+        window.addEventListener('message', confirmationListener);
+    }
 
-        /**
+    /**
     * @description 如果啟用了自動查詢，則在頁面加載並提取到追踪號後，自動向IVP窗口發送查詢請求。
     */
-        async function autoQueryIVPOnLoad() {
-            if (!GM_getValue('autoIVPQueryEnabled', DEFAULTS.autoIVPQueryEnabled)) {
-                Log.warn('Feature.IVP', `未啟用自動 IVP 查詢功能。`);
-                return;
-            }
-            if (!foundTrackingNumber) {
-                return;
-            }
-            Log.info('Feature.IVP', `檢測到追踪號: ${foundTrackingNumber}，觸發自動查詢。`);
-            try {
-                if (!ivpWindowHandle || ivpWindowHandle.closed) {
-                    ivpWindowHandle = window.open('https://ivp.inside.ups.com/internal-visibility-portal', 'ivp_window');
-                }
-                if (!ivpWindowHandle) {
-                    Log.error('Feature.IVP', `打開 IVP 窗口失敗，可能已被瀏覽器攔截。`);
-                    alert('CEC 功能強化：打開 IVP 窗口失敗，可能已被瀏覽器攔截。請為此網站允許彈窗。');
-                    return;
-                }
-                const messagePayload = {
-                    type: 'CEC_SEARCH_REQUEST',
-                    payload: {
-                        trackingNumber: foundTrackingNumber,
-                        timestamp: Date.now()
-                    }
-                };
-                sendMessageWithRetries(ivpWindowHandle, messagePayload, 'https://ivp.inside.ups.com');
-                Log.info('Feature.IVP', `查詢請求已發送至 IVP 窗口。`);
-                if (GM_getValue('autoSwitchEnabled', DEFAULTS.autoSwitchEnabled)) {
-                    ivpWindowHandle.focus();
-                }
-            } catch (err) {
-                Log.error('Feature.IVP', `自動查詢IVP時發生未知錯誤: ${err.message}`);
-            }
+    async function autoQueryIVPOnLoad() {
+        if (!GM_getValue('autoIVPQueryEnabled', DEFAULTS.autoIVPQueryEnabled)) {
+            Log.warn('Feature.IVP', `未啟用自動 IVP 查詢功能。`);
+            return;
         }
+        if (!foundTrackingNumber) {
+            return;
+        }
+        Log.info('Feature.IVP', `檢測到追踪號: ${foundTrackingNumber}，觸發自動查詢。`);
+        try {
+            if (!ivpWindowHandle || ivpWindowHandle.closed) {
+                ivpWindowHandle = window.open('https://ivp.inside.ups.com/internal-visibility-portal', 'ivp_window');
+            }
+            if (!ivpWindowHandle) {
+                Log.error('Feature.IVP', `打開 IVP 窗口失敗，可能已被瀏覽器攔截。`);
+                alert('CEC 功能強化：打開 IVP 窗口失敗，可能已被瀏覽器攔截。請為此網站允許彈窗。');
+                return;
+            }
+            const messagePayload = {
+                type: 'CEC_SEARCH_REQUEST',
+                payload: {
+                    trackingNumber: foundTrackingNumber,
+                    timestamp: Date.now()
+                }
+            };
+            sendMessageWithRetries(ivpWindowHandle, messagePayload, 'https://ivp.inside.ups.com');
+            Log.info('Feature.IVP', `查詢請求已發送至 IVP 窗口。`);
+            if (GM_getValue('autoSwitchEnabled', DEFAULTS.autoSwitchEnabled)) {
+                ivpWindowHandle.focus();
+            }
+        } catch (err) {
+            Log.error('Feature.IVP', `自動查詢IVP時發生未知錯誤: ${err.message}`);
+        }
+    }
 
-        /**
+    /**
     * @description [新增] 如果啟用了自動 Web 查詢，則在頁面加載並提取到追踪號後，自動向 UPS Web 窗口發送查詢請求。
     */
-        async function autoQueryWebOnLoad() {
-            if (!GM_getValue('autoWebQueryEnabled', DEFAULTS.autoWebQueryEnabled)) {
-                return;
-            }
-            if (!foundTrackingNumber) {
-                return;
-            }
-            Log.info('Feature.Web', `檢測到追踪號: ${foundTrackingNumber}，觸發自動 Web 查詢。`);
-            try {
-                const webUrl = 'https://www.ups.com/track?loc=zh_HK&requester=ST/';
-
-                if (!webWindowHandle || webWindowHandle.closed) {
-                    webWindowHandle = window.open(webUrl, 'ups_web_window');
-                }
-                if (!webWindowHandle) {
-                    Log.error('Feature.Web', `打開 UPS Web 窗口失敗，可能已被瀏覽器攔截。`);
-                    return;
-                }
-
-                const messagePayload = {
-                    type: 'CEC_SEARCH_REQUEST',
-                    payload: {
-                        trackingNumber: foundTrackingNumber,
-                        timestamp: Date.now()
-                    }
-                };
-
-                sendMessageWithRetries(webWindowHandle, messagePayload, 'https://www.ups.com');
-                Log.info('Feature.Web', `查詢請求已發送至 UPS Web 窗口。`);
-
-                // 注意：自動查詢通常不強制奪取焦點，以免干擾用戶在 Case 頁面的操作
-                // 如果需要強制聚焦，可以取消下面這行的註釋
-                // webWindowHandle.focus();
-
-            } catch (err) {
-                Log.error('Feature.Web', `自動查詢 Web 時發生未知錯誤: ${err.message}`);
-            }
+    async function autoQueryWebOnLoad() {
+        if (!GM_getValue('autoWebQueryEnabled', DEFAULTS.autoWebQueryEnabled)) {
+            return;
         }
+        if (!foundTrackingNumber) {
+            return;
+        }
+        Log.info('Feature.Web', `檢測到追踪號: ${foundTrackingNumber}，觸發自動 Web 查詢。`);
+        try {
+            const webUrl = 'https://www.ups.com/track?loc=zh_HK&requester=ST/';
 
-        /**
+            if (!webWindowHandle || webWindowHandle.closed) {
+                webWindowHandle = window.open(webUrl, 'ups_web_window');
+            }
+            if (!webWindowHandle) {
+                Log.error('Feature.Web', `打開 UPS Web 窗口失敗，可能已被瀏覽器攔截。`);
+                return;
+            }
+
+            const messagePayload = {
+                type: 'CEC_SEARCH_REQUEST',
+                payload: {
+                    trackingNumber: foundTrackingNumber,
+                    timestamp: Date.now()
+                }
+            };
+
+            sendMessageWithRetries(webWindowHandle, messagePayload, 'https://www.ups.com');
+            Log.info('Feature.Web', `查詢請求已發送至 UPS Web 窗口。`);
+
+            // 注意：自動查詢通常不強制奪取焦點，以免干擾用戶在 Case 頁面的操作
+            // 如果需要強制聚焦，可以取消下面這行的註釋
+            // webWindowHandle.focus();
+
+        } catch (err) {
+            Log.error('Feature.Web', `自動查詢 Web 時發生未知錯誤: ${err.message}`);
+        }
+    }
+
+    /**
     * @description 根據用戶設置調整 Case Description 文本框或顯示區域的高度。
     */
-        function adjustCaseDescriptionHeight() {
-            const desiredHeight = GM_getValue("caseDescriptionHeight", DEFAULTS.caseDescriptionHeight) + "px";
+    function adjustCaseDescriptionHeight() {
+        const desiredHeight = GM_getValue("caseDescriptionHeight", DEFAULTS.caseDescriptionHeight) + "px";
 
-            const descriptionComponent = findElementInShadows(document.body, 'lightning-textarea[data-field="DescriptionValue"]');
-            if (descriptionComponent) {
-                const textarea = findElementInShadows(descriptionComponent, 'textarea.slds-textarea');
-                if (textarea && !textarea.dataset.heightAdjusted) {
-                    textarea.style.height = desiredHeight;
-                    textarea.style.resize = 'vertical';
-                    textarea.dataset.heightAdjusted = 'true';
-                    Log.info('UI.HeightAdjust', `Case 描述框高度已調整為 ${desiredHeight}。`);
-                    return;
-                }
+        const descriptionComponent = findElementInShadows(document.body, 'lightning-textarea[data-field="DescriptionValue"]');
+        if (descriptionComponent) {
+            const textarea = findElementInShadows(descriptionComponent, 'textarea.slds-textarea');
+            if (textarea && !textarea.dataset.heightAdjusted) {
+                textarea.style.height = desiredHeight;
+                textarea.style.resize = 'vertical';
+                textarea.dataset.heightAdjusted = 'true';
+                Log.info('UI.HeightAdjust', `Case 描述框高度已調整為 ${desiredHeight}。`);
+                return;
             }
+        }
 
-            const allLabels = findAllElementsInShadows(document.body, 'div.slds-form-element__label');
-            for (const label of allLabels) {
-                if (label.textContent.trim() === 'Description') {
-                    const fieldContainer = label.closest('.slds-form-element');
-                    if (fieldContainer) {
-                        const valueContainer = findElementInShadows(fieldContainer, 'lightning-formatted-rich-text, .slds-form-element__static');
-                        if (valueContainer && !valueContainer.dataset.heightAdjusted) {
-                            valueContainer.style.display = 'block';
-                            valueContainer.style.maxHeight = desiredHeight;
-                            valueContainer.style.height = desiredHeight;
-                            valueContainer.style.overflowY = 'auto';
-                            valueContainer.dataset.heightAdjusted = 'true';
-                            Log.info('UI.HeightAdjust', `Case 描述顯示區域高度已調整為 ${desiredHeight}。`);
-                            return;
-                        }
+        const allLabels = findAllElementsInShadows(document.body, 'div.slds-form-element__label');
+        for (const label of allLabels) {
+            if (label.textContent.trim() === 'Description') {
+                const fieldContainer = label.closest('.slds-form-element');
+                if (fieldContainer) {
+                    const valueContainer = findElementInShadows(fieldContainer, 'lightning-formatted-rich-text, .slds-form-element__static');
+                    if (valueContainer && !valueContainer.dataset.heightAdjusted) {
+                        valueContainer.style.display = 'block';
+                        valueContainer.style.maxHeight = desiredHeight;
+                        valueContainer.style.height = desiredHeight;
+                        valueContainer.style.overflowY = 'auto';
+                        valueContainer.dataset.heightAdjusted = 'true';
+                        Log.info('UI.HeightAdjust', `Case 描述顯示區域高度已調整為 ${desiredHeight}。`);
+                        return;
                     }
                 }
             }
         }
+    }
 
-        /**
+    /**
     * @description [增強版] 處理聯繫人卡片，根據賬戶的 "Preferred" 狀態進行高亮，
     *              並新增邏輯：檢查 "Account Status"，如果為 "SUSPENDED"，則禁用 "Schedule a Pickup" 按鈕。
     * @param {HTMLElement} card - 聯繫人卡片元素。
     */
-        function processContactCard(card) {
-            const highlightMode = GM_getValue('accountHighlightMode', 'pca');
-            if (highlightMode === 'off') {
-            }
-            const isPcaModeOn = (highlightMode === 'pca');
-            const isDispatchModeOn = (highlightMode === 'dispatch');
-            const PREFERRED_LOG_KEY = 'preferredLog';
-            const now = Date.now();
-            const caseId = getCaseIdFromUrl(location.href);
+    function processContactCard(card) {
+        const highlightMode = GM_getValue('accountHighlightMode', 'pca');
+        if (highlightMode === 'off') {
+        }
+        const isPcaModeOn = (highlightMode === 'pca');
+        const isDispatchModeOn = (highlightMode === 'dispatch');
+        const PREFERRED_LOG_KEY = 'preferredLog';
+        const now = Date.now();
+        const caseId = getCaseIdFromUrl(location.href);
 
-            if (!caseId) {
-                Log.warn('UI.ContactCard', `無法從當前 URL 提取 Case ID，聯繫人狀態緩存功能跳過。`);
-                return;
-            }
+        if (!caseId) {
+            Log.warn('UI.ContactCard', `無法從當前 URL 提取 Case ID，聯繫人狀態緩存功能跳過。`);
+            return;
+        }
 
-            const allLogs = GM_getValue(PREFERRED_LOG_KEY, {});
-            const CACHE_TTL = 60 * 60 * 1000;
-            const cleanedLog = Object.fromEntries(Object.entries(allLogs).filter(([_, data]) => now - data.timestamp < CACHE_TTL));
+        const allLogs = GM_getValue(PREFERRED_LOG_KEY, {});
+        const CACHE_TTL = 60 * 60 * 1000;
+        const cleanedLog = Object.fromEntries(Object.entries(allLogs).filter(([_, data]) => now - data.timestamp < CACHE_TTL));
 
-            // --- [修改] findAndDisablePickupButton 函數，增加延遲和輪詢 ---
-            const findAndDisablePickupButton = () => {
-                const POLLING_INTERVAL_MS = 500;
-                const TIMEOUT_MS = 5000; // 最多等待 5 秒
-                const startTime = Date.now();
-                let buttonFound = false;
+        // --- [修改] findAndDisablePickupButton 函數，增加延遲和輪詢 ---
+        const findAndDisablePickupButton = () => {
+            const POLLING_INTERVAL_MS = 500;
+            const TIMEOUT_MS = 5000; // 最多等待 5 秒
+            const startTime = Date.now();
+            let buttonFound = false;
 
-                const intervalId = setInterval(() => {
-                    if (Date.now() - startTime > TIMEOUT_MS) {
-                        clearInterval(intervalId);
-                        if (!buttonFound) {
-                            Log.warn('UI.ContactCard', `檢測到 SUSPENDED 狀態，但在 10 秒內未能找到 "Schedule a Pickup" 按鈕。`);
-                        }
-                        return;
+            const intervalId = setInterval(() => {
+                if (Date.now() - startTime > TIMEOUT_MS) {
+                    clearInterval(intervalId);
+                    if (!buttonFound) {
+                        Log.warn('UI.ContactCard', `檢測到 SUSPENDED 狀態，但在 10 秒內未能找到 "Schedule a Pickup" 按鈕。`);
                     }
-
-                    const pickupButton = findElementInShadows(document.body, 'button[title="Schedule a Pickup"]');
-                    if (pickupButton) {
-                        buttonFound = true;
-                        clearInterval(intervalId);
-                        if (!pickupButton.disabled) {
-                            pickupButton.style.backgroundColor = 'red';
-                            pickupButton.style.color = 'white';
-                            pickupButton.disabled = true;
-                            Log.info('UI.ContactCard', `檢測到賬戶狀態為 "SUSPENDED"，已高亮並禁用 "Schedule a Pickup" 按鈕。`);
-                        }
-                    }
-                }, POLLING_INTERVAL_MS);
-            };
-
-            if (cleanedLog[caseId]) {
-                const cachedData = cleanedLog[caseId];
-                const cachedIsPreferred = cachedData.isPreferred;
-                const shouldHighlight = (isPcaModeOn && !cachedIsPreferred) || (isDispatchModeOn && cachedIsPreferred);
-
-                if (highlightMode !== 'off' && shouldHighlight) {
-                    card.style.setProperty('background-color', 'moccasin', 'important');
-                    findAllElementsInShadows(card, 'div').forEach(div => {
-                        div.style.setProperty('background-color', 'moccasin', 'important');
-                    });
+                    return;
                 }
-                Log.info('UI.ContactCard', `[緩存命中] 聯繫人卡片高亮規則已應用。`);
 
-                if (cachedData.accountStatus === 'SUSPENDED') {
-                    findAndDisablePickupButton();
-                }
-                return;
-            }
-
-            const container = card.closest('div.cCEC_ContactPersonAccount');
-            if (container) {
-                const hiddenContainer = findElementInShadows_Aggressive(container, '.slds-grid.slds-wrap.slds-hide');
-                if (hiddenContainer) {
-                    hiddenContainer.classList.remove('slds-hide');
-                }
-            }
-
-            let isPreferred = true;
-            let accountStatus = 'NOT_FOUND';
-
-            try {
-                const allLabels = findAllElementsInShadows(card, 'span.slds-form-element__label');
-                for (const label of allLabels) {
-                    const labelText = label.textContent.trim();
-                    let currentParent = label.parentElement;
-                    let valueElement = null;
-                    let searchDepth = 0;
-
-                    while (currentParent && searchDepth < 5 && !valueElement) {
-                        valueElement = findElementInShadows(currentParent, '.slds-form-element__static');
-                        currentParent = currentParent.parentElement;
-                        searchDepth++;
-                    }
-
-                    if (valueElement) {
-                        const valueText = valueElement.textContent.trim();
-                        if (labelText === 'Preferred') {
-                            const lowerCaseValue = valueText.toLowerCase();
-                            if (lowerCaseValue === 'yes' || lowerCaseValue === 'no') {
-                                isPreferred = (lowerCaseValue === 'yes');
-                            }
-                        } else if (labelText === 'Account Status') {
-                            accountStatus = valueText.toUpperCase();
-                        }
+                const pickupButton = findElementInShadows(document.body, 'button[title="Schedule a Pickup"]');
+                if (pickupButton) {
+                    buttonFound = true;
+                    clearInterval(intervalId);
+                    if (!pickupButton.disabled) {
+                        pickupButton.style.backgroundColor = 'red';
+                        pickupButton.style.color = 'white';
+                        pickupButton.disabled = true;
+                        Log.info('UI.ContactCard', `檢測到賬戶狀態為 "SUSPENDED"，已高亮並禁用 "Schedule a Pickup" 按鈕。`);
                     }
                 }
-            } catch (e) {
-                Log.warn('UI.ContactCard', `在 DOM 提取期間發生錯誤: ${e.message}`);
-            }
+            }, POLLING_INTERVAL_MS);
+        };
 
-            if (accountStatus === 'SUSPENDED') {
-                findAndDisablePickupButton();
-            }
+        if (cleanedLog[caseId]) {
+            const cachedData = cleanedLog[caseId];
+            const cachedIsPreferred = cachedData.isPreferred;
+            const shouldHighlight = (isPcaModeOn && !cachedIsPreferred) || (isDispatchModeOn && cachedIsPreferred);
 
-            cleanedLog[caseId] = {
-                isPreferred: isPreferred,
-                accountStatus: accountStatus,
-                timestamp: now
-            };
-            GM_setValue(PREFERRED_LOG_KEY, cleanedLog);
-
-            const shouldHighlight = (isPcaModeOn && !isPreferred) || (isDispatchModeOn && isPreferred);
             if (highlightMode !== 'off' && shouldHighlight) {
                 card.style.setProperty('background-color', 'moccasin', 'important');
                 findAllElementsInShadows(card, 'div').forEach(div => {
                     div.style.setProperty('background-color', 'moccasin', 'important');
                 });
             }
-            Log.info('UI.ContactCard', `[首次加載] 聯繫人卡片高亮規則已應用。`);
+            Log.info('UI.ContactCard', `[緩存命中] 聯繫人卡片高亮規則已應用。`);
+
+            if (cachedData.accountStatus === 'SUSPENDED') {
+                findAndDisablePickupButton();
+            }
+            return;
         }
 
-        /**
+        const container = card.closest('div.cCEC_ContactPersonAccount');
+        if (container) {
+            const hiddenContainer = findElementInShadows_Aggressive(container, '.slds-grid.slds-wrap.slds-hide');
+            if (hiddenContainer) {
+                hiddenContainer.classList.remove('slds-hide');
+            }
+        }
+
+        let isPreferred = true;
+        let accountStatus = 'NOT_FOUND';
+
+        try {
+            const allLabels = findAllElementsInShadows(card, 'span.slds-form-element__label');
+            for (const label of allLabels) {
+                const labelText = label.textContent.trim();
+                let currentParent = label.parentElement;
+                let valueElement = null;
+                let searchDepth = 0;
+
+                while (currentParent && searchDepth < 5 && !valueElement) {
+                    valueElement = findElementInShadows(currentParent, '.slds-form-element__static');
+                    currentParent = currentParent.parentElement;
+                    searchDepth++;
+                }
+
+                if (valueElement) {
+                    const valueText = valueElement.textContent.trim();
+                    if (labelText === 'Preferred') {
+                        const lowerCaseValue = valueText.toLowerCase();
+                        if (lowerCaseValue === 'yes' || lowerCaseValue === 'no') {
+                            isPreferred = (lowerCaseValue === 'yes');
+                        }
+                    } else if (labelText === 'Account Status') {
+                        accountStatus = valueText.toUpperCase();
+                    }
+                }
+            }
+        } catch (e) {
+            Log.warn('UI.ContactCard', `在 DOM 提取期間發生錯誤: ${e.message}`);
+        }
+
+        if (accountStatus === 'SUSPENDED') {
+            findAndDisablePickupButton();
+        }
+
+        cleanedLog[caseId] = {
+            isPreferred: isPreferred,
+            accountStatus: accountStatus,
+            timestamp: now
+        };
+        GM_setValue(PREFERRED_LOG_KEY, cleanedLog);
+
+        const shouldHighlight = (isPcaModeOn && !isPreferred) || (isDispatchModeOn && isPreferred);
+        if (highlightMode !== 'off' && shouldHighlight) {
+            card.style.setProperty('background-color', 'moccasin', 'important');
+            findAllElementsInShadows(card, 'div').forEach(div => {
+                div.style.setProperty('background-color', 'moccasin', 'important');
+            });
+        }
+        Log.info('UI.ContactCard', `[首次加載] 聯繫人卡片高亮規則已應用。`);
+    }
+
+    /**
     * @description 一個更激進的、不檢查可見性的 Shadow DOM 元素查找函數。
     * @param {Node} root - 開始搜索的根節點。
     * @param {string} selector - CSS選擇器。
     * @returns {HTMLElement|null} 找到的第一個元素，或 null。
     */
-        function findElementInShadows_Aggressive(root, selector) {
-            if (!root) return null;
-            if (root.shadowRoot) {
-                const el = findElementInShadows_Aggressive(root.shadowRoot, selector);
-                if (el) return el;
-            }
-            const el = root.querySelector(selector);
-            if (el) {
-                return el;
-            }
-            for (const child of root.querySelectorAll('*')) {
-                if (child.shadowRoot) {
-                    const nestedEl = findElementInShadows_Aggressive(child.shadowRoot, selector);
-                    if (nestedEl) return nestedEl;
-                }
-            }
-            return null;
+    function findElementInShadows_Aggressive(root, selector) {
+        if (!root) return null;
+        if (root.shadowRoot) {
+            const el = findElementInShadows_Aggressive(root.shadowRoot, selector);
+            if (el) return el;
         }
+        const el = root.querySelector(selector);
+        if (el) {
+            return el;
+        }
+        for (const child of root.querySelectorAll('*')) {
+            if (child.shadowRoot) {
+                const nestedEl = findElementInShadows_Aggressive(child.shadowRoot, selector);
+                if (nestedEl) return nestedEl;
+            }
+        }
+        return null;
+    }
 
-        /**
+    /**
     * @description 如果用戶啟用了屏蔽功能，則攔截並移除原生的IVP卡片內容（iframe）。
     * @param {HTMLElement} cardElement - IVP卡片的容器元素。
     */
-        function handleIVPCardBlocking(cardElement) {
-            const shouldBlock = GM_getValue('blockIVPCard', DEFAULTS.blockIVPCard);
-            if (!shouldBlock) return;
-            if (cardElement.dataset.ivpObserverAttached === 'true') {
-                return;
-            }
-            cardElement.dataset.ivpObserverAttached = 'true';
-            const ivpState = {
-                iframe: null,
-                parent: null,
-                isReady: false
-            };
-            const relaunchButton = findElementInShadows(cardElement, 'button[title="Relauch IVP"]');
-            if (relaunchButton) {
-                relaunchButton.disabled = false;
-                relaunchButton.addEventListener('click', (event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    if (ivpState.isReady) {
-                        if (ivpState.parent.contains(ivpState.iframe)) {
-                            try {
-                                ivpState.iframe.src = ivpState.iframe.src;
-                            } catch (e) {
-                                // 忽略錯誤
-                            }
-                        } else {
-                            ivpState.parent.appendChild(ivpState.iframe);
-                            Log.info('Feature.IVP', `已恢復被攔截的 IVP 內容。`);
+    function handleIVPCardBlocking(cardElement) {
+        const shouldBlock = GM_getValue('blockIVPCard', DEFAULTS.blockIVPCard);
+        if (!shouldBlock) return;
+        if (cardElement.dataset.ivpObserverAttached === 'true') {
+            return;
+        }
+        cardElement.dataset.ivpObserverAttached = 'true';
+        const ivpState = {
+            iframe: null,
+            parent: null,
+            isReady: false
+        };
+        const relaunchButton = findElementInShadows(cardElement, 'button[title="Relauch IVP"]');
+        if (relaunchButton) {
+            relaunchButton.disabled = false;
+            relaunchButton.addEventListener('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                if (ivpState.isReady) {
+                    if (ivpState.parent.contains(ivpState.iframe)) {
+                        try {
+                            ivpState.iframe.src = ivpState.iframe.src;
+                        } catch (e) {
+                            // 忽略錯誤
                         }
+                    } else {
+                        ivpState.parent.appendChild(ivpState.iframe);
+                        Log.info('Feature.IVP', `已恢復被攔截的 IVP 內容。`);
                     }
-                }, true);
+                }
+            }, true);
+        }
+        const findIframeBulldozer = (root) => {
+            let iframe = root.querySelector('iframe');
+            if (iframe) return iframe;
+            const descendants = root.querySelectorAll('*');
+            for (const el of descendants) {
+                if (el.shadowRoot) {
+                    iframe = el.shadowRoot.querySelector('iframe');
+                    if (iframe) return iframe;
+                }
             }
-            const findIframeBulldozer = (root) => {
-                let iframe = root.querySelector('iframe');
-                if (iframe) return iframe;
-                const descendants = root.querySelectorAll('*');
-                for (const el of descendants) {
-                    if (el.shadowRoot) {
-                        iframe = el.shadowRoot.querySelector('iframe');
-                        if (iframe) return iframe;
-                    }
-                }
-                return null;
-            };
-            const findAndStoreTask = () => {
-                const iframe = findIframeBulldozer(cardElement);
-                if (iframe) {
-                    ivpState.iframe = iframe;
-                    ivpState.parent = iframe.parentElement;
-                    ivpState.isReady = true;
-                    iframe.remove();
-                    Log.info('Feature.IVP', `原生 IVP 卡片已被成功攔截並隱藏。`);
-                    return true;
-                }
-                return false;
-            };
-            const localObserver = new MutationObserver(() => {
-                if (findAndStoreTask()) {
-                    localObserver.disconnect();
-                    clearTimeout(timeoutHandle);
-                }
-            });
-            const timeoutHandle = setTimeout(() => {
-                PageResourceRegistry.addTimeout(timeoutHandle);
-                localObserver.disconnect();
-                if (!findAndStoreTask()) {
-                    Log.warn('Feature.IVP', `攔截 IVP 卡片時，等待 iframe 超時。`);
-                }
-            }, 15000); // 15000ms: 等待 iframe 出現的超時。
-            localObserver.observe(cardElement, {
-                childList: true,
-                subtree: true
-            });
+            return null;
+        };
+        const findAndStoreTask = () => {
+            const iframe = findIframeBulldozer(cardElement);
+            if (iframe) {
+                ivpState.iframe = iframe;
+                ivpState.parent = iframe.parentElement;
+                ivpState.isReady = true;
+                iframe.remove();
+                Log.info('Feature.IVP', `原生 IVP 卡片已被成功攔截並隱藏。`);
+                return true;
+            }
+            return false;
+        };
+        const localObserver = new MutationObserver(() => {
             if (findAndStoreTask()) {
                 localObserver.disconnect();
                 clearTimeout(timeoutHandle);
             }
+        });
+        const timeoutHandle = setTimeout(() => {
+            PageResourceRegistry.addTimeout(timeoutHandle);
+            localObserver.disconnect();
+            if (!findAndStoreTask()) {
+                Log.warn('Feature.IVP', `攔截 IVP 卡片時，等待 iframe 超時。`);
+            }
+        }, 15000); // 15000ms: 等待 iframe 出現的超時。
+        localObserver.observe(cardElement, {
+            childList: true,
+            subtree: true
+        });
+        if (findAndStoreTask()) {
+            localObserver.disconnect();
+            clearTimeout(timeoutHandle);
         }
+    }
 
-        /**
+    /**
     * @description 執行自動指派的核心邏輯，包括所有者驗證、緩存檢查和點擊操作。
     * @param {string} 當前用Case ID作緩存鍵。
     * @param {boolean} [isCachedCase=false] - 是否為緩存命中模式，此模式下僅應用視覺反饋。
     */
-        async function handleAutoAssign(caseUrl, isCachedCase = false) {
-            const ASSIGNMENT_CACHE_KEY = 'assignmentLog';
-            const caseId = getCaseIdFromUrl(caseUrl);
-            if (!caseId) {
-                Log.error('Feature.AutoAssign', `無法從 URL (${caseUrl}) 提取 Case ID，自動指派緩存操作已中止。`);
-                return;
-            }
-            const findOwnerBlockWithRetry = (timeout = 15000) => { // 15000ms: 等待 "Case Owner" 信息塊出現的超時。
-                return new Promise((resolve, reject) => {
-                    const startTime = Date.now();
-                    const interval = setInterval(() => {
-                        if (Date.now() - startTime > timeout) {
-                            clearInterval(interval);
-                            reject(new Error(`在${timeout/1000}秒內等待 "Case Owner" 信息塊超時。`));
-                            return;
-                        }
-                        const allHighlightItems = findAllElementsInShadows(document.body, 'records-highlights-details-item');
-                        for (const item of allHighlightItems) {
-                            const titleElement = findElementInShadows(item, 'p.slds-text-title');
-                            if (titleElement && (titleElement.getAttribute('title') === 'Case Owner' || titleElement.innerText.trim() === 'Case Owner')) {
-                                clearInterval(interval);
-                                resolve(item);
-                                return;
-                            }
-                        }
-                    }, 500); // 500ms: 輪詢間隔。
-                });
-            };
-            try {
-                if (isCachedCase) {
-                    try {
-                        const assignButton = await waitForElementWithObserver(document.body, 'button[title="Assign Case to Me"]', 10000); // 10000ms: 等待指派按鈕出現的超時。
-                        if (assignButton && !assignButton.disabled) {
-                            assignButton.style.setProperty('background-color', '#0070d2', 'important');
-                            assignButton.style.setProperty('color', '#fff', 'important');
-                        }
-                    } catch (error) {
-                        // 忽略錯誤
-                    }
-                    return;
-                }
-                Log.info('Feature.AutoAssign', `自動指派流程啟動。`);
-                const targetUser = GM_getValue('autoAssignUser', DEFAULTS.autoAssignUser);
-                if (!targetUser) {
-                    Log.warn('Feature.AutoAssign', `未設置目標用戶名，自動指派功能已禁用。`);
-                    return;
-                }
-                let ownerBlock;
-                try {
-                    ownerBlock = await findOwnerBlockWithRetry();
-                } catch (err) {
-                    return;
-                }
-                let ownerElement, currentOwner;
-                try {
-                    const preciseOwnerSelector = 'force-owner-lookup .owner-name span';
-                    ownerElement = await waitForElementWithObserver(ownerBlock, preciseOwnerSelector, 10000); // 10000ms: 等待所有者姓名元素出現的超時。
-                    currentOwner = ownerElement?.innerText?.trim() || '';
-                } catch (err) {
-                    Log.error('Feature.AutoAssign', `查找 "Case Owner" 姓名元素時發生錯誤或超時。`);
-                    return;
-                }
-                if (!currentOwner) {
-                    return;
-                }
-                if (currentOwner.toLowerCase() !== targetUser.toLowerCase()) {
-                    Log.info('Feature.AutoAssign', `Owner "${currentOwner}" 與目標用戶 "${targetUser}" 不匹配。`);
-                    return;
-                }
-                let assignButton;
-                try {
-                    assignButton = await waitForElementWithObserver(document.body, 'button[title="Assign Case to Me"]', 100000); // 100000ms: 等待指派按鈕出現的超時。
-                } catch (err) {
-                    Log.error('Feature.AutoAssign', `查找 "Assign Case to Me" 按鈕時發生錯誤或超時。`);
-                    return;
-                }
-                if (assignButton && !assignButton.disabled) {
-                    await new Promise(resolve => setTimeout(resolve, 300)); // 300ms: 點擊前的短暫延遲，確保UI穩定。
-                    assignButton.click();
-                    assignButton.style.setProperty('background-color', '#0070d2', 'important');
-                    assignButton.style.setProperty('color', '#fff', 'important');
-                    const cache = GM_getValue(ASSIGNMENT_CACHE_KEY, {});
-                    const CACHE_TTL = 10 * 60 * 60 * 1000; // 60分鐘: 指派成功記錄的緩存有效期。// 10小時
-                    // [修改] 使用 caseId 作為緩存 key
-                    cache[caseId] = {
-                        timestamp: Date.now()
-                    };
-                    GM_setValue(ASSIGNMENT_CACHE_KEY, cache);
-                    Log.info('Feature.AutoAssign', `自動指派成功 (Case ID: ${caseId})，已點擊 "Assign Case to Me" 按鈕並更新緩存。`);
-
-                    setTimeout(() => {
-                        Log.info('Feature.AutoAssign', `8秒後執行高亮狀態重新檢查。`);
-                        checkAndColorComposeButton();
-                    }, 8000); // 8000ms: 指派成功後，等待足夠時間讓後端和UI更新，然後重新檢查計時器狀態。
-                } else {
-                    Log.warn('Feature.AutoAssign', `"Assign Case to Me" 按鈕不存在或處於禁用狀態。`);
-                }
-            } catch (outerErr) {
-                Log.error('Feature.AutoAssign', `執行自動指派時發生未知外部錯誤: ${outerErr.message}`);
-            }
+    async function handleAutoAssign(caseUrl, isCachedCase = false) {
+        const ASSIGNMENT_CACHE_KEY = 'assignmentLog';
+        const caseId = getCaseIdFromUrl(caseUrl);
+        if (!caseId) {
+            Log.error('Feature.AutoAssign', `無法從 URL (${caseUrl}) 提取 Case ID，自動指派緩存操作已中止。`);
+            return;
         }
-
-        /**
-    * @description 處理 "Associate Contact" 彈窗，對表格列進行重新排序，並高亮匹配的賬戶行。
-    * @param {HTMLElement} modal - 彈窗的容器元素。
-    */
-        function processAssociateContactModal(modal) {
-            if (processedModals.has(modal)) {
-                return;
-            }
-            let contactSentinel = null;
-            const cleanupObserver = new MutationObserver((mutations) => {
-                for (const mutation of mutations) {
-                    for (const removedNode of mutation.removedNodes) {
-                        if (removedNode === modal || removedNode.contains(modal)) {
-                            if (contactSentinel) contactSentinel.disconnect();
-                            processedModals.delete(modal);
-                            cleanupObserver.disconnect();
+        const findOwnerBlockWithRetry = (timeout = 15000) => { // 15000ms: 等待 "Case Owner" 信息塊出現的超時。
+            return new Promise((resolve, reject) => {
+                const startTime = Date.now();
+                const interval = setInterval(() => {
+                    if (Date.now() - startTime > timeout) {
+                        clearInterval(interval);
+                        reject(new Error(`在${timeout/1000}秒內等待 "Case Owner" 信息塊超時。`));
+                        return;
+                    }
+                    const allHighlightItems = findAllElementsInShadows(document.body, 'records-highlights-details-item');
+                    for (const item of allHighlightItems) {
+                        const titleElement = findElementInShadows(item, 'p.slds-text-title');
+                        if (titleElement && (titleElement.getAttribute('title') === 'Case Owner' || titleElement.innerText.trim() === 'Case Owner')) {
+                            clearInterval(interval);
+                            resolve(item);
                             return;
                         }
                     }
+                }, 500); // 500ms: 輪詢間隔。
+            });
+        };
+        try {
+            if (isCachedCase) {
+                try {
+                    const assignButton = await waitForElementWithObserver(document.body, 'button[title="Assign Case to Me"]', 10000); // 10000ms: 等待指派按鈕出現的超時。
+                    if (assignButton && !assignButton.disabled) {
+                        assignButton.style.setProperty('background-color', '#0070d2', 'important');
+                        assignButton.style.setProperty('color', '#fff', 'important');
+                    }
+                } catch (error) {
+                    // 忽略錯誤
                 }
-            });
-            cleanupObserver.observe(document.body, {
-                childList: true,
-                subtree: true
-            });
-            modal.style.visibility = 'hidden';
+                return;
+            }
+            Log.info('Feature.AutoAssign', `自動指派流程啟動。`);
+            const targetUser = GM_getValue('autoAssignUser', DEFAULTS.autoAssignUser);
+            if (!targetUser) {
+                Log.warn('Feature.AutoAssign', `未設置目標用戶名，自動指派功能已禁用。`);
+                return;
+            }
+            let ownerBlock;
             try {
-                const table = modal.querySelector('table');
-                if (!table) return;
-                const headerRow = table.querySelector('thead tr');
-                const tableBody = table.querySelector('tbody');
-                if (!headerRow || !tableBody) return;
-                const labelToOriginalIndexMap = new Map();
-                const originalHeaders = Array.from(headerRow.children);
-                originalHeaders.forEach((h, i) => {
-                    const l = h.getAttribute('aria-label') || (h.getAttribute('data-col-key-value')?.split('-')[0] === 'Link' ? 'Link Contact' : null);
-                    if (l) labelToOriginalIndexMap.set(l, i);
-                });
-                const setModalMaxHeight = (m) => {
-                    m.style.maxHeight = '80vh';
-                    m.style.overflowY = 'auto';
+                ownerBlock = await findOwnerBlockWithRetry();
+            } catch (err) {
+                return;
+            }
+            let ownerElement, currentOwner;
+            try {
+                const preciseOwnerSelector = 'force-owner-lookup .owner-name span';
+                ownerElement = await waitForElementWithObserver(ownerBlock, preciseOwnerSelector, 10000); // 10000ms: 等待所有者姓名元素出現的超時。
+                currentOwner = ownerElement?.innerText?.trim() || '';
+            } catch (err) {
+                Log.error('Feature.AutoAssign', `查找 "Case Owner" 姓名元素時發生錯誤或超時。`);
+                return;
+            }
+            if (!currentOwner) {
+                return;
+            }
+            if (currentOwner.toLowerCase() !== targetUser.toLowerCase()) {
+                Log.info('Feature.AutoAssign', `Owner "${currentOwner}" 與目標用戶 "${targetUser}" 不匹配。`);
+                return;
+            }
+            let assignButton;
+            try {
+                assignButton = await waitForElementWithObserver(document.body, 'button[title="Assign Case to Me"]', 100000); // 100000ms: 等待指派按鈕出現的超時。
+            } catch (err) {
+                Log.error('Feature.AutoAssign', `查找 "Assign Case to Me" 按鈕時發生錯誤或超時。`);
+                return;
+            }
+            if (assignButton && !assignButton.disabled) {
+                await new Promise(resolve => setTimeout(resolve, 300)); // 300ms: 點擊前的短暫延遲，確保UI穩定。
+                assignButton.click();
+                assignButton.style.setProperty('background-color', '#0070d2', 'important');
+                assignButton.style.setProperty('color', '#fff', 'important');
+                const cache = GM_getValue(ASSIGNMENT_CACHE_KEY, {});
+                const CACHE_TTL = 10 * 60 * 60 * 1000; // 60分鐘: 指派成功記錄的緩存有效期。// 10小時
+                // [修改] 使用 caseId 作為緩存 key
+                cache[caseId] = {
+                    timestamp: Date.now()
                 };
-                const matchAndHighlightRow = (row) => {
-                    if (!foundTrackingNumber) return;
-                    const extractedValue = foundTrackingNumber.substring(2, 8);
-                    const accountCell = row.querySelector('td[data-label="Account Number"]');
-                    if (accountCell) {
-                        const accountValue = accountCell.getAttribute('data-cell-value') || accountCell.textContent.trim();
-                        if (accountValue && accountValue.replace(/^0+/, '') === extractedValue.replace(/^0+/, '')) {
-                            accountCell.style.backgroundColor = 'yellow';
-                            Log.info('UI.ContactModal', `"Associate Contact" 彈窗中匹配賬號 "${accountValue}" 的行已高亮。`);
-                        }
-                    }
-                };
-                const reorderRow = (row, isHeader = false) => {
-                    const cells = Array.from(row.children);
-                    const fragment = document.createDocumentFragment();
-                    fieldsInDesiredOrder.forEach(label => {
-                        if (labelToOriginalIndexMap.has(label)) {
-                            const originalIndex = labelToOriginalIndexMap.get(label);
-                            if (cells[originalIndex]) {
-                                fragment.appendChild(cells[originalIndex]);
-                            }
-                        }
-                    });
-                    row.innerHTML = '';
-                    row.appendChild(fragment);
-                    if (!isHeader) {
-                        matchAndHighlightRow(row);
-                    }
-                };
-                if (table.dataset.reordered !== 'true') {
-                    reorderRow(headerRow, true);
-                    Array.from(tableBody.querySelectorAll('tr')).forEach(row => reorderRow(row));
-                    table.dataset.reordered = 'true';
-                    Log.info('UI.ContactModal', `"Associate Contact" 彈窗表格已按預設順序重新排列。`);
-                }
-                const obs = new MutationObserver((mutations) => {
-                    if (isScriptPaused) return;
-                    mutations.forEach(mutation => {
-                        mutation.addedNodes.forEach(node => {
-                            if (node.nodeType === 1 && node.tagName === 'TR') {
-                                reorderRow(node);
+                GM_setValue(ASSIGNMENT_CACHE_KEY, cache);
+                Log.info('Feature.AutoAssign', `自動指派成功 (Case ID: ${caseId})，已點擊 "Assign Case to Me" 按鈕並更新緩存。`);
+
+                setTimeout(() => {
+                    Log.info('Feature.AutoAssign', `8秒後執行高亮狀態重新檢查。`);
+                    checkAndColorComposeButton();
+                }, 8000); // 8000ms: 指派成功後，等待足夠時間讓後端和UI更新，然後重新檢查計時器狀態。
+            } else {
+                Log.warn('Feature.AutoAssign', `"Assign Case to Me" 按鈕不存在或處於禁用狀態。`);
+            }
+        } catch (outerErr) {
+            Log.error('Feature.AutoAssign', `執行自動指派時發生未知外部錯誤: ${outerErr.message}`);
+        }
+    }
+
+    /**
+        * @description 處理 "Associate Contact" 彈窗。
+        *              [修復版 V7]
+        *              1. 修復點擊複製後無法還原原始文本的 Bug。
+        *              2. [新增] 排除編輯圖標 (pencil icon) 的點擊，避免誤觸發複製。
+        * @param {HTMLElement} modal - 彈窗的容器元素。
+        */
+    function processAssociateContactModal(modal) {
+        if (processedModals.has(modal)) return;
+
+        // 1. 定義觸發關閉的邏輯
+        const triggerCloseSequence = () => {
+            Log.info('UI.ContactModal', '檢測到 Link 按鈕狀態改變 (Sentinel Triggered)。');
+            waitForElementWithObserver(document.body, 'article.cCEC_ContactSummary', 15000)
+                .then(card => processContactCard(card))
+                .catch(() => {});
+
+            if (GM_getValue('sentinelCloseEnabled', DEFAULTS.sentinelCloseEnabled)) {
+                setTimeout(() => {
+                    const selectors = ['.uiModal', '.slds-modal', '.slds-backdrop', '.cCEC_ModalLinkAccount'];
+                    selectors.forEach(sel => {
+                        document.querySelectorAll(sel).forEach(el => {
+                            if (getComputedStyle(el).display !== 'none') {
+                                el.style.setProperty('display', 'none', 'important');
                             }
                         });
                     });
-                });
-                obs.observe(tableBody, {
-                    childList: true
-                });
-                setModalMaxHeight(modal);
-                processedModals.add(modal);
-                contactSentinel = deployLinkContactSentinel(modal);
-            } catch (error) {
-                Log.error('UI.ContactModal', `處理 "Associate Contact" 彈窗時出錯: ${error.message}`);
-            } finally {
-                requestAnimationFrame(() => {
-                    modal.style.visibility = 'visible';
-                });
+                    Log.info('UI.ContactModal', '已執行全局強制隱藏。');
+                }, 500);
             }
-        }
+        };
 
-        /**
-    * @description 部署一個哨兵觀察器，在用戶成功關聯聯繫人後觸發後續操作（如快速關閉窗口）。
-    * @param {HTMLElement} modal - 正在觀察的彈窗元素。
-    * @returns {MutationObserver} 創建的觀察器實例。
-    */
-        function deployLinkContactSentinel(modal) {
-            const sentinel = new MutationObserver((mutations) => {
-                if (isScriptPaused) return;
-                for (const mutation of mutations) {
-                    if (mutation.type === 'attributes') {
-                        const target = mutation.target;
-                        const element = target.getAttribute('data-whatelement');
-                        const classes = target.getAttribute('data-whatclasses');
-                        if (element === 'button' && classes && classes.includes('slds-button_brand')) {
-                            sentinel.disconnect();
-                            waitForElementWithObserver(document.body, 'article.cCEC_ContactSummary', 15000) // 15000ms: 等待聯繫人卡片更新的超時。
-                                .then(card => {
-                                processContactCard(card);
-                            }).catch(error => {
-                                // 忽略錯誤
-                            });
-                            if (GM_getValue('sentinelCloseEnabled', DEFAULTS.sentinelCloseEnabled)) {
-                                setTimeout(() => {
-                                    const modalToClose = document.querySelector('div.cCEC_ModalLinkAccount');
-                                    if (modalToClose) {
-                                        modalToClose.style.display = 'none';
-                                    }
-                                }, 500); // 500ms: 關聯成功後關閉窗口的延遲，提供視覺反饋時間。
-                            }
-                            return;
-                        }
+        // 2. 創建範圍哨兵
+        const scopedSentinel = new MutationObserver((mutations) => {
+            for (const mutation of mutations) {
+                if (mutation.type === 'attributes' && mutation.target.tagName === 'BUTTON') {
+                    const btn = mutation.target;
+                    if (btn.classList.contains('slds-button_brand')) {
+                        triggerCloseSequence();
+                        scopedSentinel.disconnect();
+                        return;
                     }
                 }
+            }
+        });
+
+        scopedSentinel.observe(modal, {
+            attributes: true,
+            subtree: true,
+            attributeFilter: ['class', 'disabled', 'data-aura-class']
+        });
+
+        // 3. 清理邏輯
+        const cleanupObserver = new MutationObserver((mutations) => {
+            for (const mutation of mutations) {
+                for (const removedNode of mutation.removedNodes) {
+                    if (removedNode === modal || removedNode.contains(modal)) {
+                        processedModals.delete(modal);
+                        scopedSentinel.disconnect();
+                        cleanupObserver.disconnect();
+                        return;
+                    }
+                }
+            }
+        });
+        cleanupObserver.observe(document.body, { childList: true, subtree: true });
+
+        // 4. 表格 UI 優化
+        modal.style.visibility = 'hidden';
+        try {
+            const table = modal.querySelector('table');
+            if (!table) return;
+            const headerRow = table.querySelector('thead tr');
+            const tableBody = table.querySelector('tbody');
+            if (!headerRow || !tableBody) return;
+
+            const labelToOriginalIndexMap = new Map();
+            const originalHeaders = Array.from(headerRow.children);
+            originalHeaders.forEach((h, i) => {
+                const l = h.getAttribute('aria-label') || (h.getAttribute('data-col-key-value')?.split('-')[0] === 'Link' ? 'Link Contact' : null);
+                if (l) labelToOriginalIndexMap.set(l, i);
             });
-            sentinel.observe(document.documentElement, {
-                attributes: true,
-                attributeFilter: ['data-whatelement', 'data-whatclasses']
-            });
-            return sentinel;
-        }
 
-        /**
-    * @description 檢查計時器狀態，如果案件已超期，則將 "Compose" 按鈕標紅。
-    */
-        function checkAndColorComposeButton() {
-            const MAX_ATTEMPTS = 20;
-            const POLL_INTERVAL_MS = 500; // 500ms: 輪詢間隔。
-            let attempts = 0;
+            const setModalMaxHeight = (m) => {
+                m.style.maxHeight = '80vh';
+                m.style.overflowY = 'auto';
+            };
 
-            const poller = setInterval(() => {
-                PageResourceRegistry.addInterval(poller);
-                const composeButton = findElementInShadows(document.body, "button.testid__dummy-button-submit-action");
+            const matchAndHighlightRow = (row) => {
+                if (!foundTrackingNumber) return;
+                const extractedValue = foundTrackingNumber.substring(2, 8);
+                const accountCell = row.querySelector('td[data-label="Account Number"]');
+                if (accountCell) {
+                    const accountValue = accountCell.getAttribute('data-cell-value') || accountCell.textContent.trim();
+                    if (accountValue && accountValue.replace(/^0+/, '') === extractedValue.replace(/^0+/, '')) {
+                        accountCell.style.backgroundColor = 'yellow';
+                    }
+                }
+            };
 
-                if (composeButton || attempts >= MAX_ATTEMPTS) {
-                    clearInterval(poller);
+            // 確保點擊修改圖標時絕對不觸發複製
+            const applyClickToCopy = (cell) => {
+                if (cell.dataset.copyBound === 'true') return;
+                cell.dataset.copyBound = 'true';
 
-                    if (!composeButton) {
-                        Log.warn('UI.ButtonAlert', '"Compose" 按鈕高亮檢查終止，在 10 秒內未找到按鈕元素。');
+                cell.style.cursor = 'pointer';
+                cell.title = '點擊文字進行複製';
+
+                cell.addEventListener('click', (e) => {
+                    // 1. [終極過濾] 檢查事件冒泡路徑
+                    // 使用 composedPath 穿透 Shadow DOM，獲取點擊經過的所有節點
+                    const path = e.composedPath();
+                    const isEditAction = path.some(node => {
+                        if (node.nodeType !== 1) return false; // 過濾非元素節點
+
+                        return (
+                            node.classList.contains('slds-cell-edit__button') || // 標準編輯按鈕類
+                            node.getAttribute('data-key') === 'edit' ||          // 修改圖標特徵
+                            node.tagName === 'BUTTON' ||                         // 所有的按鈕容器
+                            node.tagName === 'LIGHTNING-PRIMITIVE-ICON'          // 圖標組件
+                        );
+                    });
+
+                    // 如果判定為編輯動作，直接退出，交由 Salesforce 原生邏輯處理
+                    if (isEditAction) {
                         return;
                     }
 
-                    const timerTextEl = findElementInShadows(document.body, ".milestoneTimerText");
-                    const isOverdue = timerTextEl && timerTextEl.textContent.includes("overdue");
-                    const isAlreadyRed = composeButton.style.backgroundColor === "red";
+                    // 2. 只有確定不是點擊圖標後，才阻止冒泡
+                    e.stopPropagation();
 
-                    if (isOverdue && !isAlreadyRed) {
-                        composeButton.style.backgroundColor = "red";
-                        composeButton.style.color = "white";
-                        Log.info('UI.ButtonAlert', `"Compose" 按鈕已因計時器超期標紅。`);
-                    } else if (!isOverdue && isAlreadyRed) {
-                        composeButton.style.backgroundColor = "";
-                        composeButton.style.color = "";
+                    // 3. 獲取原始數據
+                    const stableValue = cell.getAttribute('data-cell-value') || cell.textContent.trim();
+
+                    // 4. 執行複製與懸浮提示 (保持 V9 穩定的 UI 邏輯)
+                    navigator.clipboard.writeText(stableValue).then(() => {
+                        const tip = document.createElement('span');
+                        tip.textContent = '已複製！';
+
+                        Object.assign(tip.style, {
+                            position: 'fixed',
+                            left: `${e.clientX - 20}px`,
+                            top: `${e.clientY - 25}px`,
+                            backgroundColor: '#0070d2',
+                            color: '#ffffff',
+                            padding: '2px 8px',
+                            borderRadius: '4px',
+                            fontSize: '12px',
+                            fontWeight: 'bold',
+                            zIndex: '10000',
+                            pointerEvents: 'none',
+                            transition: 'opacity 0.3s, transform 0.3s',
+                            boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
+                            transform: 'translateY(0)'
+                        });
+
+                        document.body.appendChild(tip);
+
+                        requestAnimationFrame(() => {
+                            tip.style.opacity = '1';
+                            tip.style.transform = 'translateY(-10px)';
+                        });
+
+                        setTimeout(() => {
+                            tip.style.opacity = '0';
+                            setTimeout(() => tip.remove(), 300);
+                        }, 500);
+
+                        Log.info('UI.ContactModal', `精準複製成功: ${stableValue}`);
+                    }).catch(err => {
+                        Log.error('UI.ContactModal', `複製失敗: ${err}`);
+                    });
+                });
+            };
+
+            const reorderRow = (row, isHeader = false) => {
+                const cells = Array.from(row.children);
+                const fragment = document.createDocumentFragment();
+
+                fieldsInDesiredOrder.forEach(label => {
+                    if (labelToOriginalIndexMap.has(label)) {
+                        const originalIndex = labelToOriginalIndexMap.get(label);
+                        const cell = cells[originalIndex];
+
+                        if (cell) {
+                            if (!isHeader && (label === 'First Name' || label === 'Last Name')) {
+                                applyClickToCopy(cell);
+                            }
+                            fragment.appendChild(cell);
+                        }
                     }
-                }
-                attempts++;
-            }, POLL_INTERVAL_MS);
-        }
+                });
 
-        /**
+                row.innerHTML = '';
+                row.appendChild(fragment);
+
+                if (!isHeader) {
+                    matchAndHighlightRow(row);
+                }
+            };
+
+            if (table.dataset.reordered !== 'true') {
+                reorderRow(headerRow, true);
+                Array.from(tableBody.querySelectorAll('tr')).forEach(row => reorderRow(row));
+                table.dataset.reordered = 'true';
+                Log.info('UI.ContactModal', `"Associate Contact" 彈窗表格已按預設順序重新排列。`);
+            }
+
+            const obs = new MutationObserver((mutations) => {
+                if (isScriptPaused) return;
+                mutations.forEach(mutation => {
+                    mutation.addedNodes.forEach(node => {
+                        if (node.nodeType === 1 && node.tagName === 'TR') {
+                            reorderRow(node);
+                        }
+                    });
+                });
+            });
+            obs.observe(tableBody, { childList: true });
+
+            setModalMaxHeight(modal);
+            processedModals.add(modal);
+
+        } catch (error) {
+            Log.error('UI.ContactModal', `處理 "Associate Contact" 彈窗時出錯: ${error.message}`);
+            scopedSentinel.disconnect();
+        } finally {
+            requestAnimationFrame(() => {
+                modal.style.visibility = 'visible';
+            });
+        }
+    }
+
+    /**
+    * @description 檢查計時器狀態，如果案件已超期，則將 "Compose" 按鈕標紅。
+    */
+    function checkAndColorComposeButton() {
+        const MAX_ATTEMPTS = 20;
+        const POLL_INTERVAL_MS = 500; // 500ms: 輪詢間隔。
+        let attempts = 0;
+
+        const poller = setInterval(() => {
+            PageResourceRegistry.addInterval(poller);
+            const composeButton = findElementInShadows(document.body, "button.testid__dummy-button-submit-action");
+
+            if (composeButton || attempts >= MAX_ATTEMPTS) {
+                clearInterval(poller);
+
+                if (!composeButton) {
+                    Log.warn('UI.ButtonAlert', '"Compose" 按鈕高亮檢查終止，在 10 秒內未找到按鈕元素。');
+                    return;
+                }
+
+                const timerTextEl = findElementInShadows(document.body, ".milestoneTimerText");
+                const isOverdue = timerTextEl && timerTextEl.textContent.includes("overdue");
+                const isAlreadyRed = composeButton.style.backgroundColor === "red";
+
+                if (isOverdue && !isAlreadyRed) {
+                    composeButton.style.backgroundColor = "red";
+                    composeButton.style.color = "white";
+                    Log.info('UI.ButtonAlert', `"Compose" 按鈕已因計時器超期標紅。`);
+                } else if (!isOverdue && isAlreadyRed) {
+                    composeButton.style.backgroundColor = "";
+                    composeButton.style.color = "";
+                }
+            }
+            attempts++;
+        }, POLL_INTERVAL_MS);
+    }
+
+    /**
     * @description 檢查是否存在關聯案件，如果存在，則將 "Associate Contact" 按鈕標紅。
     */
-        function checkAndColorAssociateButton() {
-            const relatedCasesTab = findElementInShadows(document.body, 'li[data-label^="Related Cases ("]');
-            const associateButton = findElementInShadows(document.body, 'button[title="Associate Contact"]');
-            if (!associateButton) return;
-            const hasRelatedCases = relatedCasesTab && relatedCasesTab.getAttribute("title") !== "Related Cases (0)";
-            const isAlreadyRed = associateButton.style.backgroundColor === "red";
-            if (hasRelatedCases && !isAlreadyRed) {
-                associateButton.style.backgroundColor = "red";
-                Log.info('UI.ButtonAlert', `"Associate Contact" 按鈕已因存在關聯案件標紅。`);
-            } else if (!hasRelatedCases && isAlreadyRed) {
-                associateButton.style.backgroundColor = "";
-            }
+    function checkAndColorAssociateButton() {
+        const relatedCasesTab = findElementInShadows(document.body, 'li[data-label^="Related Cases ("]');
+        const associateButton = findElementInShadows(document.body, 'button[title="Associate Contact"]');
+        if (!associateButton) return;
+        const hasRelatedCases = relatedCasesTab && relatedCasesTab.getAttribute("title") !== "Related Cases (0)";
+        const isAlreadyRed = associateButton.style.backgroundColor === "red";
+        if (hasRelatedCases && !isAlreadyRed) {
+            associateButton.style.backgroundColor = "red";
+            Log.info('UI.ButtonAlert', `"Associate Contact" 按鈕已因存在關聯案件標紅。`);
+        } else if (!hasRelatedCases && isAlreadyRed) {
+            associateButton.style.backgroundColor = "";
         }
+    }
 
-        /**
+    /**
     * @description 異步確定當前 Case 的狀態（打開、關閉或未知）。
     * @returns {Promise<'ACTIVE_OR_NEW'|'CLOSED'|'UNKNOWN'>} 解析為案件狀態的字符串。
     */
-        function determineCaseStatus() {
-            return new Promise((resolve) => {
-                const checkStatus = () => {
-                    const highlightItems = findAllElementsInShadows(document.body, 'records-highlights-details-item');
-                    for (const item of highlightItems) {
-                        const fullText = item.innerText;
-                        if (fullText && fullText.includes('Current Status')) {
-                            if (fullText.includes('In Progress') || fullText.includes('New')) {
-                                return 'ACTIVE_OR_NEW';
-                            }
-                            if (fullText.includes('Closed')) {
-                                return 'CLOSED';
-                            }
+    function determineCaseStatus() {
+        return new Promise((resolve) => {
+            const checkStatus = () => {
+                const highlightItems = findAllElementsInShadows(document.body, 'records-highlights-details-item');
+                for (const item of highlightItems) {
+                    const fullText = item.innerText;
+                    if (fullText && fullText.includes('Current Status')) {
+                        if (fullText.includes('In Progress') || fullText.includes('New')) {
+                            return 'ACTIVE_OR_NEW';
+                        }
+                        if (fullText.includes('Closed')) {
+                            return 'CLOSED';
                         }
                     }
-                    return null;
-                };
-
-                const initialStatus = checkStatus();
-                if (initialStatus) {
-                    Log.info('Feature.AutoAssign', `Case 狀態已確定: ${initialStatus}`);
-                    resolve(initialStatus);
-                    return;
                 }
+                return null;
+            };
 
-                const timeout = 15000; // 15000ms: 等待狀態字段出現的超時。
-                let timeoutHandle = setTimeout(() => {
+            const initialStatus = checkStatus();
+            if (initialStatus) {
+                Log.info('Feature.AutoAssign', `Case 狀態已確定: ${initialStatus}`);
+                resolve(initialStatus);
+                return;
+            }
+
+            const timeout = 15000; // 15000ms: 等待狀態字段出現的超時。
+            let timeoutHandle = setTimeout(() => {
+                observer.disconnect();
+                Log.error('Feature.AutoAssign', `確定 Case 狀態時超時或失敗。`);
+                resolve('UNKNOWN');
+            }, timeout);
+
+            const observer = new MutationObserver(() => {
+                if (isScriptPaused) return;
+                const currentStatus = checkStatus();
+                if (currentStatus) {
+                    clearTimeout(timeoutHandle);
                     observer.disconnect();
-                    Log.error('Feature.AutoAssign', `確定 Case 狀態時超時或失敗。`);
-                    resolve('UNKNOWN');
-                }, timeout);
-
-                const observer = new MutationObserver(() => {
-                    if (isScriptPaused) return;
-                    const currentStatus = checkStatus();
-                    if (currentStatus) {
-                        clearTimeout(timeoutHandle);
-                        observer.disconnect();
-                        Log.info('Feature.AutoAssign', `Case 狀態已確定: ${currentStatus}`);
-                        resolve(currentStatus);
-                    }
-                });
-
-                observer.observe(document.body, {
-                    childList: true,
-                    subtree: true
-                });
+                    Log.info('Feature.AutoAssign', `Case 狀態已確定: ${currentStatus}`);
+                    resolve(currentStatus);
+                }
             });
-        }
 
-        /**
+            observer.observe(document.body, {
+                childList: true,
+                subtree: true
+            });
+        });
+    }
+
+    /**
     * @description 檢查自動指派所需的關鍵字段是否全部為空。
     * @returns {Promise<boolean>} 如果三個指定字段的值同時為空，則返回 true (表示應中止)。
     */
-        async function areRequiredFieldsEmpty() {
-            const CHECK_TIMEOUT = 15000; // 15000ms: 檢查超時。
-            const POLL_INTERVAL = 300; // 300ms: 輪詢間隔。
-            const MIN_FIELDS_THRESHOLD = 3;
-            const fieldsToCheck = ['Substatus', 'Case Category', 'Case Sub Category'];
+    async function areRequiredFieldsEmpty() {
+        const CHECK_TIMEOUT = 15000; // 15000ms: 檢查超時。
+        const POLL_INTERVAL = 300; // 300ms: 輪詢間隔。
+        const MIN_FIELDS_THRESHOLD = 3;
+        const fieldsToCheck = ['Substatus', 'Case Category', 'Case Sub Category'];
 
-            const dissectAndFindText = (rootNode, fieldTitle) => {
-                let foundText = null;
-                const processedNodes = new Set();
+        const dissectAndFindText = (rootNode, fieldTitle) => {
+            let foundText = null;
+            const processedNodes = new Set();
 
-                function traverse(node) {
-                    if (!node || processedNodes.has(node) || foundText) return;
-                    processedNodes.add(node);
-                    if (node.nodeType === Node.TEXT_NODE) {
-                        const text = (node.nodeValue || '').trim();
-                        if (text) {
-                            const parent = node.parentElement;
-                            const isTitleNode = parent && parent.classList && parent.classList.contains('slds-text-title');
-                            if (!isTitleNode && text !== fieldTitle) {
-                                foundText = text;
-                                return;
-                            }
-                        }
-                    }
-                    if (node.shadowRoot) {
-                        traverse(node.shadowRoot);
-                        if (foundText) return;
-                    }
-                    if (node.childNodes && node.childNodes.length > 0) {
-                        for (const child of node.childNodes) {
-                            traverse(child);
-                            if (foundText) return;
-                        }
-                    }
-                }
-                traverse(rootNode);
-                return foundText;
-            };
-
-            try {
-                const fieldItems = await new Promise((resolve, reject) => {
-                    const startTime = Date.now();
-                    const intervalId = setInterval(() => {
-                        if (Date.now() - startTime > CHECK_TIMEOUT) {
-                            clearInterval(intervalId);
-                            reject(new Error(`等待 'records-highlights-details-item' 渲染超時。`));
+            function traverse(node) {
+                if (!node || processedNodes.has(node) || foundText) return;
+                processedNodes.add(node);
+                if (node.nodeType === Node.TEXT_NODE) {
+                    const text = (node.nodeValue || '').trim();
+                    if (text) {
+                        const parent = node.parentElement;
+                        const isTitleNode = parent && parent.classList && parent.classList.contains('slds-text-title');
+                        if (!isTitleNode && text !== fieldTitle) {
+                            foundText = text;
                             return;
                         }
-                        const items = findAllElementsInShadows(document.body, 'records-highlights-details-item');
-                        if (items.length >= MIN_FIELDS_THRESHOLD) {
-                            clearInterval(intervalId);
-                            resolve(items);
-                        }
-                    }, POLL_INTERVAL);
-                });
-
-                const fieldValues = {};
-                fieldsToCheck.forEach(key => {
-                    fieldValues[key] = null;
-                });
-
-                for (const item of fieldItems) {
-                    const titleElement = findElementInShadows(item, 'p.slds-text-title');
-                    if (!titleElement) continue;
-
-                    const title = titleElement.getAttribute('title');
-                    if (fieldsToCheck.includes(title)) {
-                        let value = null;
-                        const standardValueElement = findElementInShadows(item, 'lightning-formatted-text');
-                        if (standardValueElement && standardValueElement.textContent.trim()) {
-                            value = standardValueElement.textContent.trim();
-                        } else {
-                            value = dissectAndFindText(item, title);
-                        }
-                        fieldValues[title] = value;
                     }
                 }
-
-                const isSubstatusEmpty = !fieldValues['Substatus'];
-                const isCategoryEmpty = !fieldValues['Case Category'];
-                const isSubCategoryEmpty = !fieldValues['Case Sub Category'];
-
-                if (isSubstatusEmpty && isCategoryEmpty && isSubCategoryEmpty) {
-                    Log.info('Feature.AutoAssign', `所有關鍵字段 (Substatus, Category, Sub Category) 同時為空，中止指派。`);
-                    return true;
+                if (node.shadowRoot) {
+                    traverse(node.shadowRoot);
+                    if (foundText) return;
                 }
+                if (node.childNodes && node.childNodes.length > 0) {
+                    for (const child of node.childNodes) {
+                        traverse(child);
+                        if (foundText) return;
+                    }
+                }
+            }
+            traverse(rootNode);
+            return foundText;
+        };
 
-                Log.info('Feature.AutoAssign', `至少有一個關鍵字段有值，繼續執行指派流程。 [Substatus: ${fieldValues['Substatus'] || '空'}, Category: ${fieldValues['Case Category'] || '空'}, SubCategory: ${fieldValues['Case Sub Category'] || '空'}]`);
-                return false;
+        try {
+            const fieldItems = await new Promise((resolve, reject) => {
+                const startTime = Date.now();
+                const intervalId = setInterval(() => {
+                    if (Date.now() - startTime > CHECK_TIMEOUT) {
+                        clearInterval(intervalId);
+                        reject(new Error(`等待 'records-highlights-details-item' 渲染超時。`));
+                        return;
+                    }
+                    const items = findAllElementsInShadows(document.body, 'records-highlights-details-item');
+                    if (items.length >= MIN_FIELDS_THRESHOLD) {
+                        clearInterval(intervalId);
+                        resolve(items);
+                    }
+                }, POLL_INTERVAL);
+            });
 
-            } catch (error) {
-                Log.error('Feature.AutoAssign', `檢查關鍵字段時發生錯誤: ${error.message}。為安全起見，中止指派。`);
+            const fieldValues = {};
+            fieldsToCheck.forEach(key => {
+                fieldValues[key] = null;
+            });
+
+            for (const item of fieldItems) {
+                const titleElement = findElementInShadows(item, 'p.slds-text-title');
+                if (!titleElement) continue;
+
+                const title = titleElement.getAttribute('title');
+                if (fieldsToCheck.includes(title)) {
+                    let value = null;
+                    const standardValueElement = findElementInShadows(item, 'lightning-formatted-text');
+                    if (standardValueElement && standardValueElement.textContent.trim()) {
+                        value = standardValueElement.textContent.trim();
+                    } else {
+                        value = dissectAndFindText(item, title);
+                    }
+                    fieldValues[title] = value;
+                }
+            }
+
+            const isSubstatusEmpty = !fieldValues['Substatus'];
+            const isCategoryEmpty = !fieldValues['Case Category'];
+            const isSubCategoryEmpty = !fieldValues['Case Sub Category'];
+
+            if (isSubstatusEmpty && isCategoryEmpty && isSubCategoryEmpty) {
+                Log.info('Feature.AutoAssign', `所有關鍵字段 (Substatus, Category, Sub Category) 同時為空，中止指派。`);
                 return true;
             }
+
+            Log.info('Feature.AutoAssign', `至少有一個關鍵字段有值，繼續執行指派流程。 [Substatus: ${fieldValues['Substatus'] || '空'}, Category: ${fieldValues['Case Category'] || '空'}, SubCategory: ${fieldValues['Case Sub Category'] || '空'}]`);
+            return false;
+
+        } catch (error) {
+            Log.error('Feature.AutoAssign', `檢查關鍵字段時發生錯誤: ${error.message}。為安全起見，中止指派。`);
+            return true;
         }
+    }
 
 
-        // =================================================================================
-        // SECTION: 關聯案件提取器模塊 (Related Cases Extractor Module)
-        // =================================================================================
+    // =================================================================================
+    // SECTION: 關聯案件提取器模塊 (Related Cases Extractor Module)
+    // =================================================================================
 
-        /**
+    /**
     * @description 一個獨立的模塊，用於處理 "Related Cases" 標籤頁的數據提取、UI增強和排序功能。
     */
-        const relatedCasesExtractorModule = {
-            CASE_ROWS_CONTAINER_SELECTOR: 'c-cec-shipment-identifier-display-rows',
-            EXTRACTION_TIMEOUT_MS: 8000, // 8000ms: 等待單個案件詳細信息行加載的超時。
-            hasExecuted: false,
-            currentSort: {
-                columnId: null,
-                direction: 'none'
-            },
-            columnDefinitions: [{
-                id: 'case',
-                title: 'Case',
-                dataId: 'CEC_Case__r.CEC_Case_Number_Origin__c',
-                defaultWidth: 112
-            }, {
-                id: 'createdDate',
-                title: 'DATE & TIME CREATED',
-                dataId: 'CEC_Case__r.CreatedDate',
-                defaultWidth: 111
-            }, {
-                id: 'subCategory',
-                title: 'Case Sub Category',
-                dataId: 'CEC_Case__r.CEC_Case_Sub_Category__c',
-                defaultWidth: 93
-            }, {
-                id: 'identifier',
-                title: 'Identifier Value',
-                dataId: 'CEC_Values__c',
-                defaultWidth: 123
-            }, {
-                id: 'status',
-                title: 'Status',
-                dataId: 'CEC_Case__r.Status',
-                defaultWidth: 80
-            }, {
-                id: 'queue',
-                title: 'Case Owner',
-                defaultWidth: 112,
-                isAdded: true
-            }, {
-                id: 'owner',
-                title: 'Queues',
-                defaultWidth: 104,
-                isAdded: true
-            }],
+    const relatedCasesExtractorModule = {
+        CASE_ROWS_CONTAINER_SELECTOR: 'c-cec-shipment-identifier-display-rows',
+        EXTRACTION_TIMEOUT_MS: 8000, // 8000ms: 等待單個案件詳細信息行加載的超時。
+        hasExecuted: false,
+        currentSort: {
+            columnId: null,
+            direction: 'none'
+        },
+        columnDefinitions: [{
+            id: 'case',
+            title: 'Case',
+            dataId: 'CEC_Case__r.CEC_Case_Number_Origin__c',
+            defaultWidth: 112
+        }, {
+            id: 'createdDate',
+            title: 'DATE & TIME CREATED',
+            dataId: 'CEC_Case__r.CreatedDate',
+            defaultWidth: 111
+        }, {
+            id: 'subCategory',
+            title: 'Case Sub Category',
+            dataId: 'CEC_Case__r.CEC_Case_Sub_Category__c',
+            defaultWidth: 93
+        }, {
+            id: 'identifier',
+            title: 'Identifier Value',
+            dataId: 'CEC_Values__c',
+            defaultWidth: 123
+        }, {
+            id: 'status',
+            title: 'Status',
+            dataId: 'CEC_Case__r.Status',
+            defaultWidth: 80
+        }, {
+            id: 'queue',
+            title: 'Case Owner',
+            defaultWidth: 112,
+            isAdded: true
+        }, {
+            id: 'owner',
+            title: 'Queues',
+            defaultWidth: 104,
+            isAdded: true
+        }],
 
-            /**
+        /**
         * @description 處理 "Related Cases" 標籤頁的點擊事件，啟動數據提取流程。
         * @param {HTMLElement} tabLink - 被點擊的標籤頁鏈接元素。
         */
-            handleTabClick(tabLink) {
-                if (this.hasExecuted) return;
-                this.hasExecuted = true;
-                Log.info('Feature.RelatedCases', `"Related Cases" 標籤頁被點擊，開始數據提取流程。`);
-                const panelId = tabLink.getAttribute('aria-controls');
-                if (!panelId) {
+        handleTabClick(tabLink) {
+            if (this.hasExecuted) return;
+            this.hasExecuted = true;
+            Log.info('Feature.RelatedCases', `"Related Cases" 標籤頁被點擊，開始數據提取流程。`);
+            const panelId = tabLink.getAttribute('aria-controls');
+            if (!panelId) {
+                return;
+            }
+            let attempts = 0;
+            const maxAttempts = 30;
+            const interval = setInterval(() => {
+                if (isScriptPaused) {
+                    clearInterval(interval);
                     return;
                 }
-                let attempts = 0;
-                const maxAttempts = 30;
-                const interval = setInterval(() => {
-                    if (isScriptPaused) {
+                attempts++;
+                const contentPanel = findElementInShadows(document, `#${panelId}`);
+                if (contentPanel) {
+                    const caseRowsContainer = findElementInShadows(contentPanel, this.CASE_ROWS_CONTAINER_SELECTOR);
+                    if (caseRowsContainer) {
                         clearInterval(interval);
+                        const rootNode = caseRowsContainer.shadowRoot || caseRowsContainer;
+                        this.setupUIAndProcessCases(rootNode);
                         return;
                     }
-                    attempts++;
-                    const contentPanel = findElementInShadows(document, `#${panelId}`);
-                    if (contentPanel) {
-                        const caseRowsContainer = findElementInShadows(contentPanel, this.CASE_ROWS_CONTAINER_SELECTOR);
-                        if (caseRowsContainer) {
-                            clearInterval(interval);
-                            const rootNode = caseRowsContainer.shadowRoot || caseRowsContainer;
-                            this.setupUIAndProcessCases(rootNode);
-                            return;
-                        }
-                    }
-                    if (attempts >= maxAttempts) {
-                        clearInterval(interval);
-                        Log.error('Feature.RelatedCases', `等待案件列表容器超時，提取流程終止。`);
-                    }
-                }, 100); // 100ms: 輪詢間隔，快速檢測面板內容是否加載。
-            },
+                }
+                if (attempts >= maxAttempts) {
+                    clearInterval(interval);
+                    Log.error('Feature.RelatedCases', `等待案件列表容器超時，提取流程終止。`);
+                }
+            }, 100); // 100ms: 輪詢間隔，快速檢測面板內容是否加載。
+        },
 
-            /**
+        /**
         * @description 設置UI（注入樣式）並開始處理所有案件行。
         * @param {Node} container - 包含案件表格的根節點。
         */
-            setupUIAndProcessCases(container) {
-                this.injectStyles();
-                this.processAllCases(container);
-            },
+        setupUIAndProcessCases(container) {
+            this.injectStyles();
+            this.processAllCases(container);
+        },
 
-            /**
+        /**
         * @description 注入排序圖標所需的CSS樣式。
         */
-            injectStyles() {
-                GM_addStyle(`
+        injectStyles() {
+            GM_addStyle(`
                 .gm-sortable-header {
                     cursor: pointer;
                 }
@@ -7196,273 +7442,273 @@ V53 > V54
     };
 
 
-        // =================================================================================
-        // SECTION: 頁面任務執行器 (Page Task Runner)
-        // =================================================================================
+    // =================================================================================
+    // SECTION: 頁面任務執行器 (Page Task Runner)
+    // =================================================================================
 
-        /**
+    /**
     * @description 啟動一個高頻率的全局掃描器，並行處理所有一次性的頁面初始化任務。
     * @param {string} caseUrl - 當前Case頁面的URL，用於標記處理狀態。
     */
-        function startHighFrequencyScanner(caseUrl) {
-            const SCAN_INTERVAL = 300; // 300ms: 掃描器輪詢間隔，用於快速檢測頁面元素。
-            const MASTER_TIMEOUT = 20000; // 20000ms: 掃描器的總運行超時，防止無限運行。
-            const startTime = Date.now();
+    function startHighFrequencyScanner(caseUrl) {
+        const SCAN_INTERVAL = 300; // 300ms: 掃描器輪詢間隔，用於快速檢測頁面元素。
+        const MASTER_TIMEOUT = 20000; // 20000ms: 掃描器的總運行超時，防止無限運行。
+        const startTime = Date.now();
 
-            let tasksToRun = CASE_PAGE_CHECKS_CONFIG.filter(task => task.once);
-            if (tasksToRun.length === 0) return;
+        let tasksToRun = CASE_PAGE_CHECKS_CONFIG.filter(task => task.once);
+        if (tasksToRun.length === 0) return;
 
-            const processedElements = new WeakSet();
-            Log.info('Core.Scanner', `高頻掃描器啟動，處理 ${tasksToRun.length} 個一次性任務。`);
+        const processedElements = new WeakSet();
+        Log.info('Core.Scanner', `高頻掃描器啟動，處理 ${tasksToRun.length} 個一次性任務。`);
 
-            globalScannerId = setInterval(() => {
-                if (isScriptPaused || tasksToRun.length === 0 || Date.now() - startTime > MASTER_TIMEOUT) {
-                    clearInterval(globalScannerId);
-                    globalScannerId = null;
-                    if (tasksToRun.length > 0) {
-                        const unfinished = tasksToRun.map(t => t.id).join(', ');
-                        Log.warn('Core.Scanner', `掃描器超時，仍有 ${tasksToRun.length} 個任務未完成: [${unfinished}]。`);
-                    } else {
-                        Log.info('Core.Scanner', `所有一次性任務完成，掃描器停止。`);
-                        processedCaseUrlsInSession.add(caseUrl);
-                        Log.info('Core.Scanner', `本次掃描耗時: ${Date.now() - startTime}ms，Session 已處理 Case 數量: ${processedCaseUrlsInSession.size}`);
+        globalScannerId = setInterval(() => {
+            if (isScriptPaused || tasksToRun.length === 0 || Date.now() - startTime > MASTER_TIMEOUT) {
+                clearInterval(globalScannerId);
+                globalScannerId = null;
+                if (tasksToRun.length > 0) {
+                    const unfinished = tasksToRun.map(t => t.id).join(', ');
+                    Log.warn('Core.Scanner', `掃描器超時，仍有 ${tasksToRun.length} 個任務未完成: [${unfinished}]。`);
+                } else {
+                    Log.info('Core.Scanner', `所有一次性任務完成，掃描器停止。`);
+                    processedCaseUrlsInSession.add(caseUrl);
+                    Log.info('Core.Scanner', `本次掃描耗時: ${Date.now() - startTime}ms，Session 已處理 Case 數量: ${processedCaseUrlsInSession.size}`);
+                }
+                return;
+            }
+
+            const currentTasks = [...tasksToRun];
+            for (const task of currentTasks) {
+                const elements = findAllElementsInShadows(document, task.selector);
+                let taskCompleted = false;
+                for (const el of elements) {
+                    if (processedElements.has(el)) continue;
+                    try {
+                        task.handler(el);
+                        processedElements.add(el);
+                        taskCompleted = true;
+                        break;
+                    } catch (e) {
+                        // 忽略單個處理程序的錯誤
                     }
+                }
+                if (taskCompleted) {
+                    tasksToRun = tasksToRun.filter(t => t.id !== task.id);
+                }
+            }
+        }, SCAN_INTERVAL);
+        PageResourceRegistry.addInterval(globalScannerId);
+    }
+
+    /**
+    * @description 存儲所有在Case頁面需要執行的一次性任務的配置。
+    */
+    const CASE_PAGE_CHECKS_CONFIG = [{
+        id: 'handleContactLogic',
+        selector: 'article.cCEC_ContactSummary, button[title="Associate Contact"]',
+        once: true,
+        handler: (element) => {
+            if (window.contactLogicDone) return;
+            if (element.matches('article.cCEC_ContactSummary')) {
+                window.contactLogicDone = true;
+                processContactCard(element);
+            }
+        }
+    },{
+        id: 'initComposeButtonWatcher',
+        selector: ".milestoneTimerText, .noPendingMilestoneMessage",
+        once: true,
+        handler: (element) => {
+            if (element.matches('.milestoneTimerText')) {
+                checkAndColorComposeButton();
+            }
+        }
+    }, {
+        id: 'setupTabClickTriggers',
+        selector: 'a.slds-tabs_scoped__link[data-label^="Related Cases"]',
+        once: true,
+        handler: (tabLink) => {
+            const tabParent = tabLink.closest('li');
+            if (tabParent && !tabParent.dataset.listenerAttached) {
+                tabParent.addEventListener('click', () => {
+                    relatedCasesExtractorModule.handleTabClick(tabLink);
+                }, {
+                    once: true
+                });
+                tabParent.dataset.listenerAttached = 'true';
+            }
+        }
+    }, {
+        id: 'initRelatedCasesWatcherForButton',
+        selector: 'li[data-label^="Related Cases ("]',
+        once: true,
+        handler: () => {
+            checkAndColorAssociateButton();
+        }
+    }, {
+        id: 'adjustCaseDescription',
+        selector: 'lightning-textarea[data-field="DescriptionValue"], div.slds-form-element__label',
+        once: true,
+        handler: () => {
+            adjustCaseDescriptionHeight();
+        }
+    }, {
+        id: 'blockIVPCard',
+        selector: 'article.cCEC_IVPCanvasContainer',
+        once: true,
+        resilient: true,
+        handler: (cardElement) => {
+            handleIVPCardBlocking(cardElement);
+        }
+    }, {
+        id: 'addIVPButtons',
+        selector: 'c-cec-datatable',
+        once: true,
+        resilient: true,
+        handler: (datatableContainer) => {
+            const shadowRoot = datatableContainer.shadowRoot;
+            if (!shadowRoot) return;
+
+            const POLL_INTERVAL = 300;
+            const MAX_ATTEMPTS = 50;
+            let attempts = 0;
+
+            const poller = setInterval(() => {
+                attempts++;
+                const copyButtons = findAllElementsInShadows(shadowRoot, 'button[name="copyIdentifier"]');
+
+                if (copyButtons.length > 0) {
+                    clearInterval(poller);
+
+                    // --- 1. 注入按鈕邏輯 (保持不變) ---
+                    let injectedCount = 0;
+                    const MAX_BUTTONS = 10;
+                    const allRows = findAllElementsInShadows(shadowRoot, 'tr');
+
+                    for (const row of allRows) {
+                        if (injectedCount >= MAX_BUTTONS) break;
+                        if (row.hasAttribute('data-ivp-processed')) continue;
+
+                        const copyButtonInRow = findElementInShadows(row, 'button[name="copyIdentifier"]');
+                        if (copyButtonInRow) {
+                            const cellWrapper = copyButtonInRow.closest("lightning-primitive-cell-button");
+                            if (cellWrapper && !cellWrapper.parentElement.querySelector('.custom-s-button')) {
+
+                                // 創建 IVP 按鈕
+                                const ivpButton = document.createElement("button");
+                                ivpButton.textContent = "IVP";
+                                ivpButton.className = "slds-button slds-button_icon slds-button_icon-brand custom-s-button";
+                                ivpButton.dataset.target = "ivp";
+                                ivpButton.style.marginRight = "-2px";
+                                ivpButton.style.fontWeight = 'bold';
+
+                                // 創建 Web 按鈕
+                                const webButton = document.createElement("button");
+                                webButton.textContent = "Web";
+                                webButton.className = "slds-button slds-button_icon slds-button_icon-brand custom-s-button";
+                                webButton.dataset.target = "web";
+                                webButton.style.marginRight = "2px";
+                                webButton.style.fontWeight = 'bold';
+
+                                // 插入 DOM
+                                cellWrapper.parentElement.insertBefore(webButton, cellWrapper);
+                                cellWrapper.parentElement.insertBefore(ivpButton, webButton);
+
+                                row.setAttribute('data-ivp-processed', 'true');
+                                injectedCount++;
+                            }
+                        }
+                    }
+
+                    // --- 2. [新增] 調整表頭寬度邏輯 ---
+                    const adjustColumnWidths = () => {
+                        const targetSelectors = [
+                            'th[aria-label="COPY"]',
+                            'th[aria-label="DATE ADDED"]'
+                        ];
+
+                        targetSelectors.forEach(selector => {
+                            const th = shadowRoot.querySelector(selector);
+                            if (th) {
+                                const TARGET_WIDTH = '90px';
+
+                                // 1. 修改最外層 TH
+                                th.style.width = TARGET_WIDTH;
+                                th.style.minWidth = TARGET_WIDTH;
+                                th.style.maxWidth = TARGET_WIDTH;
+
+                                // 2. 修改內部的 Factory 組件
+                                const factory = th.querySelector('lightning-primitive-header-factory');
+                                if (factory) {
+                                    factory.style.width = TARGET_WIDTH;
+                                }
+
+                                // 3. 遞歸修改內部所有帶有固定寬度的容器 (div, span, a)
+                                // Salesforce 的結構很深，通常寬度會寫在內層的 div 或 a 標籤上
+                                const innerElements = th.querySelectorAll('[style*="width"]');
+                                innerElements.forEach(el => {
+                                    // 為了安全，我們只修改那些寬度接近原始值 (94px/95px) 的元素
+                                    // 避免誤傷圖標等小元素
+                                    const currentStyle = el.style.width;
+                                    if (currentStyle.includes('94px') || currentStyle.includes('95px')) {
+                                        el.style.width = TARGET_WIDTH;
+                                    }
+                                });
+
+                                Log.info('UI.Enhancement', `已調整表頭寬度: ${selector} -> ${TARGET_WIDTH}`);
+                            }
+                        });
+                    };
+
+                    // 執行寬度調整
+                    adjustColumnWidths();
+
                     return;
                 }
 
-                const currentTasks = [...tasksToRun];
-                for (const task of currentTasks) {
-                    const elements = findAllElementsInShadows(document, task.selector);
-                    let taskCompleted = false;
-                    for (const el of elements) {
-                        if (processedElements.has(el)) continue;
-                        try {
-                            task.handler(el);
-                            processedElements.add(el);
-                            taskCompleted = true;
-                            break;
-                        } catch (e) {
-                            // 忽略單個處理程序的錯誤
-                        }
-                    }
-                    if (taskCompleted) {
-                        tasksToRun = tasksToRun.filter(t => t.id !== task.id);
-                    }
+                if (attempts >= MAX_ATTEMPTS) {
+                    clearInterval(poller);
                 }
-            }, SCAN_INTERVAL);
-            PageResourceRegistry.addInterval(globalScannerId);
+            }, POLL_INTERVAL);
         }
-
-        /**
-    * @description 存儲所有在Case頁面需要執行的一次性任務的配置。
-    */
-        const CASE_PAGE_CHECKS_CONFIG = [{
-            id: 'handleContactLogic',
-            selector: 'article.cCEC_ContactSummary, button[title="Associate Contact"]',
-            once: true,
-            handler: (element) => {
-                if (window.contactLogicDone) return;
-                if (element.matches('article.cCEC_ContactSummary')) {
-                    window.contactLogicDone = true;
-                    processContactCard(element);
-                }
-            }
-        },{
-            id: 'initComposeButtonWatcher',
-            selector: ".milestoneTimerText, .noPendingMilestoneMessage",
-            once: true,
-            handler: (element) => {
-                if (element.matches('.milestoneTimerText')) {
-                    checkAndColorComposeButton();
-                }
-            }
-        }, {
-            id: 'setupTabClickTriggers',
-            selector: 'a.slds-tabs_scoped__link[data-label^="Related Cases"]',
-            once: true,
-            handler: (tabLink) => {
-                const tabParent = tabLink.closest('li');
-                if (tabParent && !tabParent.dataset.listenerAttached) {
-                    tabParent.addEventListener('click', () => {
-                        relatedCasesExtractorModule.handleTabClick(tabLink);
-                    }, {
-                        once: true
-                    });
-                    tabParent.dataset.listenerAttached = 'true';
-                }
-            }
-        }, {
-            id: 'initRelatedCasesWatcherForButton',
-            selector: 'li[data-label^="Related Cases ("]',
-            once: true,
-            handler: () => {
-                checkAndColorAssociateButton();
-            }
-        }, {
-            id: 'adjustCaseDescription',
-            selector: 'lightning-textarea[data-field="DescriptionValue"], div.slds-form-element__label',
-            once: true,
-            handler: () => {
-                adjustCaseDescriptionHeight();
-            }
-        }, {
-            id: 'blockIVPCard',
-            selector: 'article.cCEC_IVPCanvasContainer',
-            once: true,
-            resilient: true,
-            handler: (cardElement) => {
-                handleIVPCardBlocking(cardElement);
-            }
-        }, {
-            id: 'addIVPButtons',
-            selector: 'c-cec-datatable',
-            once: true,
-            resilient: true,
-            handler: (datatableContainer) => {
-                const shadowRoot = datatableContainer.shadowRoot;
-                if (!shadowRoot) return;
-
-                const POLL_INTERVAL = 300;
-                const MAX_ATTEMPTS = 50;
-                let attempts = 0;
-
-                const poller = setInterval(() => {
-                    attempts++;
-                    const copyButtons = findAllElementsInShadows(shadowRoot, 'button[name="copyIdentifier"]');
-
-                    if (copyButtons.length > 0) {
-                        clearInterval(poller);
-
-                        // --- 1. 注入按鈕邏輯 (保持不變) ---
-                        let injectedCount = 0;
-                        const MAX_BUTTONS = 10;
-                        const allRows = findAllElementsInShadows(shadowRoot, 'tr');
-
-                        for (const row of allRows) {
-                            if (injectedCount >= MAX_BUTTONS) break;
-                            if (row.hasAttribute('data-ivp-processed')) continue;
-
-                            const copyButtonInRow = findElementInShadows(row, 'button[name="copyIdentifier"]');
-                            if (copyButtonInRow) {
-                                const cellWrapper = copyButtonInRow.closest("lightning-primitive-cell-button");
-                                if (cellWrapper && !cellWrapper.parentElement.querySelector('.custom-s-button')) {
-
-                                    // 創建 IVP 按鈕
-                                    const ivpButton = document.createElement("button");
-                                    ivpButton.textContent = "IVP";
-                                    ivpButton.className = "slds-button slds-button_icon slds-button_icon-brand custom-s-button";
-                                    ivpButton.dataset.target = "ivp";
-                                    ivpButton.style.marginRight = "-2px";
-                                    ivpButton.style.fontWeight = 'bold';
-
-                                    // 創建 Web 按鈕
-                                    const webButton = document.createElement("button");
-                                    webButton.textContent = "Web";
-                                    webButton.className = "slds-button slds-button_icon slds-button_icon-brand custom-s-button";
-                                    webButton.dataset.target = "web";
-                                    webButton.style.marginRight = "2px";
-                                    webButton.style.fontWeight = 'bold';
-
-                                    // 插入 DOM
-                                    cellWrapper.parentElement.insertBefore(webButton, cellWrapper);
-                                    cellWrapper.parentElement.insertBefore(ivpButton, webButton);
-
-                                    row.setAttribute('data-ivp-processed', 'true');
-                                    injectedCount++;
-                                }
-                            }
-                        }
-
-                        // --- 2. [新增] 調整表頭寬度邏輯 ---
-                        const adjustColumnWidths = () => {
-                            const targetSelectors = [
-                                'th[aria-label="COPY"]',
-                                'th[aria-label="DATE ADDED"]'
-                            ];
-
-                            targetSelectors.forEach(selector => {
-                                const th = shadowRoot.querySelector(selector);
-                                if (th) {
-                                    const TARGET_WIDTH = '90px';
-
-                                    // 1. 修改最外層 TH
-                                    th.style.width = TARGET_WIDTH;
-                                    th.style.minWidth = TARGET_WIDTH;
-                                    th.style.maxWidth = TARGET_WIDTH;
-
-                                    // 2. 修改內部的 Factory 組件
-                                    const factory = th.querySelector('lightning-primitive-header-factory');
-                                    if (factory) {
-                                        factory.style.width = TARGET_WIDTH;
-                                    }
-
-                                    // 3. 遞歸修改內部所有帶有固定寬度的容器 (div, span, a)
-                                    // Salesforce 的結構很深，通常寬度會寫在內層的 div 或 a 標籤上
-                                    const innerElements = th.querySelectorAll('[style*="width"]');
-                                    innerElements.forEach(el => {
-                                        // 為了安全，我們只修改那些寬度接近原始值 (94px/95px) 的元素
-                                        // 避免誤傷圖標等小元素
-                                        const currentStyle = el.style.width;
-                                        if (currentStyle.includes('94px') || currentStyle.includes('95px')) {
-                                            el.style.width = TARGET_WIDTH;
-                                        }
-                                    });
-
-                                    Log.info('UI.Enhancement', `已調整表頭寬度: ${selector} -> ${TARGET_WIDTH}`);
-                                }
-                            });
-                        };
-
-                        // 執行寬度調整
-                        adjustColumnWidths();
-
-                        return;
-                    }
-
-                    if (attempts >= MAX_ATTEMPTS) {
-                        clearInterval(poller);
-                    }
-                }, POLL_INTERVAL);
-            }
-        }];
+    }];
 
 
-        // =================================================================================
-        // SECTION: 主控制器與初始化 (Main Controller & Initialization)
-        // =================================================================================
+    // =================================================================================
+    // SECTION: 主控制器與初始化 (Main Controller & Initialization)
+    // =================================================================================
 
-        /**
+    /**
     * @description 處理舊版本設置到新版本的遷移。
     */
-        function handleSettingsMigration() {
-            const MIGRATION_KEY = 'settingsMigrationV34';
-            if (GM_getValue(MIGRATION_KEY, false)) {
-                return;
-            }
-            const isPca = GM_getValue('isPcaCaseModeEnabled', null);
-            const isDispatch = GM_getValue('isDispatchCaseModeEnabled', null);
-            if (isPca !== null || isDispatch !== null) {
-                let newMode = 'off';
-                if (isPca) newMode = 'pca';
-                else if (isDispatch) newMode = 'dispatch';
-                GM_setValue('accountHighlightMode', newMode);
-                Log.info('Core.Migration', `舊版本設置已成功遷移。`);
-            }
-            GM_setValue(MIGRATION_KEY, true);
+    function handleSettingsMigration() {
+        const MIGRATION_KEY = 'settingsMigrationV34';
+        if (GM_getValue(MIGRATION_KEY, false)) {
+            return;
         }
+        const isPca = GM_getValue('isPcaCaseModeEnabled', null);
+        const isDispatch = GM_getValue('isDispatchCaseModeEnabled', null);
+        if (isPca !== null || isDispatch !== null) {
+            let newMode = 'off';
+            if (isPca) newMode = 'pca';
+            else if (isDispatch) newMode = 'dispatch';
+            GM_setValue('accountHighlightMode', newMode);
+            Log.info('Core.Migration', `舊版本設置已成功遷移。`);
+        }
+        GM_setValue(MIGRATION_KEY, true);
+    }
 
-        /**
+    /**
     * @description 在頁面頂部Logo處注入腳本控制按鈕（設置、暫停/恢復）。
     * @param {HTMLElement} logoElement - 用於注入按鈕的Logo元素。
     */
-        function injectControlButtons(logoElement) {
-            const SETTINGS_BUTTON_ID = 'cec-settings-gear-button';
-            const PAUSE_BUTTON_ID = 'cec-pause-toggle-button';
-            if (document.getElementById(SETTINGS_BUTTON_ID)) {
-                return;
-            }
-            const createSldsIcon = (iconName) => {
-                return `
+    function injectControlButtons(logoElement) {
+        const SETTINGS_BUTTON_ID = 'cec-settings-gear-button';
+        const PAUSE_BUTTON_ID = 'cec-pause-toggle-button';
+        if (document.getElementById(SETTINGS_BUTTON_ID)) {
+            return;
+        }
+        const createSldsIcon = (iconName) => {
+            return `
                 <svg class="slds-button__icon" focusable="false" aria-hidden="true">
                     <use xlink:href="/_slds/icons/utility-sprite/svg/symbols.svg#${iconName}"></use>
                 </svg>
@@ -7527,395 +7773,395 @@ V53 > V54
         Log.info('UI.Controls', `頂部控制按鈕 (設置/暫停) 注入成功。`);
     }
 
-        /**
+    /**
     * @description 初始化一個觀察器，等待頁面頂部Header出現後注入控制按鈕。
     */
-        function initHeaderObserver() {
-            if (window.__cecHeaderObserverInitialized) return;
-            window.__cecHeaderObserverInitialized = true;
-            const HEADER_LOGO_SELECTOR = '#oneHeader .slds-global-header__item .slds-global-header__logo';
-            const observer = new MutationObserver((mutations, obs) => {
-                const logoElement = findElementInShadows(document.body, HEADER_LOGO_SELECTOR);
-                if (logoElement) {
-                    injectControlButtons(logoElement);
-                    obs.disconnect();
-                }
-            });
-            observer.observe(document.body, {
-                childList: true,
-                subtree: true
-            });
-            setTimeout(() => {
-                observer.disconnect();
-            }, 15000); // 15000ms: 等待頂部Header出現的超時。
-        }
+    function initHeaderObserver() {
+        if (window.__cecHeaderObserverInitialized) return;
+        window.__cecHeaderObserverInitialized = true;
+        const HEADER_LOGO_SELECTOR = '#oneHeader .slds-global-header__item .slds-global-header__logo';
+        const observer = new MutationObserver((mutations, obs) => {
+            const logoElement = findElementInShadows(document.body, HEADER_LOGO_SELECTOR);
+            if (logoElement) {
+                injectControlButtons(logoElement);
+                obs.disconnect();
+            }
+        });
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
+        setTimeout(() => {
+            observer.disconnect();
+        }, 15000); // 15000ms: 等待頂部Header出現的超時。
+    }
 
-        /**
+    /**
     * @description 初始化全局點擊事件監聽器，用於處理動態出現的元素。
     */
-        function initGlobalClickListener() {
-            if (window.__cecGlobalClickListenerInitialized) return;
-            window.__cecGlobalClickListenerInitialized = true;
-            document.body.addEventListener('click', (event) => {
-                if (isScriptPaused) return;
+    function initGlobalClickListener() {
+        if (window.__cecGlobalClickListenerInitialized) return;
+        window.__cecGlobalClickListenerInitialized = true;
+        document.body.addEventListener('click', (event) => {
+            if (isScriptPaused) return;
 
-                // --- 1. 處理郵件編輯器觸發按鈕 (Compose, Reply All, Write email) ---
-                const composeButton = event.target.closest('button.testid__dummy-button-submit-action');
-                const replyAllButton = event.target.closest('a[title="Reply All"]');
-                const writeEmailButton = event.target.closest('button[title="Write an email..."]');
+            // --- 1. 處理郵件編輯器觸發按鈕 (Compose, Reply All, Write email) ---
+            const composeButton = event.target.closest('button.testid__dummy-button-submit-action');
+            const replyAllButton = event.target.closest('a[title="Reply All"]');
+            const writeEmailButton = event.target.closest('button[title="Write an email..."]');
 
-                if (composeButton || replyAllButton || writeEmailButton) {
-                    let triggerName = composeButton ? '"Compose"' : (replyAllButton ? '"Reply All"' : '"Write an email..."');
-                    Log.info('UI.Enhancement', `檢測到 ${triggerName} 按鈕點擊，準備注入模板快捷按鈕。`);
-                    setTimeout(() => {
-                        handleEditorReadyForTemplateButtons();
-                    }, 300);
+            if (composeButton || replyAllButton || writeEmailButton) {
+                let triggerName = composeButton ? '"Compose"' : (replyAllButton ? '"Reply All"' : '"Write an email..."');
+                Log.info('UI.Enhancement', `檢測到 ${triggerName} 按鈕點擊，準備注入模板快捷按鈕。`);
+                setTimeout(() => {
+                    handleEditorReadyForTemplateButtons();
+                }, 300);
+            }
+
+            // --- 2. 處理關聯聯繫人按鈕 (Associate Contact) ---
+            const associateButton = event.target.closest('button[title="Associate Contact"], a[title="Associate Contact"]');
+            if (associateButton) {
+                waitForElementWithObserver(document.body, '.slds-modal__container', 10000).then(modal => {
+                    processAssociateContactModal(modal);
+                }).catch(error => { /* 忽略錯誤 */ });
+                return;
+            }
+
+            // --- 3. 處理自定義查詢按鈕 (IVP / Web) ---
+            const actionButton = event.target.closest('.custom-s-button');
+            if (actionButton) {
+                const row = actionButton.closest('tr');
+                if (!row) return;
+
+                let trackingNumber = null;
+                for (const link of findAllElementsInShadows(row, 'a')) {
+                    const match = link.textContent.match(/1Z[A-Z0-9]{16}/);
+                    if (match) {
+                        trackingNumber = match[0];
+                        break;
+                    }
                 }
 
-                // --- 2. 處理關聯聯繫人按鈕 (Associate Contact) ---
-                const associateButton = event.target.closest('button[title="Associate Contact"], a[title="Associate Contact"]');
-                if (associateButton) {
-                    waitForElementWithObserver(document.body, '.slds-modal__container', 10000).then(modal => {
-                        processAssociateContactModal(modal);
-                    }).catch(error => { /* 忽略錯誤 */ });
+                if (!trackingNumber) {
+                    Log.warn('Feature.Query', '未在當前行提取到有效的 1Z 追踪號。');
                     return;
                 }
 
-                // --- 3. 處理自定義查詢按鈕 (IVP / Web) ---
-                const actionButton = event.target.closest('.custom-s-button');
-                if (actionButton) {
-                    const row = actionButton.closest('tr');
-                    if (!row) return;
+                const targetType = actionButton.dataset.target;
+                const timestamp = Date.now();
+                const messagePayload = {
+                    type: 'CEC_SEARCH_REQUEST',
+                    payload: { trackingNumber, timestamp }
+                };
 
-                    let trackingNumber = null;
-                    for (const link of findAllElementsInShadows(row, 'a')) {
-                        const match = link.textContent.match(/1Z[A-Z0-9]{16}/);
-                        if (match) {
-                            trackingNumber = match[0];
-                            break;
+                // 分支 A: 執行 IVP 查詢
+                if (targetType === 'ivp') {
+                    Log.info('Feature.IVP', `手動點擊 IVP 按鈕，查詢追踪號: ${trackingNumber}。`);
+                    try {
+                        if (!ivpWindowHandle || ivpWindowHandle.closed) {
+                            ivpWindowHandle = window.open('https://ivp.inside.ups.com/internal-visibility-portal', 'ivp_window');
                         }
-                    }
+                        if (!ivpWindowHandle) {
+                            alert('CEC 功能強化：打開 IVP 窗口失敗，請允許彈窗。');
+                            return;
+                        }
+                        sendMessageWithRetries(ivpWindowHandle, messagePayload, 'https://ivp.inside.ups.com');
 
-                    if (!trackingNumber) {
-                        Log.warn('Feature.Query', '未在當前行提取到有效的 1Z 追踪號。');
-                        return;
-                    }
+                        // [修改點] 移除 GM_getValue 檢查，改為強制聚焦，與 Web 按鈕保持一致
+                        ivpWindowHandle.focus();
 
-                    const targetType = actionButton.dataset.target;
-                    const timestamp = Date.now();
-                    const messagePayload = {
-                        type: 'CEC_SEARCH_REQUEST',
-                        payload: { trackingNumber, timestamp }
-                    };
-
-                    // 分支 A: 執行 IVP 查詢
-                    if (targetType === 'ivp') {
-                        Log.info('Feature.IVP', `手動點擊 IVP 按鈕，查詢追踪號: ${trackingNumber}。`);
-                        try {
-                            if (!ivpWindowHandle || ivpWindowHandle.closed) {
-                                ivpWindowHandle = window.open('https://ivp.inside.ups.com/internal-visibility-portal', 'ivp_window');
-                            }
-                            if (!ivpWindowHandle) {
-                                alert('CEC 功能強化：打開 IVP 窗口失敗，請允許彈窗。');
-                                return;
-                            }
-                            sendMessageWithRetries(ivpWindowHandle, messagePayload, 'https://ivp.inside.ups.com');
-
-                            // [修改點] 移除 GM_getValue 檢查，改為強制聚焦，與 Web 按鈕保持一致
-                            ivpWindowHandle.focus();
-
-                        } catch (err) { Log.error('Feature.IVP', err.message); }
-                    }
-                    // 分支 B: 執行 UPS Web 查詢
-                    else if (targetType === 'web') {
-                        Log.info('Feature.Web', `手動點擊 Web 按鈕，查詢追踪號: ${trackingNumber}。`);
-                        try {
-                            const webUrl = 'https://www.ups.com/track?loc=zh_HK&requester=ST/';
-                            if (!webWindowHandle || webWindowHandle.closed) {
-                                webWindowHandle = window.open(webUrl, 'ups_web_window');
-                            }
-                            if (!webWindowHandle) {
-                                alert('CEC 功能強化：打開 UPS Web 窗口失敗，請允許彈窗。');
-                                return;
-                            }
-                            sendMessageWithRetries(webWindowHandle, messagePayload, 'https://www.ups.com');
-
-                            // Web 模式強制聚焦
-                            webWindowHandle.focus();
-
-                        } catch (err) { Log.error('Feature.Web', err.message); }
-                    }
+                    } catch (err) { Log.error('Feature.IVP', err.message); }
                 }
-            }, true);
-        }
+                // 分支 B: 執行 UPS Web 查詢
+                else if (targetType === 'web') {
+                    Log.info('Feature.Web', `手動點擊 Web 按鈕，查詢追踪號: ${trackingNumber}。`);
+                    try {
+                        const webUrl = 'https://www.ups.com/track?loc=zh_HK&requester=ST/';
+                        if (!webWindowHandle || webWindowHandle.closed) {
+                            webWindowHandle = window.open(webUrl, 'ups_web_window');
+                        }
+                        if (!webWindowHandle) {
+                            alert('CEC 功能強化：打開 UPS Web 窗口失敗，請允許彈窗。');
+                            return;
+                        }
+                        sendMessageWithRetries(webWindowHandle, messagePayload, 'https://www.ups.com');
 
-        /**
+                        // Web 模式強制聚焦
+                        webWindowHandle.focus();
+
+                    } catch (err) { Log.error('Feature.Web', err.message); }
+                }
+            }
+        }, true);
+    }
+
+    /**
     * @description 初始化一個觀察器，等待任何彈窗（Modal）出現，並在其中注入快捷按鈕。
     */
-        function initModalButtonObserver() {
-            if (isScriptPaused) return;
-            const observer = new MutationObserver((mutations, obs) => {
-                if (isScriptPaused) {
-                    obs.disconnect();
-                    return;
-                }
-                const footer = findElementInShadows(document.body, "footer.slds-modal__footer");
-                if (footer) {
-                    addModalActionButtons(footer);
-                    obs.disconnect();
-                }
-            });
-            PageResourceRegistry.addObserver(observer);
+    function initModalButtonObserver() {
+        if (isScriptPaused) return;
+        const observer = new MutationObserver((mutations, obs) => {
+            if (isScriptPaused) {
+                obs.disconnect();
+                return;
+            }
+            const footer = findElementInShadows(document.body, "footer.slds-modal__footer");
+            if (footer) {
+                addModalActionButtons(footer);
+                obs.disconnect();
+            }
+        });
+        PageResourceRegistry.addObserver(observer);
 
-            observer.observe(document.body, {
-                childList: true,
-                subtree: true
-            });
-            const timeoutId = setTimeout(() => observer.disconnect(), 15000); // 15000ms: 等待彈窗出現的超時。
-            PageResourceRegistry.addTimeout(timeoutId);
-        }
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
+        const timeoutId = setTimeout(() => observer.disconnect(), 15000); // 15000ms: 等待彈窗出現的超時。
+        PageResourceRegistry.addTimeout(timeoutId);
+    }
 
-        /**
+    /**
     * @description 監控URL的變化。當URL變化時，重置狀態並根據新的URL觸發相應的頁面初始化邏輯。
     *              [修正版] 修正了 Case 詳情頁 URL 的正則表達式匹配錯誤，並將關鍵字段檢查邏輯移至僅中止自動指派。
     */
-        async function monitorUrlChanges() {
-            if (isScriptPaused) {
-                return;
-            }
-            if (location.href === lastUrl) return;
+    async function monitorUrlChanges() {
+        if (isScriptPaused) {
+            return;
+        }
+        if (location.href === lastUrl) return;
 
-            if (globalScannerId) {
-                clearInterval(globalScannerId);
-                Log.info('Core.Router', `上一個頁面的掃描器 (ID: ${globalScannerId}) 已被終止。`);
-                globalScannerId = null;
-            }
-
-            Log.info('Core.Router', `URL 變更，開始處理新頁面: ${location.href}`);
-            lastUrl = location.href;
-
-            // --- 頁面級資源統一清理 ---
-            PageResourceRegistry.cleanup('urlchange');
-            // Follow-Up Panel: 清理浮層（避免 SPA 切頁殘留）
-            FollowUpPanel.removeAllFloating();
-
-            // --- 狀態重置 ---
-            injectedIWTButtons = {};
-            if (assignButtonObserver) assignButtonObserver.disconnect();
-            if (iwtModuleObserver) iwtModuleObserver.disconnect();
-            assignButtonObserver = null;
-            iwtModuleObserver = null;
-            if (relatedCasesExtractorModule) relatedCasesExtractorModule.hasExecuted = false;
-            foundTrackingNumber = null;
-            window.contactLogicDone = false;
-
-            // --- 路由匹配 ---
-            // [核心修正] 使用了正確的正則表達式，確保能匹配帶有查詢參數的 URL
-            const caseRecordPagePattern = /^https:\/\/upsdrive\.lightning\.force\.com\/lightning\/r\/Case\/[a-zA-Z0-9]{18}\/.*/;
-            const myOpenCasesListPagePattern = /^https:\/\/upsdrive\.lightning\.force\.com\/lightning\/o\/Case\/list\?.*filterName=My_Open_Cases_CEC.*/;
-            const isTargetExportPage = /^https:\/\/upsdrive\.lightning\.force\.com\/lightning\/o\/Case\/list\?.*filterName=CEC_HK_ERN_Export_Case*/;
-
-            // =================================================================================
-            // 分支 1: Case 詳情頁邏輯
-            // =================================================================================
-            if (caseRecordPagePattern.test(location.href)) {
-                const caseUrl = location.href;
-
-                // --- 步驟 1: 等待頁面核心 UI 渲染完成 ---
-                const PAGE_READY_SELECTOR = 'c-cec-case-categorization';
-                const PAGE_READY_TIMEOUT = 20000;
-                try {
-                    Log.info('Core.Router', `等待 Case 詳情頁核心元素 "${PAGE_READY_SELECTOR}" 出現...`);
-                    await waitForElementWithObserver(document.body, PAGE_READY_SELECTOR, PAGE_READY_TIMEOUT);
-                    Log.info('Core.Router', `核心元素已出現，開始執行頁面初始化。`);
-                } catch (error) {
-                    Log.warn('Core.Router', `等待核心元素超時 (${PAGE_READY_TIMEOUT / 1000}秒)，已中止當前頁面的初始化。`);
-                    return;
-                }
-
-                // --- 步驟 2: 執行不依賴 Case 內部數據的基礎任務 ---
-                Log.info('Core.Router', `正在執行基礎 UI 初始化...`);
-                checkAndNotifyForRecentSend(caseUrl);
-                initModalButtonObserver();
-                initIWantToModuleWatcher();
-
-                // Follow-Up Panel: Case 詳情頁注入『設定跟進時間』按鈕（支援 Console 多 Tab）
-                if (GM_getValue('followUpPanelEnabled', DEFAULTS.followUpPanelEnabled)) {
-                    FollowUpPanel.ensureMounted();
-                    await FollowUpPanel.ensureCaseButton();
-                    FollowUpPanel.render();
-                }
-
-                // --- 步驟 3: 直接啟動數據依賴型任務 (前置守衛已移除) ---
-                Log.info('Core.Router', `正在啟動數據依賴型任務（掃描器、追踪號提取）。`);
-                startHighFrequencyScanner(caseUrl);
-                extractTrackingNumberAndTriggerIVP();
-
-                // --- 步驟 4: 執行自動指派邏輯 ---
-                if (caseUrl.includes('c__triggeredfrom=reopen')) {
-                    Log.info('Feature.AutoAssign', `檢測到 Re-Open Case，已跳過自動指派邏輯。`);
-                    return;
-                }
-
-                const targetUser = GM_getValue('autoAssignUser', DEFAULTS.autoAssignUser);
-                if (!targetUser) {
-                    Log.warn('Feature.AutoAssign', `未設置目標用戶名，自動指派功能已禁用。`);
-                    return;
-                }
-
-                const ASSIGNMENT_CACHE_KEY = CACHE_POLICY.ASSIGNMENT.KEY;
-                const CACHE_EXPIRATION_MS = CACHE_POLICY.ASSIGNMENT.TTL_MS; // 60分鐘: 自動指派緩存有效期。
-                const cache = GM_getValue(ASSIGNMENT_CACHE_KEY, {});
-
-                const purgeResult = purgeExpiredCacheEntries(cache, CACHE_EXPIRATION_MS);
-                if (purgeResult.changed) {
-                    GM_setValue(ASSIGNMENT_CACHE_KEY, purgeResult.cache);
-                    Log.info('Feature.AutoAssign', `已清理過期的自動指派緩存條目（removed: ${purgeResult.removed}）。`);
-                }
-                const caseId = getCaseIdFromUrl(caseUrl);
-                const entry = caseId ? cache[caseId] : null;
-
-                if (entry && (Date.now() - entry.timestamp < CACHE_EXPIRATION_MS)) {
-                    Log.info('Feature.AutoAssign', `緩存命中：此 Case (ID: ${caseId}) 在 10 小時內已被指派。`);
-                    handleAutoAssign(caseUrl, true);
-                    return;
-                }
-
-                const initialStatus = await determineCaseStatus();
-                if (initialStatus === 'CLOSED') {
-                    Log.info('Feature.AutoAssign', `初始狀態為 "Closed"，不執行指派。`);
-                    return;
-                }
-
-                if (initialStatus !== 'ACTIVE_OR_NEW') {
-                    Log.info('Feature.AutoAssign', `狀態不符合觸發條件 (當前狀態: "${initialStatus}")。`);
-                    return;
-                }
-
-                // --- 步驟 5: 將關鍵字段檢查移至此處，僅中止自動指派 ---
-                if (await areRequiredFieldsEmpty()) {
-                    Log.warn('Feature.AutoAssign', `因關鍵字段為空，自動指派流程已中止。其他頁面任務不受影響。`);
-                    return; // 僅中止自動指派
-                }
-
-                handleAutoAssign(caseUrl, false);
-
-                // =================================================================================
-                // 分支 2: "My Open Cases CEC" 列表頁邏輯
-                // =================================================================================
-            } else if (myOpenCasesListPagePattern.test(location.href)) {
-                Log.info('Core.Router', `"My Open Cases CEC" 列表頁已識別，準備啟動列表監控器。`);
-                initCaseListMonitor();
-
-                // =================================================================================
-                // 分支 3: 其他所有頁面
-                // =================================================================================
-            } else {
-                Log.info('Core.Router', `非目標頁面 (詳情頁/指定列表頁)，跳過核心功能初始化。`);
-            }
+        if (globalScannerId) {
+            clearInterval(globalScannerId);
+            Log.info('Core.Router', `上一個頁面的掃描器 (ID: ${globalScannerId}) 已被終止。`);
+            globalScannerId = null;
         }
 
-        /**
-    * @description 啟動URL監控機制，包括事件監聽和定時心跳檢測。
-    */
-        function startUrlMonitoring() {
-            if (window.__cecUrlMonitoringInitialized) return;
-            window.__cecUrlMonitoringInitialized = true;
-            const originalPushState = history.pushState;
-            const originalReplaceState = history.replaceState;
-            history.pushState = function() {
-                originalPushState.apply(this, arguments);
-                window.dispatchEvent(new Event('urlchange'));
-            };
-            history.replaceState = function() {
-                originalReplaceState.apply(this, arguments);
-                window.dispatchEvent(new Event('urlchange'));
-            };
-            const debouncedMonitor = debounce(monitorUrlChanges, PERF_CONFIG.URL_CHANGE_DEBOUNCE_MS);
-            window.addEventListener('urlchange', debouncedMonitor);
-            window.addEventListener('popstate', debouncedMonitor);
-            setInterval(() => {
-                if (isScriptPaused) return;
-                if (location.href !== lastUrl) {
-                    if (document.visibilityState === 'visible') {
-                        debouncedMonitor();
-                    } else {
-                        lastUrl = location.href;
-                    }
-                }
-            }, PERF_CONFIG.HEARTBEAT_INTERVAL_MS);
-            document.addEventListener('visibilitychange', () => {
-                if (isScriptPaused) return;
-                if (document.visibilityState === 'visible' && location.href !== lastUrl) {
-                    debouncedMonitor();
-                }
-            });
-        }
+        Log.info('Core.Router', `URL 變更，開始處理新頁面: ${location.href}`);
+        lastUrl = location.href;
 
-        /**
-    * @description 腳本的總入口函數，執行所有初始化操作。
-    */
-        function start() {
-            Log.info('Core.Init', `腳本啟動 (Version: ${GM_info.script.version})。`);
-            handleSettingsMigration();
-            initHeaderObserver();
-            if (isScriptPaused) {
-                Log.warn('Core.Init', `腳本處於暫停狀態，核心功能未啟動。`);
+        // --- 頁面級資源統一清理 ---
+        PageResourceRegistry.cleanup('urlchange');
+        // Follow-Up Panel: 清理浮層（避免 SPA 切頁殘留）
+        FollowUpPanel.removeAllFloating();
+
+        // --- 狀態重置 ---
+        injectedIWTButtons = {};
+        if (assignButtonObserver) assignButtonObserver.disconnect();
+        if (iwtModuleObserver) iwtModuleObserver.disconnect();
+        assignButtonObserver = null;
+        iwtModuleObserver = null;
+        if (relatedCasesExtractorModule) relatedCasesExtractorModule.hasExecuted = false;
+        foundTrackingNumber = null;
+        window.contactLogicDone = false;
+
+        // --- 路由匹配 ---
+        // [核心修正] 使用了正確的正則表達式，確保能匹配帶有查詢參數的 URL
+        const caseRecordPagePattern = /^https:\/\/upsdrive\.lightning\.force\.com\/lightning\/r\/Case\/[a-zA-Z0-9]{18}\/.*/;
+        const myOpenCasesListPagePattern = /^https:\/\/upsdrive\.lightning\.force\.com\/lightning\/o\/Case\/list\?.*filterName=My_Open_Cases_CEC.*/;
+        const isTargetExportPage = /^https:\/\/upsdrive\.lightning\.force\.com\/lightning\/o\/Case\/list\?.*filterName=CEC_HK_ERN_Export_Case*/;
+
+        // =================================================================================
+        // 分支 1: Case 詳情頁邏輯
+        // =================================================================================
+        if (caseRecordPagePattern.test(location.href)) {
+            const caseUrl = location.href;
+
+            // --- 步驟 1: 等待頁面核心 UI 渲染完成 ---
+            const PAGE_READY_SELECTOR = 'c-cec-case-categorization';
+            const PAGE_READY_TIMEOUT = 20000;
+            try {
+                Log.info('Core.Router', `等待 Case 詳情頁核心元素 "${PAGE_READY_SELECTOR}" 出現...`);
+                await waitForElementWithObserver(document.body, PAGE_READY_SELECTOR, PAGE_READY_TIMEOUT);
+                Log.info('Core.Router', `核心元素已出現，開始執行頁面初始化。`);
+            } catch (error) {
+                Log.warn('Core.Router', `等待核心元素超時 (${PAGE_READY_TIMEOUT / 1000}秒)，已中止當前頁面的初始化。`);
                 return;
             }
-            injectStyleOverrides();
-            toggleCleanModeStyles();
-            injectGlobalCustomStyles();
 
-            // Follow-Up Panel (常駐)
+            // --- 步驟 2: 執行不依賴 Case 內部數據的基礎任務 ---
+            Log.info('Core.Router', `正在執行基礎 UI 初始化...`);
+            checkAndNotifyForRecentSend(caseUrl);
+            initModalButtonObserver();
+            initIWantToModuleWatcher();
+
+            // Follow-Up Panel: Case 詳情頁注入『設定跟進時間』按鈕（支援 Console 多 Tab）
             if (GM_getValue('followUpPanelEnabled', DEFAULTS.followUpPanelEnabled)) {
                 FollowUpPanel.ensureMounted();
+                await FollowUpPanel.ensureCaseButton();
                 FollowUpPanel.render();
             }
-            Log.info('UI.Init', `所有自定義樣式 (全局/高度/組件屏蔽) 已應用。`);
 
-            const CACHE_KEYS = {
-                ASSIGNMENT: 'assignmentLog',
-                REPLIED: 'sendButtonClickLog',
-                CLAIMS_LOST_PKG: 'claimsLostPkgSendLog',
-                BILLING_REBILL: 'billingRebillSendLog',
-                TRACKING: 'trackingNumberLog',
-                PREFERRED: 'preferredLog'
-            };
+            // --- 步驟 3: 直接啟動數據依賴型任務 (前置守衛已移除) ---
+            Log.info('Core.Router', `正在啟動數據依賴型任務（掃描器、追踪號提取）。`);
+            startHighFrequencyScanner(caseUrl);
+            extractTrackingNumberAndTriggerIVP();
 
-            GM_registerMenuCommand("清理所有緩存", () => {
-                if (!confirm("您確定要清理所有腳本緩存嗎？\n\n這將重置「自動指派」、「聯繫人高亮」和「近期已回复」的歷史記錄。")) {
-                    Log.info('Core.Cache', '用戶取消了清理緩存操作。');
-                    return;
-                }
+            // --- 步驟 4: 執行自動指派邏輯 ---
+            if (caseUrl.includes('c__triggeredfrom=reopen')) {
+                Log.info('Feature.AutoAssign', `檢測到 Re-Open Case，已跳過自動指派邏輯。`);
+                return;
+            }
 
-                try {
-                    const allCacheKeys = Object.values(CACHE_KEYS);
-                    let clearedCount = 0;
+            const targetUser = GM_getValue('autoAssignUser', DEFAULTS.autoAssignUser);
+            if (!targetUser) {
+                Log.warn('Feature.AutoAssign', `未設置目標用戶名，自動指派功能已禁用。`);
+                return;
+            }
 
-                    allCacheKeys.forEach(key => {
-                        if (GM_getValue(key) !== undefined) {
-                            GM_deleteValue(key);
-                            clearedCount++;
-                        }
-                    });
+            const ASSIGNMENT_CACHE_KEY = CACHE_POLICY.ASSIGNMENT.KEY;
+            const CACHE_EXPIRATION_MS = CACHE_POLICY.ASSIGNMENT.TTL_MS; // 60分鐘: 自動指派緩存有效期。
+            const cache = GM_getValue(ASSIGNMENT_CACHE_KEY, {});
 
-                    const message = `成功清理了 ${clearedCount} 個緩存項。`;
-                    showGlobalToast(message, 'check');
-                    Log.info('Core.Cache', `用戶手動清理緩存，共清理 ${clearedCount} 個項目: [${allCacheKeys.join(', ')}]`);
+            const purgeResult = purgeExpiredCacheEntries(cache, CACHE_EXPIRATION_MS);
+            if (purgeResult.changed) {
+                GM_setValue(ASSIGNMENT_CACHE_KEY, purgeResult.cache);
+                Log.info('Feature.AutoAssign', `已清理過期的自動指派緩存條目（removed: ${purgeResult.removed}）。`);
+            }
+            const caseId = getCaseIdFromUrl(caseUrl);
+            const entry = caseId ? cache[caseId] : null;
 
-                } catch (error) {
-                    const errorMessage = "清理緩存時發生錯誤。";
-                    showGlobalToast(errorMessage, 'error');
-                    Log.error('Core.Cache', `清理緩存時發生錯誤: ${error.message}`);
-                }
-            });
-            GM_registerMenuCommand("設置", openSettingsModal);
-            initGlobalClickListener();
-            startUrlMonitoring();
-            monitorUrlChanges();
-            Log.info('Core.Init', `核心功能初始化完成。`);
+            if (entry && (Date.now() - entry.timestamp < CACHE_EXPIRATION_MS)) {
+                Log.info('Feature.AutoAssign', `緩存命中：此 Case (ID: ${caseId}) 在 10 小時內已被指派。`);
+                handleAutoAssign(caseUrl, true);
+                return;
+            }
+
+            const initialStatus = await determineCaseStatus();
+            if (initialStatus === 'CLOSED') {
+                Log.info('Feature.AutoAssign', `初始狀態為 "Closed"，不執行指派。`);
+                return;
+            }
+
+            if (initialStatus !== 'ACTIVE_OR_NEW') {
+                Log.info('Feature.AutoAssign', `狀態不符合觸發條件 (當前狀態: "${initialStatus}")。`);
+                return;
+            }
+
+            // --- 步驟 5: 將關鍵字段檢查移至此處，僅中止自動指派 ---
+            if (await areRequiredFieldsEmpty()) {
+                Log.warn('Feature.AutoAssign', `因關鍵字段為空，自動指派流程已中止。其他頁面任務不受影響。`);
+                return; // 僅中止自動指派
+            }
+
+            handleAutoAssign(caseUrl, false);
+
+            // =================================================================================
+            // 分支 2: "My Open Cases CEC" 列表頁邏輯
+            // =================================================================================
+        } else if (myOpenCasesListPagePattern.test(location.href)) {
+            Log.info('Core.Router', `"My Open Cases CEC" 列表頁已識別，準備啟動列表監控器。`);
+            initCaseListMonitor();
+
+            // =================================================================================
+            // 分支 3: 其他所有頁面
+            // =================================================================================
+        } else {
+            Log.info('Core.Router', `非目標頁面 (詳情頁/指定列表頁)，跳過核心功能初始化。`);
         }
+    }
 
-        start();
-    })();
+    /**
+    * @description 啟動URL監控機制，包括事件監聽和定時心跳檢測。
+    */
+    function startUrlMonitoring() {
+        if (window.__cecUrlMonitoringInitialized) return;
+        window.__cecUrlMonitoringInitialized = true;
+        const originalPushState = history.pushState;
+        const originalReplaceState = history.replaceState;
+        history.pushState = function() {
+            originalPushState.apply(this, arguments);
+            window.dispatchEvent(new Event('urlchange'));
+        };
+        history.replaceState = function() {
+            originalReplaceState.apply(this, arguments);
+            window.dispatchEvent(new Event('urlchange'));
+        };
+        const debouncedMonitor = debounce(monitorUrlChanges, PERF_CONFIG.URL_CHANGE_DEBOUNCE_MS);
+        window.addEventListener('urlchange', debouncedMonitor);
+        window.addEventListener('popstate', debouncedMonitor);
+        setInterval(() => {
+            if (isScriptPaused) return;
+            if (location.href !== lastUrl) {
+                if (document.visibilityState === 'visible') {
+                    debouncedMonitor();
+                } else {
+                    lastUrl = location.href;
+                }
+            }
+        }, PERF_CONFIG.HEARTBEAT_INTERVAL_MS);
+        document.addEventListener('visibilitychange', () => {
+            if (isScriptPaused) return;
+            if (document.visibilityState === 'visible' && location.href !== lastUrl) {
+                debouncedMonitor();
+            }
+        });
+    }
+
+    /**
+    * @description 腳本的總入口函數，執行所有初始化操作。
+    */
+    function start() {
+        Log.info('Core.Init', `腳本啟動 (Version: ${GM_info.script.version})。`);
+        handleSettingsMigration();
+        initHeaderObserver();
+        if (isScriptPaused) {
+            Log.warn('Core.Init', `腳本處於暫停狀態，核心功能未啟動。`);
+            return;
+        }
+        injectStyleOverrides();
+        toggleCleanModeStyles();
+        injectGlobalCustomStyles();
+
+        // Follow-Up Panel (常駐)
+        if (GM_getValue('followUpPanelEnabled', DEFAULTS.followUpPanelEnabled)) {
+            FollowUpPanel.ensureMounted();
+            FollowUpPanel.render();
+        }
+        Log.info('UI.Init', `所有自定義樣式 (全局/高度/組件屏蔽) 已應用。`);
+
+        const CACHE_KEYS = {
+            ASSIGNMENT: 'assignmentLog',
+            REPLIED: 'sendButtonClickLog',
+            CLAIMS_LOST_PKG: 'claimsLostPkgSendLog',
+            BILLING_REBILL: 'billingRebillSendLog',
+            TRACKING: 'trackingNumberLog',
+            PREFERRED: 'preferredLog'
+        };
+
+        GM_registerMenuCommand("清理所有緩存", () => {
+            if (!confirm("您確定要清理所有腳本緩存嗎？\n\n這將重置「自動指派」、「聯繫人高亮」和「近期已回复」的歷史記錄。")) {
+                Log.info('Core.Cache', '用戶取消了清理緩存操作。');
+                return;
+            }
+
+            try {
+                const allCacheKeys = Object.values(CACHE_KEYS);
+                let clearedCount = 0;
+
+                allCacheKeys.forEach(key => {
+                    if (GM_getValue(key) !== undefined) {
+                        GM_deleteValue(key);
+                        clearedCount++;
+                    }
+                });
+
+                const message = `成功清理了 ${clearedCount} 個緩存項。`;
+                showGlobalToast(message, 'check');
+                Log.info('Core.Cache', `用戶手動清理緩存，共清理 ${clearedCount} 個項目: [${allCacheKeys.join(', ')}]`);
+
+            } catch (error) {
+                const errorMessage = "清理緩存時發生錯誤。";
+                showGlobalToast(errorMessage, 'error');
+                Log.error('Core.Cache', `清理緩存時發生錯誤: ${error.message}`);
+            }
+        });
+        GM_registerMenuCommand("設置", openSettingsModal);
+        initGlobalClickListener();
+        startUrlMonitoring();
+        monitorUrlChanges();
+        Log.info('Core.Init', `核心功能初始化完成。`);
+    }
+
+    start();
+})();
