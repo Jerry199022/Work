@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CEC功能強化
 // @namespace    CEC Enhanced
-// @version      V83
+// @version      V84
 // @description  快捷操作按鈕、自動指派、IVP快速查詢、聯繫人彈窗優化、按鈕警示色、賬戶檢測、組件屏蔽、設置菜單、自動IVP查詢、URL精準匹配、快捷按鈕可編輯、(Related Cases)數據提取與增強排序功能、關聯案件提取器、回覆case快捷按鈕、已跟進case提示、全局暫停/恢復功能。
 // @author       Jerry Law
 // @match        https://upsdrive.lightning.force.com/*
@@ -18,8 +18,9 @@
 // ==/UserScript==
 
 /*
-V79 > V83
+V79 > V84
 更新內容：
+-優化跟進面板 添加追蹤號識別 
 -模版插入定位優化
 -頁面自動滾動
 -聯繫人彈窗邏輯修復
@@ -351,34 +352,24 @@ V53 > V54
     // =================================================================================
     // SECTION: 跟進面板模塊（Follow-Up Panel Module）
     // =================================================================================
-    /**
-    * @description
-    * 跟進面板（常駐）+ Case 詳情頁「設定跟進時間」按鈕（含 Other in-place picker）。
-    * - 保留原跟進面板 UI / 交互（寬高、折疊、dropdown other in-place）不變。
-    * - 放棄面板自身 setInterval(800ms) SPA watcher，改由 V65 Router / Pause 控制統一調度。
-    * - Console 多 Tab：
-    * 1) 按鈕注入：使用 V65 Shadow 搜索 + isElementVisible() 定位「當前可見 Tab」的 Follow 區域。
-    * 2) Case 號碼：使用 V65 Shadow 搜索 + isElementVisible() 從「當前可見 Header」提取，避免永遠取到第一個 Tab。
-    */
     const FollowUpPanel = (() => {
         const FOLLOW_UP_DEBUG = false;
         const dlog = (msg) => { if (FOLLOW_UP_DEBUG) Log.debug('FU.Panel', msg); };
-        const dwarn = (msg) => { if (FOLLOW_UP_DEBUG) Log.warn('FU.Panel', msg); };
-
+        
         // -----------------------------
-        // User Settings (保持原參數)
+        // 用戶設置
         // -----------------------------
         const PANEL_RIGHT = 12;
         const PANEL_BOTTOM = 60;
         const DEFAULT_PANEL_WIDTH = 510;
         const MIN_PANEL_WIDTH = 320;
-        const MAX_PANEL_WIDTH_RATIO = 0.8; // 80vw
+        const MAX_PANEL_WIDTH_RATIO = 0.8;
         const DEFAULT_PANEL_HEIGHT = 420;
         const MIN_PANEL_HEIGHT = 180;
-        const MAX_PANEL_HEIGHT_RATIO = 0.8; // 80vh
+        const MAX_PANEL_HEIGHT_RATIO = 0.8;
 
         // -----------------------------
-        // Keys (保持原Key)
+        // 鍵值定義
         // -----------------------------
         const KEY_ITEMS = 'FU_PANEL_ITEMS_V1';
         const KEY_UI = 'FU_PANEL_UI_V4';
@@ -387,11 +378,11 @@ V53 > V54
         const POPOVER_ID = 'fuPopover';
         const DROPDOWN_ID = 'fuFollowTimeMenu';
 
-        // Quick day options
+        // 快速日期選項
         const QUICK_DAYS_CASE_OTHER = [0, 1, 7, 14];
         const QUICK_DAYS_PANEL_PICKER = [1, 3, 7, 14];
 
-        // Aura workspaceAPI (Console OpenTab)
+        // Aura workspaceAPI (控制台打開標籤頁)
         const UW = (typeof unsafeWindow !== 'undefined') ? unsafeWindow : window;
         let wsReady = false;
         let wsInit = false;
@@ -400,22 +391,19 @@ V53 > V54
         let stylesInjected = false;
         let sanitizedOnce = false;
 
-        // -----------------------------
-        // Fast refresh scheduler
-        // -----------------------------
+        // 快速刷新調度器
         let __fuRenderTimer = null;
         let __fuRenderRaf = null;
         let __fuWatchBound = false;
 
         const scheduleRenderPanel = (delayMs = 0) => {
             if (!document.getElementById(PANEL_ID)) return;
-
             if (__fuRenderTimer) clearTimeout(__fuRenderTimer);
             __fuRenderTimer = setTimeout(() => {
                 __fuRenderTimer = null;
                 if (__fuRenderRaf) cancelAnimationFrame(__fuRenderRaf);
                 __fuRenderRaf = requestAnimationFrame(() => {
-                    try { renderPanel(); } catch (e) { /* ignore */ }
+                    try { renderPanel(); } catch (e) { /* 忽略錯誤 */ }
                 });
             }, delayMs);
         };
@@ -428,45 +416,32 @@ V53 > V54
             window.addEventListener('hashchange', () => scheduleRenderPanel(0), true);
         };
 
-        // -----------------------------
-        // GM helpers
-        // -----------------------------
+        // GM 輔助函數
         const gmGet = (key, fallback) => { try { return GM_getValue(key, fallback); } catch (e) { return fallback; } };
-        const gmSet = (key, val) => { try { GM_setValue(key, val); } catch (e) { /* ignore */ } };
+        const gmSet = (key, val) => { try { GM_setValue(key, val); } catch (e) { /* 忽略錯誤 */ } };
 
-        // -----------------------------
-        // Date utilities (核心修復)
-        // -----------------------------
+        // 日期工具 (核心修復)
         const startOfDay = (d) => { const x = d ? new Date(d) : new Date(); x.setHours(0,0,0,0); return x; };
 
         // 智能工作日計算
         const calcSmartDueDate = (offsetDays) => {
             const d = new Date();
             d.setHours(0, 0, 0, 0);
-
             // 情況 A：用戶點擊 "Today" (offset=0)
-            // 如果今天是週末，自動順延到下週一 (即：明天跟進)
             if (offsetDays === 0) {
                 while (d.getDay() === 0 || d.getDay() === 6) {
                     d.setDate(d.getDate() + 1);
                 }
             } else {
                 // 情況 B：用戶點擊 "T+N"
-                // 從今天開始往後找 N 個工作日
-                // 修正：如果今天是週末，應該先跳到下個工作日作為起點，還是直接往後數？
-                // 通常邏輯：週日 + 1個工作日 = 週一。
-                // 算法：循環直到找到 N 個有效工作日。
                 let added = 0;
                 while (added < offsetDays) {
                     d.setDate(d.getDate() + 1);
-                    // 只有週一到週五 (非0非6) 才算有效天數，計入 added
                     if (d.getDay() !== 0 && d.getDay() !== 6) {
                         added++;
                     }
                 }
             }
-
-            // 設定為當天結束時間
             d.setHours(23, 59, 59, 999);
             return d.getTime();
         };
@@ -500,9 +475,7 @@ V53 > V54
             return `${day} ${mon}`;
         };
 
-        // -----------------------------
-        // Case extraction
-        // -----------------------------
+        // Case 提取
         const getCaseId = () => getCaseIdFromUrl(location.href);
 
         const normalizeCaseNo = (raw) => {
@@ -532,11 +505,7 @@ V53 > V54
             ];
             for (const sel of selectors) {
                 let candidates = [];
-                try {
-                    candidates = findAllElementsInShadows(document.body, sel) || [];
-                } catch (e) {
-                    candidates = [];
-                }
+                try { candidates = findAllElementsInShadows(document.body, sel) || []; } catch (e) { candidates = []; }
                 for (const el of candidates) {
                     try { if (!isElementVisible(el)) continue; } catch (e) { }
                     const t = (el.textContent || '').trim();
@@ -555,11 +524,9 @@ V53 > V54
 
         const buildCaseUrl = (caseId) => caseId ? `${location.origin}/lightning/r/Case/${caseId}/view` : null;
 
-        // -----------------------------
-        // Workspace OpenTab
-        // -----------------------------
+        // Workspace 打開標籤頁
         const auraCb = (fn) => {
-            try { if (UW.$A && typeof UW.$A.getCallback === 'function') return UW.$A.getCallback(fn); } catch (e) { /* ignore */ }
+            try { if (UW.$A && typeof UW.$A.getCallback === 'function') return UW.$A.getCallback(fn); } catch (e) { }
             return fn;
         };
 
@@ -567,7 +534,7 @@ V53 > V54
             if (!wsReady || !wsQueue.length) return;
             const q = wsQueue.slice();
             wsQueue = [];
-            q.forEach((f) => { try { f(); } catch (e) { /* ignore */ } });
+            q.forEach((f) => { try { f(); } catch (e) { } });
         };
 
         const wsEnsure = () => {
@@ -575,8 +542,7 @@ V53 > V54
             wsInit = true;
             try {
                 if (!UW.$A || typeof UW.$A.createComponent !== 'function' || typeof UW.$A.getRoot !== 'function') {
-                    wsInit = false;
-                    return;
+                    wsInit = false; return;
                 }
                 UW.$A.createComponent('lightning:workspaceAPI', {}, auraCb((cmp, status) => {
                     if (status !== 'SUCCESS' || !cmp) { wsInit = false; return; }
@@ -589,7 +555,7 @@ V53 > V54
                             body.push(cmp);
                             root.set('v.body', body);
                         }
-                    } catch (e2) { /* ignore */ }
+                    } catch (e2) { }
                     wsReady = true; wsInit = false; wsFlush();
                 }));
                 setTimeout(() => { if (!wsReady && wsInit) wsInit = false; }, 2000);
@@ -606,7 +572,7 @@ V53 > V54
                         wsCmp.openTab({ url, focus: focus !== false });
                         return true;
                     }
-                } catch (e) { /* ignore */ }
+                } catch (e) { }
                 return false;
             };
             if (wsReady) { if (!doOpen()) window.open(buildCaseUrl(caseId), '_blank'); return; }
@@ -614,8 +580,9 @@ V53 > V54
         };
 
         // -----------------------------
-        // Items storage
+        // 存儲邏輯 (已更新追蹤號)
         // -----------------------------
+        // [修改] 數據清洗函數：增加 trackingNo 字段的白名單，防止被清洗掉
         const sanitizeItems = (items) => {
             const map = Object.create(null);
             for (const it of (items || [])) {
@@ -628,6 +595,7 @@ V53 > V54
                     caseId: cid,
                     caseNo: cn,
                     note: it.note || '',
+                    trackingNo: it.trackingNo || '', // [新增] 保留隱藏的追蹤號字段
                     dueAt: Number(it.dueAt),
                     createdAt: Number(it.createdAt || score || Date.now()),
                     updatedAt: Number(it.updatedAt || score || Date.now())
@@ -658,19 +626,43 @@ V53 > V54
 
         const saveItems = (items) => gmSet(KEY_ITEMS, JSON.stringify(items || []));
 
+        // [核心邏輯] 自動獲取 1Z 追蹤號並填充 (方案 B)
         const upsertItem = ({ caseId, caseNo, dueAt }) => {
             if (!caseId || !caseNo || !dueAt) return;
             const items = sanitizeItems(loadItems());
             const now = Date.now();
             const cn = normalizeCaseNo(caseNo) || caseNo;
             const idx = items.findIndex((x) => x && x.caseId === caseId);
+
+            // 直接從腳本全局作用域獲取已識別的追蹤號
+            const autoTrackingNote = foundTrackingNumber || '';
+
             if (idx >= 0) {
+                // --- 現有記錄 (Update) ---
                 items[idx].dueAt = dueAt;
                 items[idx].caseNo = cn;
                 items[idx].updatedAt = now;
+                // 始終更新隱藏的 trackingNo，確保數據最新
+                if (autoTrackingNote) items[idx].trackingNo = autoTrackingNote;
+                
+                // 保護邏輯：僅在注釋字段完全為空時才自動填充 1Z 號，防止覆蓋用戶手寫內容
+                if (!items[idx].note && autoTrackingNote) {
+                    items[idx].note = autoTrackingNote;
+                }
             } else {
-                items.push({ id: `${caseId}_${now}`, caseId, caseNo: cn, note: '', dueAt, createdAt: now, updatedAt: now });
+                // --- 新建記錄 (Insert) ---
+                items.push({ 
+                    id: `${caseId}_${now}`, 
+                    caseId, 
+                    caseNo: cn, 
+                    note: autoTrackingNote, // 直接寫入追蹤號
+                    trackingNo: autoTrackingNote, // [新增] 寫入隱藏字段
+                    dueAt, 
+                    createdAt: now, 
+                    updatedAt: now 
+                });
             }
+            // 保存並重新排序
             saveItems(sanitizeItems(items));
         };
 
@@ -707,7 +699,7 @@ V53 > V54
         };
 
         // -----------------------------
-        // Floating UI utils
+        // 懸浮 UI 工具
         // -----------------------------
         const removePopover = () => { const el = document.getElementById(POPOVER_ID); if (el) el.remove(); };
         const removeDropdown = () => { const el = document.getElementById(DROPDOWN_ID); if (el) el.remove(); };
@@ -754,7 +746,7 @@ V53 > V54
         };
 
         // -----------------------------
-        // Header flash hint
+        // 標題閃爍提示
         // -----------------------------
         let __fuHeaderHintTimer1 = null;
         let __fuHeaderHintTimer2 = null;
@@ -800,18 +792,15 @@ V53 > V54
         };
 
         // -----------------------------
-        // Picker UI (UI & Logic Update)
+        // 選擇器 UI
         // -----------------------------
         const buildLaterPickerContent = (onPickTimestamp, quickDays) => {
             const wrap = document.createElement('div');
-
-            // 1. Title
             const title = document.createElement('div');
             title.className = 'fu-pop-title';
             title.textContent = '選擇跟進日期';
             wrap.appendChild(title);
 
-            // 2. Quick Buttons (T+N)
             const days = (Array.isArray(quickDays) && quickDays.length) ? quickDays : [3, 4, 7, 14];
             const grid = document.createElement('div');
             grid.className = 'fu-pop-grid';
@@ -828,7 +817,6 @@ V53 > V54
             });
             wrap.appendChild(grid);
 
-            // 3. Calendar Container
             const calContainer = document.createElement('div');
             calContainer.className = 'fu-cal-wrap';
 
@@ -839,31 +827,24 @@ V53 > V54
 
             const renderCalendar = () => {
                 calContainer.innerHTML = '';
-
-                // Header
                 const header = document.createElement('div');
                 header.className = 'fu-cal-header';
-
                 const btnPrev = document.createElement('button');
                 btnPrev.className = 'fu-cal-nav';
-                btnPrev.textContent = '◂'; // [已修改] 實心三角
+                btnPrev.textContent = '◂';
                 btnPrev.onclick = (e) => { e.stopPropagation(); changeMonth(-1); };
-
                 const label = document.createElement('span');
                 label.className = 'fu-cal-title';
                 label.textContent = `${viewYear}年 ${viewMonth + 1}月`;
-
                 const btnNext = document.createElement('button');
                 btnNext.className = 'fu-cal-nav';
-                btnNext.textContent = '▸'; // [已修改] 實心三角
+                btnNext.textContent = '▸';
                 btnNext.onclick = (e) => { e.stopPropagation(); changeMonth(1); };
-
                 header.appendChild(btnPrev);
                 header.appendChild(label);
                 header.appendChild(btnNext);
                 calContainer.appendChild(header);
 
-                // Weekdays
                 const weekdays = document.createElement('div');
                 weekdays.className = 'fu-cal-weekdays';
                 ['日', '一', '二', '三', '四', '五', '六'].forEach(d => {
@@ -873,46 +854,34 @@ V53 > V54
                 });
                 calContainer.appendChild(weekdays);
 
-                // Grid
                 const calGrid = document.createElement('div');
                 calGrid.className = 'fu-cal-grid';
-
                 const firstDay = new Date(viewYear, viewMonth, 1).getDay();
                 const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
 
                 for (let i = 0; i < firstDay; i++) {
                     calGrid.appendChild(document.createElement('div'));
                 }
-
                 for (let d = 1; d <= daysInMonth; d++) {
                     const cell = document.createElement('div');
                     cell.className = 'fu-cal-day';
                     cell.textContent = d;
-
                     const thisDateObj = new Date(viewYear, viewMonth, d);
                     const thisDateStr = `${viewYear}-${viewMonth}-${d}`;
-
                     if (thisDateStr === todayStr) {
                         cell.classList.add('today');
                         cell.title = '今天';
                     }
-
-                    // 檢查是否為過去
                     const now = new Date();
                     now.setHours(0,0,0,0);
                     if (thisDateObj < now) {
                         cell.classList.add('disabled');
                     } else {
-                        // [核心修復] 點擊事件
                         cell.onclick = (e) => {
                             e.stopPropagation();
-
-                            // 1. 如果選中的是週末，自動往後順延直到工作日
                             while (thisDateObj.getDay() === 0 || thisDateObj.getDay() === 6) {
                                 thisDateObj.setDate(thisDateObj.getDate() + 1);
                             }
-
-                            // 2. 設定時間並回調
                             thisDateObj.setHours(23, 59, 59, 999);
                             onPickTimestamp(thisDateObj.getTime());
                         };
@@ -937,53 +906,43 @@ V53 > V54
         const showChangeMenu = (anchorEl, onPickTimestamp) => {
             removePopover();
             removeDropdown();
-
             const pop = document.createElement('div');
             pop.id = POPOVER_ID;
             pop.className = 'fu-popover-global';
             placeNear(anchorEl, pop, true, 280, 260);
-
             pop.appendChild(buildLaterPickerContent((pickedTs) => {
                 onPickTimestamp(pickedTs);
                 removePopover();
             }, QUICK_DAYS_PANEL_PICKER));
-
             document.body.appendChild(pop);
             attachOutsideClose(pop, anchorEl, removePopover);
         };
 
         // -----------------------------
-        // Case page dropdown (Other stable, in-place)
+        // Case 頁面下拉菜單
         // -----------------------------
         const renderOtherPickerInMenu = (menuEl, anchorEl, onPickTimestamp) => {
             while (menuEl.firstChild) menuEl.removeChild(menuEl.firstChild);
-
             const head = document.createElement('div');
             head.className = 'fu-ddhead';
-
             const back = document.createElement('span');
             back.className = 'fu-ddback';
             back.textContent = '←';
             back.title = '返回';
-
             const title = document.createElement('span');
             title.className = 'fu-ddtitle';
             title.textContent = 'Other';
-
             head.appendChild(back);
             head.appendChild(title);
             menuEl.appendChild(head);
-
             back.addEventListener('click', (e) => {
                 e.stopPropagation();
                 buildFollowTimeMenu(menuEl, anchorEl, menuEl.__onPick);
             });
-
             const content = buildLaterPickerContent((pickedTs) => {
                 removeDropdown();
                 onPickTimestamp(pickedTs);
             }, QUICK_DAYS_CASE_OTHER);
-
             content.className = 'fu-ddcontent';
             menuEl.appendChild(content);
             menuEl.style.minWidth = '250px';
@@ -994,7 +953,6 @@ V53 > V54
             menuEl.style.minWidth = '';
             menuEl.style.width = '';
             menuEl.__onPick = onPick;
-
             const addItem = (label, value) => {
                 const item = document.createElement('div');
                 item.className = 'fu-dditem';
@@ -1010,7 +968,6 @@ V53 > V54
                 });
                 menuEl.appendChild(item);
             };
-
             addItem('T+2', 2);
             addItem('T+3', 3);
             addItem('T+10', 10);
@@ -1020,17 +977,13 @@ V53 > V54
         const showFollowTimeDropdown = (anchorEl, onPick) => {
             removeDropdown();
             removePopover();
-
             let wrap = (anchorEl && anchorEl.closest) ? anchorEl.closest('.fu-follow-ddwrap') : null;
             if (!wrap) wrap = (anchorEl && anchorEl.parentElement) ? anchorEl.parentElement : null;
-
             const menu = document.createElement('div');
             menu.id = DROPDOWN_ID;
             menu.className = 'fu-ddmenu';
             menu.style.boxSizing = 'border-box';
-
             buildFollowTimeMenu(menu, anchorEl, onPick);
-
             if (wrap) {
                 wrap.appendChild(menu);
                 attachOutsideCloseWithin(menu, wrap, removeDropdown);
@@ -1041,12 +994,11 @@ V53 > V54
         };
 
         // -----------------------------
-        // Styles (保持原樣式輸出 + 新增 active 高亮 + later 日期)
+        // 樣式
         // -----------------------------
         const injectStyles = () => {
             if (stylesInjected) return;
             stylesInjected = true;
-
             const css = [
                 `#${PANEL_ID} { position: fixed; right: ${PANEL_RIGHT}px; bottom: ${PANEL_BOTTOM}px; z-index: 999999; color: #1f1f1f; }`,
                 `#${PANEL_ID} .fu-panel { position: absolute; right: 0; bottom: 0; background: #fff; border: 1px solid rgba(0,0,0,.12); border-radius: 12px; box-shadow: 0 12px 30px rgba(0,0,0,.18); overflow: hidden; }`,
@@ -1099,17 +1051,17 @@ V53 > V54
                 `#${PANEL_ID} .fu-section-title[data-sec="later"] { background: #006860 !important; color: #fff !important; }`,
                 `#${PANEL_ID} .fu-section-title[data-sec]:hover { filter: brightness(1.05); }`,
 
-                // [功能2 + 功能3 + 功能4] Active 高亮（#00ff11，collapsed 也會更新 header）
+                // 激活和追蹤號匹配樣式
                 `#${PANEL_ID} .fu-header.fu-active { background: #00ff11 !important; color: #000000 !important; }`,
+                `#${PANEL_ID} .fu-header.fu-tracking-match { background: #ff9900 !important; color: #000000 !important; }`, // 橙色標題
                 `#${PANEL_ID} .fu-row.fu-active { background: #00ff11 !important; border-color: rgba(0,0,0,.18) !important; }`,
-                `#${PANEL_ID} .fu-row.fu-active .fu-case { color: #000000 !important; }`,
-                `#${PANEL_ID} .fu-row.fu-active .fu-iconbtn { background: rgba(0,0,0,.08) !important; color: #000000 !important; border-color: rgba(0,0,0,.18) !important; }`,
-                `#${PANEL_ID} .fu-row.fu-active .fu-note { background: rgba(255,255,255,.92) !important; border-color: rgba(0,0,0,.18) !important; }`,
-
-                // [功能5] later 日期 badge（13 Jan）
+                `#${PANEL_ID} .fu-row.fu-tracking-match { background: #ff9900 !important; border-color: rgba(0,0,0,.18) !important; }`, // 橙色行
+                `#${PANEL_ID} .fu-row.fu-active .fu-case, #${PANEL_ID} .fu-row.fu-tracking-match .fu-case { color: #000000 !important; }`,
+                `#${PANEL_ID} .fu-row.fu-active .fu-iconbtn, #${PANEL_ID} .fu-row.fu-tracking-match .fu-iconbtn { background: rgba(0,0,0,.08) !important; color: #000000 !important; border-color: rgba(0,0,0,.18) !important; }`,
+                `#${PANEL_ID} .fu-row.fu-active .fu-note, #${PANEL_ID} .fu-row.fu-tracking-match .fu-note { background: rgba(255,255,255,.92) !important; border-color: rgba(0,0,0,.18) !important; }`,
                 `#${PANEL_ID} .fu-due { font-size: 12px; font-weight: 800; padding: 2px 6px; border-radius: 10px; background: rgba(0,0,0,.04); color: rgba(0,0,0,.72); flex: 0 0 auto; }`,
                 `#${PANEL_ID} .fu-row.fu-active .fu-due { background: rgba(0,0,0,.10); color: #000000; }`,
-                // --- 日曆組件樣式 ---
+
                 '.fu-cal-wrap { width: 100%; user-select: none; border: 1px solid #dddbda; border-radius: 4px; overflow: hidden; background: #fff; }',
                 '.fu-cal-header { display: flex; justify-content: space-between; align-items: center; background: #f3f2f2; padding: 5px 10px; border-bottom: 1px solid #dddbda; }',
                 '.fu-cal-title { font-weight: 700; font-size: 13px; color: #080707; }',
@@ -1122,13 +1074,10 @@ V53 > V54
                 '.fu-cal-day.today { font-weight: bold; color: #0176d3; border: 1px solid #0176d3; }',
                 '.fu-cal-day.disabled { color: #ccc; cursor: default; }',
             ].join('\n');
-
             GM_addStyle(css);
         };
 
-        // -----------------------------
-        // Panel UI state
-        // -----------------------------
+        // 面板 UI 狀態
         const loadUI = () => {
             const raw = gmGet(KEY_UI, '{}');
             try { const obj = JSON.parse(raw); return (obj && typeof obj === 'object') ? obj : {}; } catch (e) { return {}; }
@@ -1136,67 +1085,52 @@ V53 > V54
 
         const saveUI = (ui) => gmSet(KEY_UI, JSON.stringify(ui || {}));
 
-        // -----------------------------
-        // Panel rendering
-        // -----------------------------
+        // 面板渲染
         const ensurePanel = () => {
             injectStyles();
             if (document.getElementById(PANEL_ID)) return;
 
             const ui = loadUI();
             const collapsed = !!ui.collapsed;
-
             const maxW = Math.floor(window.innerWidth * MAX_PANEL_WIDTH_RATIO);
             let width = Number(ui.width || DEFAULT_PANEL_WIDTH);
             width = Math.max(MIN_PANEL_WIDTH, Math.min(maxW, width));
-
             const maxH = Math.floor(window.innerHeight * MAX_PANEL_HEIGHT_RATIO);
             let height = Number(ui.height || DEFAULT_PANEL_HEIGHT);
             height = Math.max(MIN_PANEL_HEIGHT, Math.min(maxH, height));
 
             const root = document.createElement('div');
             root.id = PANEL_ID;
-
             const panel = document.createElement('div');
             panel.className = 'fu-panel';
             panel.style.width = `${width}px`;
-
             const resizeTop = document.createElement('div');
             resizeTop.className = 'fu-resize-top';
             panel.appendChild(resizeTop);
-
             const resizeLeft = document.createElement('div');
             resizeLeft.className = 'fu-resize-left';
             panel.appendChild(resizeLeft);
-
             const header = document.createElement('div');
             header.className = 'fu-header';
-
             const headerInner = document.createElement('div');
             headerInner.className = 'fu-header-inner';
-
             const title = document.createElement('div');
             title.className = 'fu-title';
             title.textContent = '跟進面板';
             headerInner.appendChild(title);
             header.appendChild(headerInner);
-
             const arrow = document.createElement('div');
             arrow.className = 'fu-arrow';
             arrow.textContent = '▾';
             header.appendChild(arrow);
-
             panel.appendChild(header);
-
             const body = document.createElement('div');
             body.className = 'fu-body';
             body.style.display = 'block';
             body.style.height = collapsed ? '0px' : `${height}px`;
             body.style.opacity = collapsed ? '0' : '1';
-
             if (collapsed) panel.classList.add('fu-collapsed');
             panel.appendChild(body);
-
             root.appendChild(panel);
             document.body.appendChild(root);
 
@@ -1207,7 +1141,6 @@ V53 > V54
                 renderPanel();
             });
 
-            // width resize
             let resizingW = false; let startX = 0; let startW = 0;
             const onMoveW = (ev) => {
                 if (!resizingW) return;
@@ -1233,7 +1166,6 @@ V53 > V54
                 ev.preventDefault(); ev.stopPropagation();
             });
 
-            // height resize
             let resizingH = false; let startY = 0; let startH = 0;
             const onMoveH = (ev) => {
                 if (!resizingH) return;
@@ -1264,13 +1196,33 @@ V53 > V54
             wsEnsure();
         };
 
-        const buildRow = (it, activeCaseNo) => {
+        // [修改] 構建行DOM (包含追蹤號匹配邏輯)
+        const buildRow = (it, activeCaseNo, activeTrackingNo) => {
             const row = document.createElement('div');
             row.className = 'fu-row';
 
             const thisNo = normalizeCaseNo(it.caseNo) || (it.caseNo || '');
-            if (activeCaseNo && thisNo && thisNo === activeCaseNo) {
+            
+            // 判定 1: Case 號匹配 (最高優先級)
+            const isCaseMatch = (activeCaseNo && thisNo && thisNo === activeCaseNo);
+            
+            // 判定 2: 追蹤號匹配 (次優先級)
+            // 邏輯：當前頁面有追蹤號 AND (注釋包含該號 OR 隱藏字段包含該號)
+            let isTrackingMatch = false;
+            if (!isCaseMatch && activeTrackingNo) {
+                const noteVal = (it.note || '').trim();
+                const trackVal = (it.trackingNo || '').trim();
+                const targetVal = activeTrackingNo.trim();
+                
+                if (noteVal === targetVal || trackVal === targetVal) {
+                    isTrackingMatch = true;
+                }
+            }
+
+            if (isCaseMatch) {
                 row.classList.add('fu-active');
+            } else if (isTrackingMatch) {
+                row.classList.add('fu-tracking-match');
             }
 
             const caseNoDisplay = thisNo || '(unknown)';
@@ -1319,9 +1271,10 @@ V53 > V54
             btnDel.addEventListener('click', () => { deleteItem(it.caseId); renderPanel(); });
             row.appendChild(btnDel);
 
-            return row;
+            return { rowElement: row, isCaseMatch, isTrackingMatch };
         };
 
+        // [修改] 渲染面板 (處理標題變色與文字)
         const renderPanel = () => {
             ensurePanel();
             const root = document.getElementById(PANEL_ID);
@@ -1331,6 +1284,7 @@ V53 > V54
             const arrow = root.querySelector('.fu-arrow');
             const body = root.querySelector('.fu-body');
             const headerEl = root.querySelector('.fu-header');
+            const titleEl = root.querySelector('.fu-title');
             const ui = loadUI();
             const collapsed = !!ui.collapsed;
             const secCollapsed = ui.secCollapsed || {};
@@ -1339,77 +1293,107 @@ V53 > V54
                 if (collapsed) panel.classList.add('fu-collapsed');
                 else panel.classList.remove('fu-collapsed');
             }
-
-
-            if (arrow) {
-                arrow.textContent = collapsed ? '▴' : '▾';
-            }
-
+            if (arrow) arrow.textContent = '▾';
             if (!body) return;
 
+            // 獲取當前頁面特徵
             const activeCaseNo = normalizeCaseNo(getCaseNumberFromVisibleHeader()) || null;
-            let hit = false;
-            if (activeCaseNo) {
-                const items = sanitizeItems(loadItems());
-                hit = items.some((it) => (normalizeCaseNo(it.caseNo) || it.caseNo) === activeCaseNo);
-            }
-            if (headerEl) headerEl.classList.toggle('fu-active', hit);
+            const activeTrackingNo = foundTrackingNumber || null;
 
-            if (collapsed) {
-                body.style.opacity = '0';
-                body.style.height = '0px';
-                while (body.firstChild) body.removeChild(body.firstChild);
-                return;
-            }
+            let hasCaseMatch = false;
+            let hasTrackingMatch = false;
 
-            body.style.opacity = '1';
-            body.style.height = `${Number(ui.height || DEFAULT_PANEL_HEIGHT)}px`;
             while (body.firstChild) body.removeChild(body.firstChild);
 
-            const groups = groupedSortedItems();
-            const order = ['today', 'tomorrow', 'dayafter', 'later'];
+            if (!collapsed) {
+                body.style.opacity = '1';
+                body.style.height = `${Number(ui.height || DEFAULT_PANEL_HEIGHT)}px`;
 
-            order.forEach((key) => {
-                const list = groups[key] || [];
-                const sec = document.createElement('div');
-                sec.className = 'fu-section';
-
-                const secTitle = document.createElement('div');
-                secTitle.className = 'fu-section-title';
-                secTitle.setAttribute('data-sec', key);
-
-                const left = document.createElement('span');
-                left.textContent = bucketTitle(key);
-
-                const right = document.createElement('span');
-                right.textContent = `(${list.length})${secCollapsed[key] ? ' ▸' : ' ▾'}`;
-
-                secTitle.appendChild(left);
-                secTitle.appendChild(right);
-                sec.appendChild(secTitle);
-
-                const ul = document.createElement('div');
-                ul.className = 'fu-list';
-                ul.style.display = secCollapsed[key] ? 'none' : 'flex';
-
-                list.forEach((it) => ul.appendChild(buildRow(it, activeCaseNo)));
-
-                sec.appendChild(ul);
-                body.appendChild(sec);
-
-                secTitle.addEventListener('click', () => {
-                    const ui2 = loadUI();
-                    ui2.secCollapsed = ui2.secCollapsed || {};
-                    ui2.secCollapsed[key] = !ui2.secCollapsed[key];
-                    saveUI(ui2);
-                    renderPanel();
+                const items = sanitizeItems(loadItems());
+                const groups = { today: [], tomorrow: [], dayafter: [], later: [] };
+                
+                items.forEach((it) => {
+                    const k = bucketOf(it.dueAt);
+                    if (!groups[k]) groups[k] = [];
+                    groups[k].push(it);
                 });
-            });
+
+                const order = ['today', 'tomorrow', 'dayafter', 'later'];
+
+                order.forEach((key) => {
+                    const list = groups[key] || [];
+                    const sec = document.createElement('div');
+                    sec.className = 'fu-section';
+
+                    const secTitle = document.createElement('div');
+                    secTitle.className = 'fu-section-title';
+                    secTitle.setAttribute('data-sec', key);
+
+                    const left = document.createElement('span');
+                    left.textContent = bucketTitle(key);
+                    const right = document.createElement('span');
+                    right.textContent = `(${list.length})${secCollapsed[key] ? ' ▸' : ' ▾'}`;
+
+                    secTitle.appendChild(left);
+                    secTitle.appendChild(right);
+                    sec.appendChild(secTitle);
+
+                    const ul = document.createElement('div');
+                    ul.className = 'fu-list';
+                    ul.style.display = secCollapsed[key] ? 'none' : 'flex';
+
+                    list.forEach((it) => {
+                        const { rowElement, isCaseMatch, isTrackingMatch } = buildRow(it, activeCaseNo, activeTrackingNo);
+                        if (isCaseMatch) hasCaseMatch = true;
+                        if (isTrackingMatch) hasTrackingMatch = true;
+                        ul.appendChild(rowElement);
+                    });
+
+                    sec.appendChild(ul);
+                    body.appendChild(sec);
+
+                    secTitle.addEventListener('click', () => {
+                        const ui2 = loadUI();
+                        ui2.secCollapsed = ui2.secCollapsed || {};
+                        ui2.secCollapsed[key] = !ui2.secCollapsed[key];
+                        saveUI(ui2);
+                        renderPanel();
+                    });
+                });
+            } else {
+                // 折疊時仍需遍歷以更新標題狀態
+                const items = sanitizeItems(loadItems());
+                items.forEach(it => {
+                    const thisNo = normalizeCaseNo(it.caseNo) || (it.caseNo || '');
+                    if (activeCaseNo && thisNo === activeCaseNo) hasCaseMatch = true;
+                    else if (activeTrackingNo) {
+                        const noteVal = (it.note || '').trim();
+                        const trackVal = (it.trackingNo || '').trim();
+                        const targetVal = activeTrackingNo.trim();
+                        if (noteVal === targetVal || trackVal === targetVal) hasTrackingMatch = true;
+                    }
+                });
+                body.style.opacity = '0';
+                body.style.height = '0px';
+            }
+
+            // 更新 Header 狀態
+            if (headerEl && titleEl) {
+                headerEl.classList.remove('fu-active', 'fu-tracking-match');
+                
+                if (hasCaseMatch) {
+                    headerEl.classList.add('fu-active');
+                    titleEl.textContent = 'Case已在列表中';
+                } else if (hasTrackingMatch) {
+                    headerEl.classList.add('fu-tracking-match');
+                    titleEl.textContent = '追蹤號已在列表中';
+                } else {
+                    titleEl.textContent = '跟進面板';
+                }
+            }
         };
 
-        // -----------------------------
-        // Case page button
-        // -----------------------------
+        // Case 頁面按鈕
         const getActiveFollowWrap = () => {
             const selector = 'div[data-target-selection-name="sfdc:StandardButton.Case.Follow"]';
             const firstVisible = findElementInShadows(document.body, selector);
@@ -1422,10 +1406,8 @@ V53 > V54
         const ensureCaseFollowTimeButton = () => {
             const caseId = getCaseId();
             if (!caseId) return false;
-
             const followWrap = getActiveFollowWrap();
             if (!followWrap || !followWrap.parentElement) return false;
-
             const btnId = `${BTN_ID_PREFIX}_${caseId}`;
             if (followWrap.parentElement.querySelector(`#${CSS.escape(btnId)}`)) return true;
 
@@ -1436,7 +1418,7 @@ V53 > V54
                 followWrap.parentElement.style.display = 'inline-flex';
                 followWrap.parentElement.style.alignItems = 'center';
                 followWrap.parentElement.style.gap = '6px';
-            } catch (e) { /* ignore */ }
+            } catch (e) { }
 
             const btn = document.createElement('button');
             btn.id = btnId;
@@ -1450,6 +1432,7 @@ V53 > V54
             btn.textContent = '設定跟進時間';
             btn.dataset.caseId = caseId;
 
+            // [修改] 傳入 foundTrackingNumber 供 upsertItem 內部讀取 (雖然 upsertItem 已能直接讀取，但這裡不改動也不影響)
             btn.addEventListener('click', (ev) => {
                 ev.stopPropagation();
                 if (document.getElementById(DROPDOWN_ID)) { removeDropdown(); return; }
@@ -1459,17 +1442,14 @@ V53 > V54
                     const caseNo = getCaseNumberFromVisibleHeader();
                     if (!currentCaseId || !caseNo) {
                         showGlobalToast('未能取得 Case 號碼，請稍後再試');
-                        dwarn('CaseId/CaseNo missing, skip upsert');
                         return;
                     }
-
                     let dueAt;
                     if (choice === 'other') {
-                        dueAt = resultValue; // resultValue is timestamp
+                        dueAt = resultValue;
                     } else {
-                        dueAt = calcSmartDueDate(choice); // choice is offset
+                        dueAt = calcSmartDueDate(choice);
                     }
-
                     upsertItem({ caseId: currentCaseId, caseNo, dueAt });
                     renderPanel();
                     flashHeaderHintByDueAt(dueAt);
@@ -1480,7 +1460,6 @@ V53 > V54
             wrap.className = 'fu-follow-ddwrap';
             wrap.appendChild(btn);
             followWrap.parentElement.insertBefore(wrap, followWrap);
-
             return true;
         };
 
@@ -1514,7 +1493,6 @@ V53 > V54
             unmount,
         };
     })();
-
 
     const processedModals = new WeakSet();
     const processedCaseUrlsInSession = new Set();
