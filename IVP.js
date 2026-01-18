@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IVP顯示注釋
 // @namespace    IVP顯示注釋
-// @version      V18
+// @version      V20
 // @description  IVP顯示注釋、一眼模式、定義字體顏色。
 // @author       Jerry Law
 // @match        *://ivp.inside.ups.com/*
@@ -1059,6 +1059,7 @@ UPS ACCESS POINT
 Package ID
 PACKAGE WAS DRIVER RELEASED
 Search By:
+BLVD LOS AN
 
 `;
 
@@ -1130,6 +1131,16 @@ Search By:
 
     const FULL_VIEW_STYLE_ID = 'ivp-full-view-dynamic-styles';
 
+    // [新增] 防抖函數，用於優化高頻觸發的 DOM 操作
+    function debounce(func, wait) {
+        let timeout;
+        return function(...args) {
+            const context = this;
+            clearTimeout(timeout);
+            timeout = setTimeout(() => func.apply(context, args), wait);
+        };
+    }
+
     function injectBaseStyles() {
         const styleId = 'ivp-gemini-base-styles';
         if (document.getElementById(styleId)) return;
@@ -1137,7 +1148,6 @@ Search By:
             .tm-fa-icon { font-family: "Font Awesome 5 Free", "Font Awesome 5 Solid", "FontAwesome", sans-serif !important; font-weight: 900 !important; display: inline-block !important; font-style: normal !important; font-variant: normal !important; text-rendering: auto !important; -webkit-font-smoothing: antialiased; }
             ${SELECTORS.buttonContainer} { position: relative !important; display: flex !important; align-items: center !important; }
             #call-complete { display: block !important; align-self: center !important; margin-left: auto !important; margin-right: 50px !important; }
-            /* [修改] 移除了 color: red !important; 規則，顏色將由動態樣式控制 */
             .tm-annotation-note { display: inline; margin-left: 5px; font-size: 1em; font-weight: bold; font-family: "Microsoft YaHei", "PingFang TC", sans-serif !important; }
             body.${CSS_CLASSES.annotationsHidden} .tm-annotation-note { display: none !important; }
         `;
@@ -1148,7 +1158,6 @@ Search By:
         console.log("%c[UI] 基礎樣式表已注入。", "color: green; font-weight: bold;");
     }
 
-    // [新增] 注入用於動態修改顏色的專用 <style> 標籤
     function injectDynamicStyles() {
         const styleId = 'ivp-dynamic-annotation-style';
         if (document.getElementById(styleId)) return;
@@ -1157,7 +1166,6 @@ Search By:
         document.head.appendChild(style);
     }
 
-    // [新增] 應用存儲的顏色到動態 <style> 標籤
     function applyAnnotationColor() {
         const styleElement = document.getElementById('ivp-dynamic-annotation-style');
         if (!styleElement) return;
@@ -1172,32 +1180,22 @@ Search By:
         }
         if (SCRIPT_STATE.isFullViewModeActive) {
             const css = `
-                /* [修改] 進入一眼睇曬模式時，將整個頁面的根字體大小縮放至60% */
                 html {
                     font-size: 60% !important;
                 }
-
-                /* [新增] 針對 GSR Status 特定容器的佈局調整 */
-                /* 使用 :has 語法精確定位含有 GSR Status 結構的 container */
                 div.container:has(.row > .col-10.text-center) {
                     margin-top: 67rem !important;
-                    position: relative; /* 確保 z-index 生效 */
-                    z-index: 5; /* 防止被遮擋 */
+                    position: relative;
+                    z-index: 5;
                 }
-
-                /* [新增] 壓縮按鈕尺寸 */
                 .btnsmall {
                     padding: .001rem .3rem!important;
                     font-size: .775rem!important;
                 }
-
-                /* [新增] 調整水平分割線邊距 */
                 hr {
                     margin-top: -15px;
                     margin-bottom: 7px;
                 }
-
-                /* ... (保留你原有的其他樣式規則: 基礎隱藏、表格行高、Prev/Next 按鈕等) ... */
                 app-ivp-pd-trackingno-detail .ng-star-inserted > .row,
                 app-root > .ng-star-inserted > .row,
                 .ng-star-inserted.h5tracking,
@@ -1272,12 +1270,12 @@ Search By:
         }
     }
 
-    function triggerSeamlessHeightAdjustment() {
+    // [修改] 優化高度調整觸發器：加入防抖 (100ms) 避免 MutationObserver 高頻觸發導致頁面卡頓
+    const triggerSeamlessHeightAdjustment = debounce(() => {
         window.requestAnimationFrame(() => {
             applyTbodyHeight();
-            window.requestAnimationFrame(applyTbodyHeight);
         });
-    }
+    }, 100);
 
     function createAndPlaceButtons() {
         if (document.getElementById('tm-full-view-btn')) return;
@@ -1394,7 +1392,6 @@ Search By:
                             </div>
                         </div>
                     </div>
-                    <!-- [新增] 設置面板頁腳和恢復默認按鈕 -->
                     <div class="ivp-settings-footer">
                         <button id="ivp-settings-reset" class="ivp-settings-reset-btn">恢復默認設定</button>
                     </div>
@@ -1425,7 +1422,6 @@ Search By:
             .ivp-settings-input-group span { margin-left: 8px; color: #777; }
             .ivp-settings-color-input { width: 40px; height: 28px; border: 1px solid #ccc; border-radius: 4px; cursor: pointer; padding: 2px; background-color: #fff; }
             .ivp-color-preview-text { font-family: monospace; background-color: #f0f0f0; padding: 4px 8px; border-radius: 4px; margin-right: 12px; }
-            /* [新增] 頁腳和恢復默認按鈕的樣式 */
             .ivp-settings-footer { padding: 16px 24px; border-top: 1px solid #e0e0e0; text-align: right; }
             .ivp-settings-reset-btn { background-color: #f8f9fa; border: 1px solid #dee2e6; color: #212529; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 0.9rem; transition: background-color .2s ease; }
             .ivp-settings-reset-btn:hover { background-color: #e2e6ea; }
@@ -1465,7 +1461,6 @@ Search By:
         });
 
         heightInput.addEventListener('change', () => {
-            // [修正] 避免換行造成語法錯誤，並確保輸入無效時回落默認值
             const newHeight = parseInt(heightInput.value, 10) || DEFAULTS.tbodyMaxHeight;
             GM_setValue('tbodyMaxHeight', newHeight);
             triggerSeamlessHeightAdjustment();
@@ -1491,7 +1486,6 @@ Search By:
         showModal();
     }
 
-    // [新增] 判斷整句是否為地址行格式：門牌 + 街道,,城市,代碼(可選括號)
     function isAddressLineFormat(text) {
         const t = text.trim();
         if (!t) return false;
@@ -1500,7 +1494,6 @@ Search By:
         return /^\d+[^,\r\n]*,,[^,\r\n]+,[A-Z]{2,3}(\([^)]*\))?$/.test(t);
     }
 
-    // [新增] 通用規則：若文字是「標籤(含冒號)」後方段落中的短大寫值，則不做註釋
     function isLabeledShortValueNode(textNode) {
         const p = textNode && textNode.parentElement;
         if (!p || p.tagName !== 'P') return false;
@@ -1515,7 +1508,6 @@ Search By:
         return labelText.includes(':');
     }
 
-    // [新增] 取得 Ship To 區塊容器（存在 "Ship To" 標籤者）
     function getShipToContainer(textNode) {
         const p = textNode && textNode.parentElement;
         if (!p) return null;
@@ -1531,7 +1523,7 @@ Search By:
         return null;
     }
 
-    // [新增] Ship To 區塊內：同一獨立行重複出現時，只注釋最後一次
+    // [修改] Ship To 區塊內：優化判斷邏輯，使用倒序遍歷與 getElementsByTagName 減少開銷
     function shouldAnnotateLastDuplicateLine(textNode, matchText) {
         const container = getShipToContainer(textNode);
         if (!container) return true;
@@ -1542,14 +1534,24 @@ Search By:
         const lineText = (lineEl.textContent || '').replace(/\s+/g, ' ').trim();
         if (lineText !== matchText) return true;
 
-        const list = Array.from(container.querySelectorAll('span.ng-star-inserted'))
-        .filter(el => (el.textContent || '').replace(/\s+/g, ' ').trim() === matchText);
+        // 優化重點：從後往前找，一旦找到內容匹配的元素，判斷是否為當前元素。
+        // 如果是，說明當前元素就是最後一個匹配項（允許註釋）。
+        // 如果不是，說明後面還有相同的內容（跳過註釋）。
+        const spans = container.getElementsByTagName('span');
+        for (let i = spans.length - 1; i >= 0; i--) {
+            const span = spans[i];
+            // 確保只檢查目標類型的 span
+            if (!span.classList.contains('ng-star-inserted')) continue;
 
-        if (list.length <= 1) return true;
-        return list[list.length - 1] === lineEl;
+            const spanText = (span.textContent || '').replace(/\s+/g, ' ').trim();
+            if (spanText === matchText) {
+                return span === lineEl;
+            }
+        }
+
+        return true;
     }
 
-    // [新增] 通用規則：含逗號的地址行內，若命中詞前面（忽略空白）緊接字母，視為片語一部分，跳過注釋
     function isMatchInCommaAddressPhrase(text, matchStart, matchText) {
         if (/^[A-Z]{2,3}$/.test(matchText)) return false;
         const lineStart = text.lastIndexOf('\n', matchStart - 1) + 1;
@@ -1567,40 +1569,29 @@ Search By:
         return /[A-Za-z]/.test(text[i]);
     }
 
-
-    // [修改] 通用規則：用格式識別判斷逗號後兩位字母是否屬於州碼語境，避免硬編碼州碼
     function isCommaSeparatedStateCode(text, matchStart, matchText) {
         if (!/^[A-Z]{2}$/.test(matchText)) return false;
 
-        // 逗號語境：忽略空白後，左邊必須係逗號
         let i = matchStart - 1;
         while (i >= 0 && /\s/.test(text[i])) i--;
         if (i < 0 || text[i] !== ',') return false;
 
-        // 取同一行範圍
         const lineStart = text.lastIndexOf('\n', matchStart - 1) + 1;
         let lineEnd = text.indexOf('\n', matchStart);
         if (lineEnd === -1) lineEnd = text.length;
 
-        // 取命中後嘅尾綴內容
         let j = matchStart + matchText.length;
         while (j < lineEnd && /\s/.test(text[j])) j++;
         const tail = text.slice(j, lineEnd);
 
-        // 若尾綴跟住另一段代碼（兩至三位字母），通常代表前者係州碼，後者係國別或其他代碼
         if (/^[A-Z]{2,3}(\b|$)/.test(tail)) return true;
-
-        // 若尾綴跟住郵編數字（常見三至六位），通常代表州碼語境
         if (/^\d{3,6}(\b|$)/.test(tail)) return true;
-
-        // 若尾綴有括號附加資訊（例如括號內代碼或數字），通常仍屬地址尾段結構
         if (/^\([^)]{1,12}\)/.test(tail)) return true;
 
-        // 行尾情況：用斜線格式作為「國別碼」特徵，否則傾向當作州碼語境
         const line = text.slice(lineStart, lineEnd);
         if (tail.trim() === '') {
-            if (line.indexOf('/') !== -1) return false; // 斜線格式：行尾兩位字母更可能係國別或地區碼，允許註釋
-            return true; // 非斜線格式：行尾兩位字母更可能係州碼，跳過註釋
+            if (line.indexOf('/') !== -1) return false;
+            return true;
         }
 
         return false;
@@ -1619,10 +1610,8 @@ Search By:
 
         if (excludeList.some(excludeItem => text.toLowerCase().includes(excludeItem))) return;
 
-        // [新增] 通用規則：符合地址行格式則整句不做註釋，避免代碼被注釋
         if (isAddressLineFormat(text)) return;
 
-        // [新增] 通用規則：標籤冒號後方的短大寫值不註釋
         if (isLabeledShortValueNode(node)) return;
 
         unionRegex.lastIndex = 0;
@@ -1644,22 +1633,46 @@ Search By:
 
             frag.appendChild(document.createTextNode(matchText));
 
-            // [新增] 通用規則：逗號後兩位代碼視為地址州碼語境，跳過註釋
             if (isCommaSeparatedStateCode(text, matchStart, matchText)) {
                 lastIndex = matchStart + matchText.length;
                 continue;
             }
 
-            // [新增] 通用規則：地址行片語內命中則不注釋（例如 WESTERN AUSTRALIA）
             if (isMatchInCommaAddressPhrase(text, matchStart, matchText)) {
                 lastIndex = matchStart + matchText.length;
                 continue;
             }
 
-            // [新增] 通用規則：Ship To 區塊重複獨立行，只注釋最後一次
             if (!shouldAnnotateLastDuplicateLine(node, matchText)) {
                 lastIndex = matchStart + matchText.length;
                 continue;
+            }
+
+            const headText = text.slice(0, matchStart).trim();
+            const tailText = text.slice(matchStart + matchText.length).trim();
+
+            const isAtEnd = tailText === '' || /^[\).]+$/.test(tailText);
+
+            if (isAtEnd) {
+                const isNumberedAddress = (/^\d/.test(headText) || (/\d/.test(headText) && headText.length > 5));
+                const isCommaFormat = headText.endsWith(',') && !headText.includes('SAR');
+                const isHyphenatedName = !/^\d/.test(headText) && headText.includes(' - ');
+                const hasCanadianZip = /[A-Z]\d[A-Z]\s?\d[A-Z]\d$/i.test(headText);
+                const hasStateCode = /\s[A-Z]{2}$/.test(headText) && !headText.endsWith(' OF');
+                const hasUSAddressPart = /\b(AVE|ST|DR|RD|BLVD|LN|WAY|CT|PL|HWY|CIR|SW|NW|NE|SE)\b/.test(headText);
+
+                if (!headText.includes(':') && !headText.includes('/')) {
+                    if ((isNumberedAddress || isCommaFormat || hasStateCode) &&
+                        (matchText.length > 3 || hasCanadianZip || hasStateCode || hasUSAddressPart)) {
+                        lastIndex = matchStart + matchText.length;
+                        continue;
+                    }
+
+                    if (isHyphenatedName) {
+                        lastIndex = matchStart + matchText.length;
+                        continue;
+                    }
+                }
             }
 
             const noteSpan = document.createElement("span");
