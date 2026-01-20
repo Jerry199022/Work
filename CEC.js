@@ -4998,7 +4998,7 @@ V53 > V54
                         return;
                     }
 
-                    // 3. 強制攔截 (Copilot 等富文本會走到這裡)
+                    // 3. 強制攔截
                     event.preventDefault();
                     event.stopPropagation();
 
@@ -5027,7 +5027,7 @@ V53 > V54
                 }
             }, true);
 
-            // B. Enter 鍵攔截器 (保持不變)
+            // B. Enter 鍵攔截器
             editorBody.addEventListener('keydown', (event) => {
                 if (event.key === 'Enter') {
                     if (isCursorInTemplate()) {
@@ -5047,7 +5047,7 @@ V53 > V54
                 }
             }, true);
 
-            // C. 實時轉換監聽器 (保持不變)
+            // C. 實時轉換監聽器
             const processQueue = new Set();
             let isProcessing = false;
             const processMutations = () => {
