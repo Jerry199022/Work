@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CEC功能強化
 // @namespace    CEC Enhanced
-// @version      V85
+// @version      V86
 // @description  快捷操作按鈕、自動指派、IVP快速查詢、聯繫人彈窗優化、按鈕警示色、賬戶檢測、組件屏蔽、設置菜單、自動IVP查詢、URL精準匹配、快捷按鈕可編輯、(Related Cases)數據提取與增強排序功能、關聯案件提取器、回覆case快捷按鈕、已跟進case提示、全局暫停/恢復功能。
 // @author       Jerry Law
 // @match        https://upsdrive.lightning.force.com/*
@@ -4727,11 +4727,8 @@ V53 > V54
         }
     }
 
-                 /**
+        /**
          * @description 根據模板標題自動點擊對應的模板選項，並執行插入及後續增強。
-         *              [V87 雙軌並行版]
-         *              1. 光標邏輯：沿用 V86 的物理路徑鎖定，保證不報錯且位置準確。
-         *              2. 轉換邏輯：[修復] 改為掃描 Logo 之後的所有兄弟節點，確保覆蓋整個模版內容。
          */
         async function clickTemplateOptionByTitle(templateTitle, buttonText) {
             const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -4770,7 +4767,6 @@ V53 > V54
                     return;
                 }
 
-                // 1. 設置全局轉換模式 (供後續輸入使用)
                 let conversionMode = 'off';
                 if (buttonText) {
                     if (buttonText.includes('繁')) conversionMode = 's2t';
@@ -4780,14 +4776,13 @@ V53 > V54
 
                 const insertionMode = GM_getValue('templateInsertionMode', DEFAULTS.templateInsertionMode);
 
-                // 2. 插入前：光標強制預定位 (V6 頂層鎖定)
+                // 2. 光標預定位
                 if (insertionMode === 'logo') {
                     iframe.contentWindow.focus();
                     const editorDoc = iframe.contentDocument;
                     const editorBody = iframe.contentDocument.body;
                     const range = editorDoc.createRange();
 
-                    // 尋找 Logo
                     let logoTable = null;
                     const children = Array.from(editorBody.children);
                     for (const child of children) {
@@ -4809,7 +4804,6 @@ V53 > V54
                             return false;
                         };
 
-                        // 構建結構鏈條 (Logo -> Spacer -> Bogus1 -> Target)
                         let spacerDiv = logoTable.nextElementSibling;
                         if (!spacerDiv || spacerDiv.tagName !== 'DIV' || isOccupied(spacerDiv) || spacerDiv.querySelectorAll('br').length < 2) {
                             const newSpacer = editorDoc.createElement('div');
@@ -4837,12 +4831,10 @@ V53 > V54
                             targetP = newP;
                         }
 
-                        // 清洗與選中
                         targetP.removeAttribute('style');
                         targetP.removeAttribute('class');
                         targetP.removeAttribute('data-mce-bogus');
                         targetP.innerHTML = '<br>';
-
                         targetContainer = targetP;
                     } else {
                         const newP = editorDoc.createElement('p');
@@ -4868,7 +4860,7 @@ V53 > V54
                     iframe.contentWindow.focus();
                 }
 
-                // 3. 執行插入動作
+                // 3. 執行插入
                 const iconElement = await waitForElementWithObserver(document.body, BUTTON_ICON_SELECTOR, TIMEOUT);
                 clickableButton = iconElement.closest('a[role="button"]');
                 if (clickableButton.getAttribute('aria-expanded') !== 'true') {
@@ -4881,16 +4873,19 @@ V53 > V54
                 const targetOption = findElementInShadows(menuContainer, MENU_ITEM_SELECTOR);
 
                 if (targetOption) {
+                    const iframe = findElementInShadows(document.body, EDITOR_IFRAME_SELECTOR);
+                    if (!iframe || !iframe.contentDocument) throw new Error('無法找到編輯器');
+
                     const changePromise = waitForContentChange(iframe, 5000);
                     targetOption.click();
-                    await changePromise; // 等待插入完成
+                    await changePromise;
 
-                    // 4. Post Insertion (雙軌處理)
+                    // 4. Post Insertion
                     if (GM_getValue('postInsertionEnhancementsEnabled', DEFAULTS.postInsertionEnhancementsEnabled)) {
+                        const iframeWindow = iframe.contentWindow;
                         const iframeDocument = iframe.contentDocument;
                         const editorBody = iframeDocument.body;
 
-                        // --- 重新定位 Logo (錨點) ---
                         let currentLogo = null;
                         const children = Array.from(editorBody.children);
                         for (const child of children) {
@@ -4901,17 +4896,10 @@ V53 > V54
                         }
                         if (!currentLogo) currentLogo = safeQuery(editorBody, 'table.mce-item-table');
 
-                        // ==========================================
-                        // 軌道 A: 繁簡轉換 (掃描 Logo 後的所有內容)
-                        // ==========================================
                         if (conversionMode !== 'off') {
                             try {
-                                // 從 Logo 的下一個兄弟節點開始，一直處理到文檔末尾
-                                // 這樣保證了無論模版有多少段落，只要插在 Logo 下面，都會被覆蓋
                                 let scanNode = currentLogo ? currentLogo.nextElementSibling : editorBody.firstChild;
-
                                 while (scanNode) {
-                                    // 對每個頂層節點進行深度遍歷，替換文本
                                     const walker = iframeDocument.createTreeWalker(scanNode, NodeFilter.SHOW_TEXT, null, false);
                                     let textNode;
                                     while(textNode = walker.nextNode()) {
@@ -4923,18 +4911,11 @@ V53 > V54
                                     }
                                     scanNode = scanNode.nextElementSibling;
                                 }
-                                Log.info(logPrefix, `已對 Logo 下方的內容執行 ${conversionMode} 轉換。`);
-                            } catch (e) {
-                                Log.warn(logPrefix, `轉換過程出錯: ${e.message}`);
-                            }
+                            } catch (e) { }
                         }
 
-                        // ==========================================
-                        // 軌道 B: 光標跳轉 (物理路徑尋找 Target)
-                        // ==========================================
                         let finalContainer = null;
                         if (currentLogo) {
-                            // 物理路徑：Logo -> Spacer -> Bogus1 -> Target
                             const el1 = currentLogo.nextElementSibling;
                             const el2 = el1 ? el1.nextElementSibling : null;
                             const el3 = el2 ? el2.nextElementSibling : null;
@@ -4944,17 +4925,13 @@ V53 > V54
                         }
 
                         if (finalContainer) {
-                            // 在 finalContainer 及其後續節點中尋找 BR
                             const allBrTags = [];
                             let brScanNode = finalContainer;
-                            // 為了性能，我們只掃描接下來的 10 個兄弟節點
                             let siblingsLimit = 10;
-
                             while (brScanNode && siblingsLimit > 0) {
                                 const brs = brScanNode.querySelectorAll('br');
                                 allBrTags.push(...brs);
                                 if (brScanNode.tagName === 'BR') allBrTags.push(brScanNode);
-
                                 brScanNode = brScanNode.nextElementSibling;
                                 siblingsLimit--;
                             }
@@ -4970,11 +4947,9 @@ V53 > V54
                                 iframe.contentWindow.getSelection().removeAllRanges();
                                 iframe.contentWindow.getSelection().addRange(range);
                                 targetPositionNode.scrollIntoView({ behavior: 'auto', block: 'center' });
-                                Log.info(logPrefix, `光標已重定位至第 ${userBrPosition} 個 BR。`);
                             }
                         }
 
-                        // 綁定全局事件 (Paste/Keydown)
                         if (!editorBody.dataset.cecGlobalHandlersAttached) {
                             setupGlobalEnhancements(iframe.contentWindow, iframeDocument, editorBody);
                         }
@@ -4991,7 +4966,7 @@ V53 > V54
         }
 
         /**
-         * @description 設置全局編輯器增強功能 (粘貼過濾、回車攔截、實時轉換)
+         * @description 設置全局編輯器增強功能
          */
         function setupGlobalEnhancements(iframeWindow, iframeDocument, editorBody) {
              if (editorBody.dataset.cecGlobalHandlersAttached) return;
@@ -5003,9 +4978,11 @@ V53 > V54
                 if (isCursorInTemplate()) {
                     const clipboardData = event.clipboardData || iframeWindow.clipboardData;
                     const items = clipboardData.items;
-                    let hasImage = false;
 
-                    // 1. 圖片保護
+                    // 1. [優先] 圖片保護 (回歸原始腳本邏輯)
+                    // 只要剪貼板里有圖片類型的項目，就認為是圖片粘貼，直接放行
+                    // 這能最大程度模擬原腳本的行為
+                    let hasImage = false;
                     for (let i = 0; i < items.length; i++) {
                         if (items[i].type.indexOf("image") !== -1) {
                             hasImage = true;
@@ -5014,13 +4991,14 @@ V53 > V54
                     }
                     if (hasImage) return;
 
-                    // 2. [V83 新增] Excel/表格數據保護
+                    // 2. [嚴格] Excel/表格數據保護
                     const htmlData = clipboardData.getData('text/html');
-                    if (htmlData && /<(table|tr|td|th)/i.test(htmlData)) {
-                        return; // 如果是表格，直接返回，保留原始格式
+                    // 只檢查 <table 標籤，不檢查 tr/td，防止誤判富文本片段
+                    if (htmlData && htmlData.indexOf('<table') !== -1) {
+                        return;
                     }
 
-                    // 3. 純文本轉換邏輯
+                    // 3. 強制攔截 (Copilot 等富文本會走到這裡)
                     event.preventDefault();
                     event.stopPropagation();
 
@@ -5049,7 +5027,7 @@ V53 > V54
                 }
             }, true);
 
-            // B. Enter 鍵攔截器
+            // B. Enter 鍵攔截器 (保持不變)
             editorBody.addEventListener('keydown', (event) => {
                 if (event.key === 'Enter') {
                     if (isCursorInTemplate()) {
@@ -5069,10 +5047,9 @@ V53 > V54
                 }
             }, true);
 
-            // C. 實時轉換監聽器
+            // C. 實時轉換監聽器 (保持不變)
             const processQueue = new Set();
             let isProcessing = false;
-
             const processMutations = () => {
                 isProcessing = false;
                 const mode = editorBody.dataset.cecConversionMode;
@@ -5085,7 +5062,6 @@ V53 > V54
                     const original = textNode.nodeValue;
                     const converted = ChineseConverter.convert(original, mode);
                     if (original === converted) return;
-
                     const selection = iframeWindow.getSelection();
                     let savedOffset = null;
                     if (selection.rangeCount > 0 && selection.anchorNode === textNode) {
@@ -5103,14 +5079,12 @@ V53 > V54
                 });
                 processQueue.clear();
             };
-
             const scheduleProcessing = () => {
                 if (!isProcessing) {
                     isProcessing = true;
                     requestAnimationFrame(processMutations);
                 }
             };
-
             const globalObserver = new MutationObserver((mutations) => {
                 const mode = editorBody.dataset.cecConversionMode;
                 if (!mode || mode === 'off') return;
@@ -5151,7 +5125,6 @@ V53 > V54
                 }
                 if (hasWork) scheduleProcessing();
             });
-
             PageResourceRegistry.addObserver(globalObserver);
             globalObserver.observe(editorBody, { childList: true, subtree: true, characterData: true });
 
