@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CEC功能強化
 // @namespace    CEC Enhanced
-// @version      V87
+// @version      V88
 // @description  快捷操作按鈕、自動指派、IVP快速查詢、聯繫人彈窗優化、按鈕警示色、賬戶檢測、組件屏蔽、設置菜單、自動IVP查詢、URL精準匹配、快捷按鈕可編輯、(Related Cases)數據提取與增強排序功能、關聯案件提取器、回覆case快捷按鈕、已跟進case提示、全局暫停/恢復功能。
 // @author       Jerry Law
 // @match        https://upsdrive.lightning.force.com/*
@@ -349,13 +349,12 @@ V53 > V54
 
 
 
-    // =================================================================================
-    // SECTION: 跟進面板模塊（Follow-Up Panel Module）
+        // =================================================================================
+    // SECTION: 跟進面板模塊（Follow-Up Panel Module）- V86 (穩定修復版)
     // =================================================================================
     const FollowUpPanel = (() => {
         const FOLLOW_UP_DEBUG = false;
-        const dlog = (msg) => { if (FOLLOW_UP_DEBUG) Log.debug('FU.Panel', msg); };
-        
+
         // -----------------------------
         // 用戶設置
         // -----------------------------
@@ -378,11 +377,12 @@ V53 > V54
         const POPOVER_ID = 'fuPopover';
         const DROPDOWN_ID = 'fuFollowTimeMenu';
 
-        // 快速日期選項
         const QUICK_DAYS_CASE_OTHER = [0, 1, 7, 14];
         const QUICK_DAYS_PANEL_PICKER = [1, 3, 7, 14];
 
-        // Aura workspaceAPI (控制台打開標籤頁)
+        // -----------------------------
+        // 狀態變量
+        // -----------------------------
         const UW = (typeof unsafeWindow !== 'undefined') ? unsafeWindow : window;
         let wsReady = false;
         let wsInit = false;
@@ -391,10 +391,23 @@ V53 > V54
         let stylesInjected = false;
         let sanitizedOnce = false;
 
-        // 快速刷新調度器
         let __fuRenderTimer = null;
         let __fuRenderRaf = null;
         let __fuWatchBound = false;
+
+        // [聯動變量] 列表頁匹配集合
+        let listPageMatches = new Set();
+
+        // -----------------------------
+        // 基礎工具函數
+        // -----------------------------
+        const gmGet = (key, fallback) => {
+            try { return GM_getValue(key, fallback); } catch (e) { return fallback; }
+        };
+
+        const gmSet = (key, val) => {
+            try { GM_setValue(key, val); } catch (e) { }
+        };
 
         const scheduleRenderPanel = (delayMs = 0) => {
             if (!document.getElementById(PANEL_ID)) return;
@@ -403,7 +416,7 @@ V53 > V54
                 __fuRenderTimer = null;
                 if (__fuRenderRaf) cancelAnimationFrame(__fuRenderRaf);
                 __fuRenderRaf = requestAnimationFrame(() => {
-                    try { renderPanel(); } catch (e) { /* 忽略錯誤 */ }
+                    try { renderPanel(); } catch (e) { console.error('Render Error:', e); }
                 });
             }, delayMs);
         };
@@ -416,24 +429,23 @@ V53 > V54
             window.addEventListener('hashchange', () => scheduleRenderPanel(0), true);
         };
 
-        // GM 輔助函數
-        const gmGet = (key, fallback) => { try { return GM_getValue(key, fallback); } catch (e) { return fallback; } };
-        const gmSet = (key, val) => { try { GM_setValue(key, val); } catch (e) { /* 忽略錯誤 */ } };
+        // -----------------------------
+        // 日期計算邏輯
+        // -----------------------------
+        const startOfDay = (d) => {
+            const x = d ? new Date(d) : new Date();
+            x.setHours(0, 0, 0, 0);
+            return x;
+        };
 
-        // 日期工具 (核心修復)
-        const startOfDay = (d) => { const x = d ? new Date(d) : new Date(); x.setHours(0,0,0,0); return x; };
-
-        // 智能工作日計算
         const calcSmartDueDate = (offsetDays) => {
             const d = new Date();
             d.setHours(0, 0, 0, 0);
-            // 情況 A：用戶點擊 "Today" (offset=0)
             if (offsetDays === 0) {
                 while (d.getDay() === 0 || d.getDay() === 6) {
                     d.setDate(d.getDate() + 1);
                 }
             } else {
-                // 情況 B：用戶點擊 "T+N"
                 let added = 0;
                 while (added < offsetDays) {
                     d.setDate(d.getDate() + 1);
@@ -471,11 +483,13 @@ V53 > V54
         const formatDueAtDDMon = (ms) => {
             const d = new Date(ms);
             const day = String(d.getDate()).padStart(2, '0');
-            const mon = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()];
+            const mon = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][d.getMonth()];
             return `${day} ${mon}`;
         };
 
-        // Case 提取
+        // -----------------------------
+        // Case 相關邏輯
+        // -----------------------------
         const getCaseId = () => getCaseIdFromUrl(location.href);
 
         const normalizeCaseNo = (raw) => {
@@ -505,7 +519,11 @@ V53 > V54
             ];
             for (const sel of selectors) {
                 let candidates = [];
-                try { candidates = findAllElementsInShadows(document.body, sel) || []; } catch (e) { candidates = []; }
+                try {
+                    candidates = findAllElementsInShadows(document.body, sel) || [];
+                } catch (e) {
+                    candidates = [];
+                }
                 for (const el of candidates) {
                     try { if (!isElementVisible(el)) continue; } catch (e) { }
                     const t = (el.textContent || '').trim();
@@ -524,9 +542,13 @@ V53 > V54
 
         const buildCaseUrl = (caseId) => caseId ? `${location.origin}/lightning/r/Case/${caseId}/view` : null;
 
-        // Workspace 打開標籤頁
+        // -----------------------------
+        // Workspace API
+        // -----------------------------
         const auraCb = (fn) => {
-            try { if (UW.$A && typeof UW.$A.getCallback === 'function') return UW.$A.getCallback(fn); } catch (e) { }
+            try {
+                if (UW.$A && typeof UW.$A.getCallback === 'function') return UW.$A.getCallback(fn);
+            } catch (e) { }
             return fn;
         };
 
@@ -580,9 +602,8 @@ V53 > V54
         };
 
         // -----------------------------
-        // 存儲邏輯 (已更新追蹤號)
+        // 數據存儲邏輯
         // -----------------------------
-        // [修改] 數據清洗函數：增加 trackingNo 字段的白名單，防止被清洗掉
         const sanitizeItems = (items) => {
             const map = Object.create(null);
             for (const it of (items || [])) {
@@ -595,7 +616,7 @@ V53 > V54
                     caseId: cid,
                     caseNo: cn,
                     note: it.note || '',
-                    trackingNo: it.trackingNo || '', // [新增] 保留隱藏的追蹤號字段
+                    trackingNo: it.trackingNo || '',
                     dueAt: Number(it.dueAt),
                     createdAt: Number(it.createdAt || score || Date.now()),
                     updatedAt: Number(it.updatedAt || score || Date.now())
@@ -626,43 +647,34 @@ V53 > V54
 
         const saveItems = (items) => gmSet(KEY_ITEMS, JSON.stringify(items || []));
 
-        // [核心邏輯] 自動獲取 1Z 追蹤號並填充 (方案 B)
         const upsertItem = ({ caseId, caseNo, dueAt }) => {
             if (!caseId || !caseNo || !dueAt) return;
             const items = sanitizeItems(loadItems());
             const now = Date.now();
             const cn = normalizeCaseNo(caseNo) || caseNo;
             const idx = items.findIndex((x) => x && x.caseId === caseId);
-
-            // 直接從腳本全局作用域獲取已識別的追蹤號
             const autoTrackingNote = foundTrackingNumber || '';
 
             if (idx >= 0) {
-                // --- 現有記錄 (Update) ---
                 items[idx].dueAt = dueAt;
                 items[idx].caseNo = cn;
                 items[idx].updatedAt = now;
-                // 始終更新隱藏的 trackingNo，確保數據最新
                 if (autoTrackingNote) items[idx].trackingNo = autoTrackingNote;
-                
-                // 保護邏輯：僅在注釋字段完全為空時才自動填充 1Z 號，防止覆蓋用戶手寫內容
                 if (!items[idx].note && autoTrackingNote) {
                     items[idx].note = autoTrackingNote;
                 }
             } else {
-                // --- 新建記錄 (Insert) ---
-                items.push({ 
-                    id: `${caseId}_${now}`, 
-                    caseId, 
-                    caseNo: cn, 
-                    note: autoTrackingNote, // 直接寫入追蹤號
-                    trackingNo: autoTrackingNote, // [新增] 寫入隱藏字段
-                    dueAt, 
-                    createdAt: now, 
-                    updatedAt: now 
+                items.push({
+                    id: `${caseId}_${now}`,
+                    caseId,
+                    caseNo: cn,
+                    note: autoTrackingNote,
+                    trackingNo: autoTrackingNote,
+                    dueAt,
+                    createdAt: now,
+                    updatedAt: now
                 });
             }
-            // 保存並重新排序
             saveItems(sanitizeItems(items));
         };
 
@@ -687,19 +699,8 @@ V53 > V54
             saveItems(items);
         };
 
-        const groupedSortedItems = () => {
-            const items = sanitizeItems(loadItems());
-            const groups = { today: [], tomorrow: [], dayafter: [], later: [] };
-            items.forEach((it) => {
-                const k = bucketOf(it.dueAt);
-                if (!groups[k]) groups[k] = [];
-                groups[k].push(it);
-            });
-            return groups;
-        };
-
         // -----------------------------
-        // 懸浮 UI 工具
+        // UI 懸浮工具
         // -----------------------------
         const removePopover = () => { const el = document.getElementById(POPOVER_ID); if (el) el.remove(); };
         const removeDropdown = () => { const el = document.getElementById(DROPDOWN_ID); if (el) el.remove(); };
@@ -746,53 +747,7 @@ V53 > V54
         };
 
         // -----------------------------
-        // 標題閃爍提示
-        // -----------------------------
-        let __fuHeaderHintTimer1 = null;
-        let __fuHeaderHintTimer2 = null;
-        let __fuHeaderHintTimer3 = null;
-        let __fuHeaderOriginalTitle = null;
-
-        const getHeaderTitleEl = () => {
-            const root = document.getElementById(PANEL_ID);
-            if (!root) return null;
-            return root.querySelector('.fu-title');
-        };
-
-        const flashHeaderHint = (message) => {
-            ensurePanel();
-            const titleEl = getHeaderTitleEl();
-            if (!titleEl) return;
-
-            if (__fuHeaderHintTimer1) clearTimeout(__fuHeaderHintTimer1);
-            if (__fuHeaderHintTimer2) clearTimeout(__fuHeaderHintTimer2);
-            if (__fuHeaderHintTimer3) clearTimeout(__fuHeaderHintTimer3);
-
-            if (__fuHeaderOriginalTitle == null) {
-                __fuHeaderOriginalTitle = titleEl.textContent || '跟進面板';
-            }
-
-            titleEl.style.transition = 'opacity 200ms ease';
-            titleEl.textContent = message;
-            titleEl.style.opacity = '0';
-            requestAnimationFrame(() => { titleEl.style.opacity = '1'; });
-
-            __fuHeaderHintTimer1 = setTimeout(() => { titleEl.style.opacity = '0'; }, 1800);
-            __fuHeaderHintTimer2 = setTimeout(() => {
-                titleEl.textContent = __fuHeaderOriginalTitle || '跟進面板';
-                titleEl.style.opacity = '1';
-            }, 2000);
-            __fuHeaderHintTimer3 = setTimeout(() => { titleEl.style.transition = ''; }, 1050);
-        };
-
-        const flashHeaderHintByDueAt = (dueAt) => {
-            const key = bucketOf(dueAt);
-            const title = bucketTitle(key);
-            flashHeaderHint(`+1 ${title}`);
-        };
-
-        // -----------------------------
-        // 選擇器 UI
+        // 日期選擇器 UI (修復：完整代碼)
         // -----------------------------
         const buildLaterPickerContent = (onPickTimestamp, quickDays) => {
             const wrap = document.createElement('div');
@@ -873,7 +828,7 @@ V53 > V54
                         cell.title = '今天';
                     }
                     const now = new Date();
-                    now.setHours(0,0,0,0);
+                    now.setHours(0, 0, 0, 0);
                     if (thisDateObj < now) {
                         cell.classList.add('disabled');
                     } else {
@@ -918,9 +873,6 @@ V53 > V54
             attachOutsideClose(pop, anchorEl, removePopover);
         };
 
-        // -----------------------------
-        // Case 頁面下拉菜單
-        // -----------------------------
         const renderOtherPickerInMenu = (menuEl, anchorEl, onPickTimestamp) => {
             while (menuEl.firstChild) menuEl.removeChild(menuEl.firstChild);
             const head = document.createElement('div');
@@ -994,7 +946,46 @@ V53 > V54
         };
 
         // -----------------------------
-        // 樣式
+        // 閃爍提示與標題
+        // -----------------------------
+        let __fuHeaderHintTimer1 = null; let __fuHeaderHintTimer2 = null; let __fuHeaderHintTimer3 = null; let __fuHeaderOriginalTitle = null;
+
+        const getHeaderTitleEl = () => {
+            const root = document.getElementById(PANEL_ID);
+            if (!root) return null;
+            return root.querySelector('.fu-title');
+        };
+
+        const flashHeaderHint = (message) => {
+            ensurePanel();
+            const titleEl = getHeaderTitleEl();
+            if (!titleEl) return;
+            if (__fuHeaderHintTimer1) clearTimeout(__fuHeaderHintTimer1);
+            if (__fuHeaderHintTimer2) clearTimeout(__fuHeaderHintTimer2);
+            if (__fuHeaderHintTimer3) clearTimeout(__fuHeaderHintTimer3);
+            if (__fuHeaderOriginalTitle == null) {
+                __fuHeaderOriginalTitle = titleEl.textContent || '跟進面板';
+            }
+            titleEl.style.transition = 'opacity 200ms ease';
+            titleEl.textContent = message;
+            titleEl.style.opacity = '0';
+            requestAnimationFrame(() => { titleEl.style.opacity = '1'; });
+            __fuHeaderHintTimer1 = setTimeout(() => { titleEl.style.opacity = '0'; }, 1800);
+            __fuHeaderHintTimer2 = setTimeout(() => {
+                titleEl.textContent = __fuHeaderOriginalTitle || '跟進面板';
+                titleEl.style.opacity = '1';
+            }, 2000);
+            __fuHeaderHintTimer3 = setTimeout(() => { titleEl.style.transition = ''; }, 1050);
+        };
+
+        const flashHeaderHintByDueAt = (dueAt) => {
+            const key = bucketOf(dueAt);
+            const title = bucketTitle(key);
+            flashHeaderHint(`+1 ${title}`);
+        };
+
+        // -----------------------------
+        // CSS 樣式注入
         // -----------------------------
         const injectStyles = () => {
             if (stylesInjected) return;
@@ -1051,14 +1042,18 @@ V53 > V54
                 `#${PANEL_ID} .fu-section-title[data-sec="later"] { background: #006860 !important; color: #fff !important; }`,
                 `#${PANEL_ID} .fu-section-title[data-sec]:hover { filter: brightness(1.05); }`,
 
-                // 激活和追蹤號匹配樣式
+                // Active & Tracking Match Styles
                 `#${PANEL_ID} .fu-header.fu-active { background: #00ff11 !important; color: #000000 !important; }`,
-                `#${PANEL_ID} .fu-header.fu-tracking-match { background: #00ff11 !important; color: #000000 !important; }`, // 橙色標題
+                `#${PANEL_ID} .fu-header.fu-tracking-match { background: #ff9900 !important; color: #000000 !important; }`,
                 `#${PANEL_ID} .fu-row.fu-active { background: #00ff11 !important; border-color: rgba(0,0,0,.18) !important; }`,
-                `#${PANEL_ID} .fu-row.fu-tracking-match { background: #00ff11 !important; border-color: rgba(0,0,0,.18) !important; }`, // 橙色行
-                `#${PANEL_ID} .fu-row.fu-active .fu-case, #${PANEL_ID} .fu-row.fu-tracking-match .fu-case { color: #000000 !important; }`,
+                `#${PANEL_ID} .fu-row.fu-tracking-match { background: #ff9900 !important; border-color: rgba(0,0,0,.18) !important; }`,
+                `#${PANEL_ID} .fu-row.fu-list-match { background: #9050e9 !important; border-color: rgba(0,0,0,.18) !important; }`,
+                `#${PANEL_ID} .fu-row.fu-active .fu-case, #${PANEL_ID} .fu-row.fu-tracking-match .fu-case, #${PANEL_ID} .fu-row.fu-list-match .fu-case { color: #000000 !important; }`,
+                `#${PANEL_ID} .fu-row.fu-list-match .fu-case { color: #fff !important; }`,
                 `#${PANEL_ID} .fu-row.fu-active .fu-iconbtn, #${PANEL_ID} .fu-row.fu-tracking-match .fu-iconbtn { background: rgba(0,0,0,.08) !important; color: #000000 !important; border-color: rgba(0,0,0,.18) !important; }`,
+                `#${PANEL_ID} .fu-row.fu-list-match .fu-iconbtn { background: rgba(255,255,255,.4) !important; border-color: transparent !important; color: #fff !important; }`,
                 `#${PANEL_ID} .fu-row.fu-active .fu-note, #${PANEL_ID} .fu-row.fu-tracking-match .fu-note { background: rgba(255,255,255,.92) !important; border-color: rgba(0,0,0,.18) !important; }`,
+                `#${PANEL_ID} .fu-row.fu-list-match .fu-note { background: rgba(255,255,255,.95) !important; }`,
                 `#${PANEL_ID} .fu-due { font-size: 12px; font-weight: 800; padding: 2px 6px; border-radius: 10px; background: rgba(0,0,0,.04); color: rgba(0,0,0,.72); flex: 0 0 auto; }`,
                 `#${PANEL_ID} .fu-row.fu-active .fu-due { background: rgba(0,0,0,.10); color: #000000; }`,
 
@@ -1074,10 +1069,22 @@ V53 > V54
                 '.fu-cal-day.today { font-weight: bold; color: #0176d3; border: 1px solid #0176d3; }',
                 '.fu-cal-day.disabled { color: #ccc; cursor: default; }',
             ].join('\n');
-            GM_addStyle(css);
+
+            // 兜底樣式注入
+            try {
+                if (typeof GM_addStyle !== 'undefined') {
+                    GM_addStyle(css);
+                } else {
+                    const style = document.createElement('style');
+                    style.textContent = css;
+                    document.head.appendChild(style);
+                }
+            } catch(e) { console.error('Style Inject Failed', e); }
         };
 
-        // 面板 UI 狀態
+        // -----------------------------
+        // 面板渲染
+        // -----------------------------
         const loadUI = () => {
             const raw = gmGet(KEY_UI, '{}');
             try { const obj = JSON.parse(raw); return (obj && typeof obj === 'object') ? obj : {}; } catch (e) { return {}; }
@@ -1085,7 +1092,6 @@ V53 > V54
 
         const saveUI = (ui) => gmSet(KEY_UI, JSON.stringify(ui || {}));
 
-        // 面板渲染
         const ensurePanel = () => {
             injectStyles();
             if (document.getElementById(PANEL_ID)) return;
@@ -1101,36 +1107,47 @@ V53 > V54
 
             const root = document.createElement('div');
             root.id = PANEL_ID;
+
             const panel = document.createElement('div');
             panel.className = 'fu-panel';
             panel.style.width = `${width}px`;
+
             const resizeTop = document.createElement('div');
             resizeTop.className = 'fu-resize-top';
             panel.appendChild(resizeTop);
+
             const resizeLeft = document.createElement('div');
             resizeLeft.className = 'fu-resize-left';
             panel.appendChild(resizeLeft);
+
             const header = document.createElement('div');
             header.className = 'fu-header';
+
             const headerInner = document.createElement('div');
             headerInner.className = 'fu-header-inner';
+
             const title = document.createElement('div');
             title.className = 'fu-title';
             title.textContent = '跟進面板';
             headerInner.appendChild(title);
             header.appendChild(headerInner);
+
             const arrow = document.createElement('div');
             arrow.className = 'fu-arrow';
             arrow.textContent = '▾';
             header.appendChild(arrow);
+
             panel.appendChild(header);
+
             const body = document.createElement('div');
             body.className = 'fu-body';
             body.style.display = 'block';
             body.style.height = collapsed ? '0px' : `${height}px`;
             body.style.opacity = collapsed ? '0' : '1';
+
             if (collapsed) panel.classList.add('fu-collapsed');
             panel.appendChild(body);
+
             root.appendChild(panel);
             document.body.appendChild(root);
 
@@ -1141,6 +1158,7 @@ V53 > V54
                 renderPanel();
             });
 
+            // Width resize
             let resizingW = false; let startX = 0; let startW = 0;
             const onMoveW = (ev) => {
                 if (!resizingW) return;
@@ -1166,6 +1184,7 @@ V53 > V54
                 ev.preventDefault(); ev.stopPropagation();
             });
 
+            // Height resize
             let resizingH = false; let startY = 0; let startH = 0;
             const onMoveH = (ev) => {
                 if (!resizingH) return;
@@ -1196,33 +1215,35 @@ V53 > V54
             wsEnsure();
         };
 
-        // [修改] 構建行DOM (包含追蹤號匹配邏輯)
+        // 渲染單個行 (含邏輯判定)
         const buildRow = (it, activeCaseNo, activeTrackingNo) => {
             const row = document.createElement('div');
             row.className = 'fu-row';
 
             const thisNo = normalizeCaseNo(it.caseNo) || (it.caseNo || '');
-            
-            // 判定 1: Case 號匹配 (最高優先級)
+            const pureNo = thisNo.replace(/[^0-9]/g, '');
+
             const isCaseMatch = (activeCaseNo && thisNo && thisNo === activeCaseNo);
-            
-            // 判定 2: 追蹤號匹配 (次優先級)
-            // 邏輯：當前頁面有追蹤號 AND (注釋包含該號 OR 隱藏字段包含該號)
             let isTrackingMatch = false;
             if (!isCaseMatch && activeTrackingNo) {
                 const noteVal = (it.note || '').trim();
                 const trackVal = (it.trackingNo || '').trim();
                 const targetVal = activeTrackingNo.trim();
-                
                 if (noteVal === targetVal || trackVal === targetVal) {
                     isTrackingMatch = true;
                 }
             }
 
+            // 列表頁匹配判定
+            const isListMatch = (pureNo && listPageMatches.has(pureNo));
+
+            // 樣式優先級：Case > Tracking > List
             if (isCaseMatch) {
                 row.classList.add('fu-active');
             } else if (isTrackingMatch) {
                 row.classList.add('fu-tracking-match');
+            } else if (isListMatch) {
+                row.classList.add('fu-list-match');
             }
 
             const caseNoDisplay = thisNo || '(unknown)';
@@ -1274,7 +1295,6 @@ V53 > V54
             return { rowElement: row, isCaseMatch, isTrackingMatch };
         };
 
-        // [修改] 渲染面板 (處理標題變色與文字)
         const renderPanel = () => {
             ensurePanel();
             const root = document.getElementById(PANEL_ID);
@@ -1296,9 +1316,10 @@ V53 > V54
             if (arrow) arrow.textContent = '▾';
             if (!body) return;
 
-            // 獲取當前頁面特徵
-            const activeCaseNo = normalizeCaseNo(getCaseNumberFromVisibleHeader()) || null;
-            const activeTrackingNo = foundTrackingNumber || null;
+            // 路由校驗：只有在 Case 詳情頁才嘗試匹配
+            const isCaseRecordPage = /\/Case\/[a-zA-Z0-9]{18}/.test(location.href);
+            const activeCaseNo = isCaseRecordPage ? (normalizeCaseNo(getCaseNumberFromVisibleHeader()) || null) : null;
+            const activeTrackingNo = isCaseRecordPage ? (foundTrackingNumber || null) : null;
 
             let hasCaseMatch = false;
             let hasTrackingMatch = false;
@@ -1311,7 +1332,7 @@ V53 > V54
 
                 const items = sanitizeItems(loadItems());
                 const groups = { today: [], tomorrow: [], dayafter: [], later: [] };
-                
+
                 items.forEach((it) => {
                     const k = bucketOf(it.dueAt);
                     if (!groups[k]) groups[k] = [];
@@ -1361,7 +1382,6 @@ V53 > V54
                     });
                 });
             } else {
-                // 折疊時仍需遍歷以更新標題狀態
                 const items = sanitizeItems(loadItems());
                 items.forEach(it => {
                     const thisNo = normalizeCaseNo(it.caseNo) || (it.caseNo || '');
@@ -1377,10 +1397,9 @@ V53 > V54
                 body.style.height = '0px';
             }
 
-            // 更新 Header 狀態
             if (headerEl && titleEl) {
                 headerEl.classList.remove('fu-active', 'fu-tracking-match');
-                
+
                 if (hasCaseMatch) {
                     headerEl.classList.add('fu-active');
                     titleEl.textContent = 'Case已在列表中';
@@ -1393,7 +1412,26 @@ V53 > V54
             }
         };
 
-        // Case 頁面按鈕
+        // 外部調用接口
+        const highlightListMatches = (matchedCaseNumbers) => {
+            let isChanged = false;
+            if (matchedCaseNumbers.length !== listPageMatches.size) {
+                isChanged = true;
+            } else {
+                for (const num of matchedCaseNumbers) {
+                    if (!listPageMatches.has(num)) {
+                        isChanged = true;
+                        break;
+                    }
+                }
+            }
+
+            if (isChanged) {
+                listPageMatches = new Set(matchedCaseNumbers);
+                requestAnimationFrame(() => renderPanel());
+            }
+        };
+
         const getActiveFollowWrap = () => {
             const selector = 'div[data-target-selection-name="sfdc:StandardButton.Case.Follow"]';
             const firstVisible = findElementInShadows(document.body, selector);
@@ -1406,8 +1444,10 @@ V53 > V54
         const ensureCaseFollowTimeButton = () => {
             const caseId = getCaseId();
             if (!caseId) return false;
+
             const followWrap = getActiveFollowWrap();
             if (!followWrap || !followWrap.parentElement) return false;
+
             const btnId = `${BTN_ID_PREFIX}_${caseId}`;
             if (followWrap.parentElement.querySelector(`#${CSS.escape(btnId)}`)) return true;
 
@@ -1418,7 +1458,7 @@ V53 > V54
                 followWrap.parentElement.style.display = 'inline-flex';
                 followWrap.parentElement.style.alignItems = 'center';
                 followWrap.parentElement.style.gap = '6px';
-            } catch (e) { }
+            } catch (e) { /* ignore */ }
 
             const btn = document.createElement('button');
             btn.id = btnId;
@@ -1432,7 +1472,6 @@ V53 > V54
             btn.textContent = '設定跟進時間';
             btn.dataset.caseId = caseId;
 
-            // [修改] 傳入 foundTrackingNumber 供 upsertItem 內部讀取 (雖然 upsertItem 已能直接讀取，但這裡不改動也不影響)
             btn.addEventListener('click', (ev) => {
                 ev.stopPropagation();
                 if (document.getElementById(DROPDOWN_ID)) { removeDropdown(); return; }
@@ -1442,14 +1481,17 @@ V53 > V54
                     const caseNo = getCaseNumberFromVisibleHeader();
                     if (!currentCaseId || !caseNo) {
                         showGlobalToast('未能取得 Case 號碼，請稍後再試');
+                        dlog('CaseId/CaseNo missing, skip upsert');
                         return;
                     }
+
                     let dueAt;
                     if (choice === 'other') {
                         dueAt = resultValue;
                     } else {
                         dueAt = calcSmartDueDate(choice);
                     }
+
                     upsertItem({ caseId: currentCaseId, caseNo, dueAt });
                     renderPanel();
                     flashHeaderHintByDueAt(dueAt);
@@ -1460,6 +1502,7 @@ V53 > V54
             wrap.className = 'fu-follow-ddwrap';
             wrap.appendChild(btn);
             followWrap.parentElement.insertBefore(wrap, followWrap);
+
             return true;
         };
 
@@ -1491,6 +1534,7 @@ V53 > V54
             ensureCaseButton,
             removeAllFloating,
             unmount,
+            highlightListMatches,
         };
     })();
 
@@ -3960,42 +4004,19 @@ V53 > V54
         Log.info('Feature.CaseList.Sort', 'PCA提示排序已執行完成（僅當前已渲染行）。');
     }
 
-    /**
-    * @description 還原到本次排序前的原始行順序（僅作用於當前已渲染行）。
-    * @param {HTMLTableSectionElement} tableBody - 表格 tbody。
+        /**
+    * @description 處理 Case 列表頁的行數據。
+    *              [V85 完整聯動版]
+    *              1. 列表視覺：顯示紫色 [跟進中] 標籤。
+    *              2. 面板聯動：[修復] 收集所有命中的 Case 號並通知跟進面板進行高亮。
     */
-    function restorePcaHintRowsInCaseList(tableBody) {
-        if (!tableBody || !pcaCaseListOriginalRowKeys || pcaCaseListOriginalRowKeys.length === 0) {
-            return;
-        }
-
-        const currentRows = Array.from(tableBody.querySelectorAll('tr[data-row-key-value]'));
-        const rowMap = new Map(currentRows.map(r => [r.getAttribute('data-row-key-value'), r]));
-
-        const fragment = document.createDocumentFragment();
-        pcaCaseListOriginalRowKeys.forEach((id) => {
-            const row = rowMap.get(id);
-            if (row) {
-                fragment.appendChild(row);
-                rowMap.delete(id);
-            }
-        });
-
-        // 將未記錄在快照中的新行（如列表刷新新增）附加在末尾，保持不丟失
-        rowMap.forEach((row) => fragment.appendChild(row));
-
-        tableBody.appendChild(fragment);
-
-        pcaCaseListIsSorted = false;
-        Log.info('Feature.CaseList.Sort', '已還原為本次排序前的原始順序（僅當前已渲染行）。');
-    }
-
     function processCaseListRows(tableBody) {
         const repliedEnabled = GM_getValue('notifyOnRepliedCaseEnabled', DEFAULTS.notifyOnRepliedCaseEnabled);
         const listHintEnabled = GM_getValue('pcaCaseListHintEnabled', DEFAULTS.pcaCaseListHintEnabled);
         const expiringHighlightEnabled = GM_getValue('highlightExpiringCasesEnabled', false);
+        const followUpPanelEnabled = GM_getValue('followUpPanelEnabled', DEFAULTS.followUpPanelEnabled);
 
-        if (!repliedEnabled && !listHintEnabled && !expiringHighlightEnabled) return;
+        if (!repliedEnabled && !listHintEnabled && !expiringHighlightEnabled && !followUpPanelEnabled) return;
 
         const SEND_BUTTON_CACHE_KEY = CACHE_POLICY.REPLIED.KEY;
         const CACHE_TTL_MS = CACHE_POLICY.REPLIED.LIST_TTL_MS;
@@ -4003,52 +4024,75 @@ V53 > V54
         const CLAIMS_TTL_MS = CACHE_POLICY.CLAIMS_LOST_PKG.LIST_TTL_MS;
         const BILLING_CACHE_KEY = CACHE_POLICY.BILLING_REBILL.KEY;
         const BILLING_TTL_MS = CACHE_POLICY.BILLING_REBILL.LIST_TTL_MS;
+        const FU_ITEMS_KEY = 'FU_PANEL_ITEMS_V1';
 
         const ANNOTATION_CLASS = 'cec-replied-annotation';
 
-        // --- 緩存讀取與清理（按需）---
+        // --- 1. 準備數據 ---
         const repliedCache = repliedEnabled ? GM_getValue(SEND_BUTTON_CACHE_KEY, {}) : {};
-        if (repliedEnabled) {
-            const repliedPurgeResult = purgeExpiredCacheEntries(repliedCache, CACHE_TTL_MS);
-            if (repliedPurgeResult.changed) {
-                GM_setValue(SEND_BUTTON_CACHE_KEY, repliedPurgeResult.cache);
-                Log.info('Feature.CaseList', `已清理過期的已回覆 Case 緩存條目（removed: ${repliedPurgeResult.removed}）。`);
-            }
-        }
+        if (repliedEnabled) purgeExpiredCacheEntries(repliedCache, CACHE_TTL_MS);
 
         const claimsCache = listHintEnabled ? GM_getValue(CLAIMS_CACHE_KEY, {}) : {};
-        if (listHintEnabled) {
-            const claimsPurgeResult = purgeExpiredCacheEntries(claimsCache, CLAIMS_TTL_MS);
-            if (claimsPurgeResult.changed) {
-                GM_setValue(CLAIMS_CACHE_KEY, claimsPurgeResult.cache);
-                Log.info('Feature.CaseList', `已清理過期的開查緩存條目（removed: ${claimsPurgeResult.removed}）。`);
-            }
-        }
+        if (listHintEnabled) purgeExpiredCacheEntries(claimsCache, CLAIMS_TTL_MS);
 
         const billingCache = listHintEnabled ? GM_getValue(BILLING_CACHE_KEY, {}) : {};
-        if (listHintEnabled) {
-            const billingPurgeResult = purgeExpiredCacheEntries(billingCache, BILLING_TTL_MS);
-            if (billingPurgeResult.changed) {
-                GM_setValue(BILLING_CACHE_KEY, billingPurgeResult.cache);
-                Log.info('Feature.CaseList', `已清理過期的預付緩存條目（removed: ${billingPurgeResult.removed}）。`);
-            }
+        if (listHintEnabled) purgeExpiredCacheEntries(billingCache, BILLING_TTL_MS);
+
+        const followUpSet = new Set();
+        if (followUpPanelEnabled) {
+            try {
+                const rawItems = GM_getValue(FU_ITEMS_KEY, '[]');
+                const items = JSON.parse(rawItems);
+                if (Array.isArray(items)) {
+                    items.forEach(it => {
+                        if (it.caseNo) {
+                            const pureNo = String(it.caseNo).replace(/[^0-9]/g, '');
+                            if (pureNo) followUpSet.add(pureNo);
+                        }
+                    });
+                }
+            } catch (e) { /* ignore */ }
         }
 
         const allRows = tableBody.querySelectorAll('tr[data-row-key-value]');
         let isAnyCaseExpiring = false;
 
+        // [關鍵修復] 用於收集本頁面所有命中的 Case 號，以便通知面板
+        const currentViewMatches = [];
+
+        // --- 2. 遍歷處理 ---
         allRows.forEach(row => {
             const caseId = row.getAttribute('data-row-key-value');
+            if (!caseId) return;
 
-            // --- 功能 1: 列表提示（開查/預付優先，其次已回覆）---
+            const caseNumberLink = findElementInShadows(row, `a[href*="${caseId}"]`);
+            let caseNumberText = '';
+            if (caseNumberLink) {
+                caseNumberText = caseNumberLink.textContent.replace(/[^0-9]/g, '');
+            }
 
-            if ((repliedEnabled || listHintEnabled) && caseId && row.dataset.cecProcessed !== 'true') {
+            // 判斷是否為跟進中 Case
+            const isFollowUp = (followUpPanelEnabled && caseNumberText && followUpSet.has(caseNumberText));
+
+            // [關鍵修復] 如果命中，加入收集列表
+            if (isFollowUp) {
+                currentViewMatches.push(caseNumberText);
+            }
+
+            // [功能A] 核心處理邏輯
+            if (row.dataset.cecProcessed !== 'true') {
                 row.dataset.cecProcessed = 'true';
 
                 let annotationText = null;
-                let annotationMeta = null; // { type: 'claims' | 'billing' | 'replied', timestamp: number }
+                let annotationMeta = null;
 
-                if (listHintEnabled) {
+                // 優先級 1: 跟進中
+                if (isFollowUp) {
+                    annotationText = " 跟進中";
+                    annotationMeta = { type: 'followup' };
+                }
+                // 優先級 2: 開查/預付
+                else if (listHintEnabled) {
                     const claimsEntry = claimsCache[caseId];
                     const billingEntry = billingCache[caseId];
 
@@ -4061,6 +4105,7 @@ V53 > V54
                     }
                 }
 
+                // 優先級 3: 已回覆
                 if (!annotationText && repliedEnabled) {
                     const repliedEntry = repliedCache[caseId];
                     if (repliedEntry && (Date.now() - repliedEntry.timestamp < CACHE_TTL_MS)) {
@@ -4069,111 +4114,113 @@ V53 > V54
                     }
                 }
 
-                if (annotationText) {
-                    if (annotationMeta && (annotationMeta.type === 'claims' || annotationMeta.type === 'billing')) {
-                        row.dataset.cecPcaType = annotationMeta.type;
-                        row.dataset.cecPcaTimestamp = String(annotationMeta.timestamp);
-                    } else {
-                        delete row.dataset.cecPcaType;
-                        delete row.dataset.cecPcaTimestamp;
-                    }
+                // 排序元數據
+                if (annotationMeta && annotationMeta.type === 'followup') {
+                    row.dataset.cecPcaType = 'followup';
+                    row.dataset.cecPcaTimestamp = String(Date.now());
+                } else if (annotationMeta && (annotationMeta.type === 'claims' || annotationMeta.type === 'billing')) {
+                    row.dataset.cecPcaType = annotationMeta.type;
+                    row.dataset.cecPcaTimestamp = String(annotationMeta.timestamp);
+                } else {
+                    delete row.dataset.cecPcaType;
+                    delete row.dataset.cecPcaTimestamp;
+                }
 
-                    const caseNumberCell = row.querySelector('td[data-label="Case Number"]');
-                    if (caseNumberCell) {
-                        const caseNumberLink = findElementInShadows(caseNumberCell, `a[href*="${caseId}"]`);
-                        if (caseNumberLink) {
-                            const injectionTarget = caseNumberLink.parentElement;
-                            if (injectionTarget) {
-                                const existingAnnotation = injectionTarget.querySelector(`.${ANNOTATION_CLASS}`);
-                                if (existingAnnotation) existingAnnotation.remove();
+                // DOM 操作
+                if (caseNumberLink) {
+                    // 清除原有樣式 (因為我們現在用標籤，不改文字顏色)
+                    caseNumberLink.style.backgroundColor = '';
+                    caseNumberLink.style.color = '';
+                    caseNumberLink.style.padding = '';
+                    caseNumberLink.style.borderRadius = '';
+                    caseNumberLink.style.textDecoration = '';
+                    caseNumberLink.title = '';
 
-                                const annotationSpan = document.createElement('span');
-                                annotationSpan.className = ANNOTATION_CLASS;
-                                annotationSpan.textContent = annotationText;
-                                annotationSpan.style.fontSize = 'inherit';
-                                annotationSpan.style.fontWeight = 'normal';
-                                annotationSpan.style.marginLeft = '6px';
+                    const injectionTarget = caseNumberLink.parentElement;
+                    if (injectionTarget) {
+                        const existingAnnotation = injectionTarget.querySelector(`.${ANNOTATION_CLASS}`);
+                        if (existingAnnotation) existingAnnotation.remove();
 
-                                // 只對「開查/預付 + X天X時X分」加背景色（顏色與 Send 攔截彈窗一致）
-                                if (annotationMeta && (annotationMeta.type === 'claims' || annotationMeta.type === 'billing')) {
-                                    const CLAIMS_BASE_COLOR = '#2e844a'; // 開查：與攔截彈窗一致
-                                    const BILLING_BASE_COLOR = '#0070d2'; // 預付：與攔截彈窗一致
+                        if (annotationText) {
+                            const annotationSpan = document.createElement('span');
+                            annotationSpan.className = ANNOTATION_CLASS;
+                            annotationSpan.textContent = annotationText;
+                            annotationSpan.style.fontSize = 'inherit';
+                            annotationSpan.style.marginLeft = '6px';
+                            annotationSpan.style.borderRadius = '4px';
+                            annotationSpan.style.padding = '0px 6px';
+                            annotationSpan.style.display = 'inline-block';
 
-                                    let bgColor = (annotationMeta.type === 'claims') ? CLAIMS_BASE_COLOR : BILLING_BASE_COLOR;
+                            // 標籤樣式分配
+                            if (annotationMeta.type === 'followup') {
+                                annotationSpan.style.backgroundColor = '#9050e9'; // 紫色
+                                annotationSpan.style.color = '#ffffff';
+                                annotationSpan.style.fontWeight = 'bold';
+                            } else if (annotationMeta.type === 'claims' || annotationMeta.type === 'billing') {
+                                const CLAIMS_BASE_COLOR = '#2e844a';
+                                const BILLING_BASE_COLOR = '#0070d2';
+                                let bgColor = (annotationMeta.type === 'claims') ? CLAIMS_BASE_COLOR : BILLING_BASE_COLOR;
 
-                                    // 新條件：開查達到 10 天（>=10天）背景變紅色
-                                    if (annotationMeta.type === 'claims' || annotationMeta.type === 'billing') {
-                                        const diffMs = Date.now() - annotationMeta.timestamp;
-                                        const diffDays = Math.floor(diffMs / (24 * 60 * 60 * 1000));
-                                        if (diffDays >= 10) {
-                                            bgColor = 'red';
-                                        }
-                                    }
-
-                                    annotationSpan.style.backgroundColor = bgColor;
-                                    annotationSpan.style.color = '#ffffff';
-                                    annotationSpan.style.padding = '0px 6px';
-                                    annotationSpan.style.borderRadius = '4px';
-                                    annotationSpan.style.display = 'inline-block';
-                                } else {
-                                    // 已回覆提示保持原樣（黑字無背景）
-                                    annotationSpan.style.color = '#000000';
+                                if (annotationMeta.type === 'claims' || annotationMeta.type === 'billing') {
+                                    const diffMs = Date.now() - annotationMeta.timestamp;
+                                    const diffDays = Math.floor(diffMs / (24 * 60 * 60 * 1000));
+                                    if (diffDays >= 10) bgColor = 'red';
                                 }
-
-                                injectionTarget.appendChild(annotationSpan);
+                                annotationSpan.style.backgroundColor = bgColor;
+                                annotationSpan.style.color = '#ffffff';
+                                annotationSpan.style.fontWeight = 'normal';
+                            } else {
+                                annotationSpan.style.color = '#000000';
+                                annotationSpan.style.fontWeight = 'normal';
+                                annotationSpan.style.padding = '0';
                             }
+
+                            injectionTarget.appendChild(annotationSpan);
                         }
                     }
                 }
             }
 
-
-            // --- 功能 2 檢測邏輯: 檢查是否為過期案件 ---
-            // 邏輯修改：僅當有內容(有圖標)且圖標不是Priority時才觸發
+            // --- 功能 B: 過期檢測 ---
             if (expiringHighlightEnabled && !isAnyCaseExpiring) {
                 const importanceCell = row.querySelector('td[data-label="Importance"]');
                 if (importanceCell) {
                     const richText = findElementInShadows(importanceCell, 'lightning-formatted-rich-text');
-
                     if (richText) {
                         const img = findElementInShadows(richText, 'img');
-                        // 只有當圖片存在(非空白)時才進行檢查
                         if (img) {
                             const altText = img.getAttribute('src');
-                            // 如果有圖片，且含義不是 Priority，則視為需要警示
                             if (altText && altText !== '/resource/CEC_Commitment_Priority_4_IMG') {
                                 isAnyCaseExpiring = true;
                             }
                         }
-                        // 如果 img 不存在 (空白)，視為安全，不操作
                     }
-                    // 如果 richText 不存在 (空白)，視為安全，不操作
                 }
             }
         });
 
-        // --- 功能 2 執行邏輯: 更新表頭顏色 ---
+        // [關鍵修復] 將收集到的 Case 號發送給跟進面板
+        if (followUpPanelEnabled) {
+            FollowUpPanel.highlightListMatches(currentViewMatches);
+        }
+
+        // --- 功能 B 執行 ---
         if (expiringHighlightEnabled) {
             const table = tableBody.parentElement;
             const thead = table ? table.querySelector('thead') : null;
-
             if (thead) {
                 const importanceTitleSpan = findElementInShadows(thead, 'span[title="Importance"]');
-
                 if (importanceTitleSpan) {
                     const headerAction = importanceTitleSpan.closest('a.slds-th__action');
-
                     if (headerAction) {
                         if (isAnyCaseExpiring) {
                             headerAction.style.setProperty('background-color', 'red', 'important');
                             headerAction.style.setProperty('color', 'white', 'important');
-
                             const icon = headerAction.querySelector('lightning-primitive-icon svg');
                             if(icon) icon.style.fill = 'white';
                         } else {
                             headerAction.style.removeProperty('background-color');
                             headerAction.style.removeProperty('color');
-
                             const icon = headerAction.querySelector('lightning-primitive-icon svg');
                             if(icon) icon.style.fill = '';
                         }
@@ -7818,6 +7865,10 @@ V53 > V54
 
         Log.info('Core.Router', `URL 變更，開始處理新頁面: ${location.href}`);
         lastUrl = location.href;
+
+                    if (GM_getValue('followUpPanelEnabled', DEFAULTS.followUpPanelEnabled)) {
+                FollowUpPanel.highlightListMatches([]);
+            }
 
         // --- 頁面級資源統一清理 ---
         PageResourceRegistry.cleanup('urlchange');
