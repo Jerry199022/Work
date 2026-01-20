@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CEC功能強化
 // @namespace    CEC Enhanced
-// @version      V86
+// @version      V87
 // @description  快捷操作按鈕、自動指派、IVP快速查詢、聯繫人彈窗優化、按鈕警示色、賬戶檢測、組件屏蔽、設置菜單、自動IVP查詢、URL精準匹配、快捷按鈕可編輯、(Related Cases)數據提取與增強排序功能、關聯案件提取器、回覆case快捷按鈕、已跟進case提示、全局暫停/恢復功能。
 // @author       Jerry Law
 // @match        https://upsdrive.lightning.force.com/*
@@ -4767,6 +4767,7 @@ V53 > V54
                     return;
                 }
 
+                // 1. 設置轉換模式標記
                 let conversionMode = 'off';
                 if (buttonText) {
                     if (buttonText.includes('繁')) conversionMode = 's2t';
@@ -4776,7 +4777,7 @@ V53 > V54
 
                 const insertionMode = GM_getValue('templateInsertionMode', DEFAULTS.templateInsertionMode);
 
-                // 2. 光標預定位
+                // 2. 光標預定位 (V6 頂層遍歷鎖定)
                 if (insertionMode === 'logo') {
                     iframe.contentWindow.focus();
                     const editorDoc = iframe.contentDocument;
@@ -4835,6 +4836,7 @@ V53 > V54
                         targetP.removeAttribute('class');
                         targetP.removeAttribute('data-mce-bogus');
                         targetP.innerHTML = '<br>';
+
                         targetContainer = targetP;
                     } else {
                         const newP = editorDoc.createElement('p');
@@ -4860,7 +4862,8 @@ V53 > V54
                     iframe.contentWindow.focus();
                 }
 
-                // 3. 執行插入
+
+                // 3. 執行插入 (Mutation Tracking)
                 const iconElement = await waitForElementWithObserver(document.body, BUTTON_ICON_SELECTOR, TIMEOUT);
                 clickableButton = iconElement.closest('a[role="button"]');
                 if (clickableButton.getAttribute('aria-expanded') !== 'true') {
@@ -4878,14 +4881,38 @@ V53 > V54
 
                     const changePromise = waitForContentChange(iframe, 5000);
                     targetOption.click();
-                    await changePromise;
+                    const addedNodes = await changePromise;
 
-                    // 4. Post Insertion
-                    if (GM_getValue('postInsertionEnhancementsEnabled', DEFAULTS.postInsertionEnhancementsEnabled)) {
+                    // 4. Post Insertion (僅處理新增節點)
+                    if (GM_getValue('postInsertionEnhancementsEnabled', DEFAULTS.postInsertionEnhancementsEnabled) && addedNodes) {
                         const iframeWindow = iframe.contentWindow;
                         const iframeDocument = iframe.contentDocument;
                         const editorBody = iframeDocument.body;
 
+                        // [樣式同步 & 轉換]：只針對 addedNodes (新插入的模版) 進行
+                        if (conversionMode !== 'off') {
+                            try {
+                                addedNodes.forEach(node => {
+                                    const walker = iframeDocument.createTreeWalker(node, NodeFilter.SHOW_TEXT, null, false);
+                                    let textNode;
+                                    while(textNode = walker.nextNode()) {
+                                        const originalText = textNode.nodeValue;
+                                        const convertedText = ChineseConverter.convert(originalText, conversionMode);
+                                        if (originalText !== convertedText) {
+                                            textNode.nodeValue = convertedText;
+                                        }
+                                    }
+                                    // 處理頂層文本節點
+                                    if (node.nodeType === 3) {
+                                        const originalText = node.nodeValue;
+                                        const convertedText = ChineseConverter.convert(originalText, conversionMode);
+                                        if (originalText !== convertedText) node.nodeValue = convertedText;
+                                    }
+                                });
+                            } catch (e) { }
+                        }
+
+                        // 光標跳轉 (重新掃描物理路徑)
                         let currentLogo = null;
                         const children = Array.from(editorBody.children);
                         for (const child of children) {
@@ -4895,24 +4922,6 @@ V53 > V54
                             }
                         }
                         if (!currentLogo) currentLogo = safeQuery(editorBody, 'table.mce-item-table');
-
-                        if (conversionMode !== 'off') {
-                            try {
-                                let scanNode = currentLogo ? currentLogo.nextElementSibling : editorBody.firstChild;
-                                while (scanNode) {
-                                    const walker = iframeDocument.createTreeWalker(scanNode, NodeFilter.SHOW_TEXT, null, false);
-                                    let textNode;
-                                    while(textNode = walker.nextNode()) {
-                                        const originalText = textNode.nodeValue;
-                                        const convertedText = ChineseConverter.convert(originalText, conversionMode);
-                                        if (originalText !== convertedText) {
-                                            textNode.nodeValue = convertedText;
-                                        }
-                                    }
-                                    scanNode = scanNode.nextElementSibling;
-                                }
-                            } catch (e) { }
-                        }
 
                         let finalContainer = null;
                         if (currentLogo) {
@@ -4950,11 +4959,13 @@ V53 > V54
                             }
                         }
 
+                        // 綁定全局事件
                         if (!editorBody.dataset.cecGlobalHandlersAttached) {
                             setupGlobalEnhancements(iframe.contentWindow, iframeDocument, editorBody);
                         }
+                        editorBody.dataset.cecConversionMode = conversionMode;
                     }
-                    iframe.contentWindow.focus();
+                    iframeWindow.focus();
                 } else {
                     Log.warn(logPrefix, `未找到菜單選項 "${templateTitle}"`);
                 }
