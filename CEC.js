@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CEC功能強化
 // @namespace    CEC Enhanced
-// @version      V84
+// @version      V85
 // @description  快捷操作按鈕、自動指派、IVP快速查詢、聯繫人彈窗優化、按鈕警示色、賬戶檢測、組件屏蔽、設置菜單、自動IVP查詢、URL精準匹配、快捷按鈕可編輯、(Related Cases)數據提取與增強排序功能、關聯案件提取器、回覆case快捷按鈕、已跟進case提示、全局暫停/恢復功能。
 // @author       Jerry Law
 // @match        https://upsdrive.lightning.force.com/*
@@ -1053,9 +1053,9 @@ V53 > V54
 
                 // 激活和追蹤號匹配樣式
                 `#${PANEL_ID} .fu-header.fu-active { background: #00ff11 !important; color: #000000 !important; }`,
-                `#${PANEL_ID} .fu-header.fu-tracking-match { background: #ff9900 !important; color: #000000 !important; }`, // 橙色標題
+                `#${PANEL_ID} .fu-header.fu-tracking-match { background: #00ff11 !important; color: #000000 !important; }`, // 橙色標題
                 `#${PANEL_ID} .fu-row.fu-active { background: #00ff11 !important; border-color: rgba(0,0,0,.18) !important; }`,
-                `#${PANEL_ID} .fu-row.fu-tracking-match { background: #ff9900 !important; border-color: rgba(0,0,0,.18) !important; }`, // 橙色行
+                `#${PANEL_ID} .fu-row.fu-tracking-match { background: #00ff11 !important; border-color: rgba(0,0,0,.18) !important; }`, // 橙色行
                 `#${PANEL_ID} .fu-row.fu-active .fu-case, #${PANEL_ID} .fu-row.fu-tracking-match .fu-case { color: #000000 !important; }`,
                 `#${PANEL_ID} .fu-row.fu-active .fu-iconbtn, #${PANEL_ID} .fu-row.fu-tracking-match .fu-iconbtn { background: rgba(0,0,0,.08) !important; color: #000000 !important; border-color: rgba(0,0,0,.18) !important; }`,
                 `#${PANEL_ID} .fu-row.fu-active .fu-note, #${PANEL_ID} .fu-row.fu-tracking-match .fu-note { background: rgba(255,255,255,.92) !important; border-color: rgba(0,0,0,.18) !important; }`,
@@ -4727,111 +4727,90 @@ V53 > V54
         }
     }
 
-    /**
-    * @description 根據模板標題自動點擊對應的模板選項，並執行插入及後續增強。
-    *              [極致性能版 V11]
-    *              1. 實現 "預過濾 (Pre-Filter)" 機制：在觸發任何 DOM 計算前，先檢查文字是否需要轉換。
-    *              2. 解決鼠標點擊導致的 CPU 飆升：過濾掉編輯器內部無意義的節點拆分與標記變動。
-    *              3. 優化循環：將 DOM 查找移出循環體，減少查詢開銷。
-    */
-    async function clickTemplateOptionByTitle(templateTitle, buttonText) {
-        let VIEW_ADJUSTMENT_OFFSET_PX = 0;
-        const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+                 /**
+         * @description 根據模板標題自動點擊對應的模板選項，並執行插入及後續增強。
+         *              [V87 雙軌並行版]
+         *              1. 光標邏輯：沿用 V86 的物理路徑鎖定，保證不報錯且位置準確。
+         *              2. 轉換邏輯：[修復] 改為掃描 Logo 之後的所有兄弟節點，確保覆蓋整個模版內容。
+         */
+        async function clickTemplateOptionByTitle(templateTitle, buttonText) {
+            const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+            const logPrefix = 'UI.Enhancement';
 
-        // [Fix 1] 等待模板插入完成：輪詢直到出現預期模板結構（避免固定 delay 導致 race condition）
-        const waitForExpectedTemplateStructure = async (iframe, timeout) => {
-            const start = Date.now();
-            while (Date.now() - start < timeout) {
-                try {
-                    if (iframe && iframe.contentDocument) {
-                        const iframeDocument = iframe.contentDocument;
-                        const editorBody = iframeDocument.body;
-                        const firstParagraph = editorBody ? editorBody.querySelector('p') : null;
-                        const targetContainerSpan = firstParagraph ? firstParagraph.querySelector('span') : null;
-                        if (targetContainerSpan && targetContainerSpan.getElementsByTagName('br').length > 0) {
-                            return true;
+            const safeQuery = (root, selector) => {
+                try { return root.querySelector(selector); } catch (e) { return null; }
+            };
+
+            const waitForContentChange = (iframe, timeout) => {
+                return new Promise((resolve) => {
+                    const observer = new MutationObserver((mutations) => {
+                        if (mutations.some(m => (m.type === 'childList' && m.addedNodes.length > 0) || m.type === 'characterData')) {
+                            observer.disconnect();
+                            resolve(true);
                         }
+                    });
+                    if (iframe.contentDocument && iframe.contentDocument.body) {
+                        observer.observe(iframe.contentDocument.body, { childList: true, subtree: true, characterData: true });
                     }
-                } catch (e) {}
-                await delay(100);
-            }
-            return false;
-        };
-        const BUTTON_ICON_SELECTOR = 'lightning-icon[icon-name="utility:insert_template"]';
-        const MENU_ITEM_SELECTOR = `li.uiMenuItem a[role="menuitem"][title="${templateTitle}"]`;
-        const EDITOR_IFRAME_SELECTOR = 'iframe.tox-edit-area__iframe';
-        const TIMEOUT = 5000;
-        let clickableButton = null;
+                    setTimeout(() => { observer.disconnect(); resolve(false); }, timeout);
+                });
+            };
 
-        // 1. 確定繁簡轉換模式
-        let conversionMode = 'off';
-        if (buttonText) {
-            if (buttonText.includes('繁')) {
-                conversionMode = 's2t';
-            } else if (buttonText.includes('簡') || buttonText.includes('简')) {
-                conversionMode = 't2s';
-            }
-        }
+            const BUTTON_ICON_SELECTOR = 'lightning-icon[icon-name="utility:insert_template"]';
+            const MENU_ITEM_SELECTOR = `li.uiMenuItem a[role="menuitem"][title="${templateTitle}"]`;
+            const EDITOR_IFRAME_SELECTOR = 'iframe.tox-edit-area__iframe';
+            const TIMEOUT = 5000;
 
-        const insertionMode = GM_getValue('templateInsertionMode', DEFAULTS.templateInsertionMode);
+            let clickableButton = null;
 
-        // 更新 DOM 上的轉換模式標記
-        try {
-            const iframe = findElementInShadows(document.body, EDITOR_IFRAME_SELECTOR);
-            if (iframe && iframe.contentDocument) {
-                iframe.contentDocument.body.dataset.cecConversionMode = conversionMode;
-            }
-        } catch (e) {}
-
-        // 2. 光標預定位 (Logo 模式 - 頂層遍歷鎖定法 - 最終精簡版)
-        if (insertionMode === 'logo') {
             try {
                 const iframe = await waitForElementWithObserver(document.body, EDITOR_IFRAME_SELECTOR, TIMEOUT);
-                await delay(100);
+                if (!iframe || !iframe.contentDocument) {
+                    Log.warn(logPrefix, '找不到編輯器 iframe，流程中止。');
+                    return;
+                }
 
-                if (iframe && iframe.contentDocument) {
+                // 1. 設置全局轉換模式 (供後續輸入使用)
+                let conversionMode = 'off';
+                if (buttonText) {
+                    if (buttonText.includes('繁')) conversionMode = 's2t';
+                    else if (buttonText.includes('簡') || buttonText.includes('简')) conversionMode = 't2s';
+                }
+                iframe.contentDocument.body.dataset.cecConversionMode = conversionMode;
+
+                const insertionMode = GM_getValue('templateInsertionMode', DEFAULTS.templateInsertionMode);
+
+                // 2. 插入前：光標強制預定位 (V6 頂層鎖定)
+                if (insertionMode === 'logo') {
                     iframe.contentWindow.focus();
                     const editorDoc = iframe.contentDocument;
-                    const editorBody = editorDoc.body;
-                    const selection = iframe.contentWindow.getSelection();
+                    const editorBody = iframe.contentDocument.body;
                     const range = editorDoc.createRange();
 
-                    let targetContainer = null;
+                    // 尋找 Logo
                     let logoTable = null;
-
-                    // --- 步驟 1: 嚴格尋找頂層 Logo (禁止深度查找) ---
-                    // 只遍歷 body 的直接子元素，確保找到的是最上面那個，絕不會鑽進歷史郵件裡
                     const children = Array.from(editorBody.children);
                     for (const child of children) {
-                        if (child.tagName === 'TABLE') {
-                            // 檢查特徵：class 包含 mce-item-table 或者內部有 ups-shield 圖片
-                            if (child.classList.contains('mce-item-table') || child.querySelector('img[src*="ups-shield.png"]')) {
-                                logoTable = child;
-                                break; // 找到第一個就停止，這絕對是頂部 Logo
-                            }
+                        if (child.tagName === 'TABLE' && (child.classList.contains('mce-item-table') || child.querySelector('img[src*="ups-shield.png"]'))) {
+                            logoTable = child;
+                            break;
                         }
                     }
+                    if (!logoTable) logoTable = safeQuery(editorBody, 'table.mce-item-table');
 
-                    // 兜底：如果第一層沒找到 (極少見)，才嘗試普通搜索
-                    if (!logoTable) {
-                        logoTable = editorBody.querySelector('table.mce-item-table');
-                    }
+                    let targetContainer = null;
 
                     if (logoTable) {
-                        // 輔助函數：判斷節點是否"被佔用" (有內容、有樣式、或者是引用塊)
-                        // 如果下一個節點是這種情況，我們就不能復用它，必須在它前面插入新的
                         const isOccupied = (node) => {
                             if (!node || node.nodeType !== 1) return false;
-                            if (node.textContent.trim() !== '') return true; // 有文字
-                            if (node.hasAttribute('style')) return true; // 有樣式 (這是導致偏移的主因)
-                            if (['HR', 'BLOCKQUOTE', 'TABLE'].includes(node.tagName)) return true; // 是特殊標籤
+                            if (node.textContent.trim() !== '') return true;
+                            if (node.hasAttribute('style')) return true;
+                            if (['HR', 'BLOCKQUOTE', 'TABLE'].includes(node.tagName)) return true;
                             return false;
                         };
 
-                        // --- 步驟 2: 處理 Spacer (4行BR) ---
+                        // 構建結構鏈條 (Logo -> Spacer -> Bogus1 -> Target)
                         let spacerDiv = logoTable.nextElementSibling;
-
-                        // 驗證：必須是 DIV，且未被佔用，且包含多個 BR
                         if (!spacerDiv || spacerDiv.tagName !== 'DIV' || isOccupied(spacerDiv) || spacerDiv.querySelectorAll('br').length < 2) {
                             const newSpacer = editorDoc.createElement('div');
                             newSpacer.innerHTML = '<br><br><br><br>';
@@ -4840,9 +4819,7 @@ V53 > V54
                             spacerDiv = newSpacer;
                         }
 
-                        // --- 步驟 3: 處理 Bogus 1 (第1個空行) ---
                         let bogus1 = spacerDiv.nextElementSibling;
-
                         if (!bogus1 || bogus1.tagName !== 'DIV' || isOccupied(bogus1)) {
                             const newBogus1 = editorDoc.createElement('div');
                             newBogus1.innerHTML = '<br data-mce-bogus="1">';
@@ -4851,395 +4828,335 @@ V53 > V54
                             bogus1 = newBogus1;
                         }
 
-                        // --- 步驟 4: 鎖定 Target (第2個空行) ---
-                        // [關鍵] 這裡改用 <p> 標籤，因為 TinyMCE 對 p 的支持最好，不會亂跳
                         let targetP = bogus1.nextElementSibling;
-
-                        // 如果下一個節點不存在，或者被佔用(例如是 Original Message)，或者不是 P
                         if (!targetP || targetP.tagName !== 'P' || isOccupied(targetP)) {
                             const newP = editorDoc.createElement('p');
-                            newP.innerHTML = '<br>'; // 標準 br
-
+                            newP.innerHTML = '<br>';
                             if (targetP) editorBody.insertBefore(newP, targetP);
                             else editorBody.appendChild(newP);
                             targetP = newP;
                         }
 
-                        // --- 步驟 5: 清洗與鎖定 ---
-                        // 移除所有樣式，確保這是一個純淨的插入點
+                        // 清洗與選中
                         targetP.removeAttribute('style');
                         targetP.removeAttribute('class');
                         targetP.removeAttribute('data-mce-bogus');
                         targetP.innerHTML = '<br>';
 
                         targetContainer = targetP;
-                        Log.info('UI.Enhancement', '已通過頂層遍歷鎖定並創建 P 標籤錨點。');
-
                     } else {
-                        // --- 兜底：頂部插入 ---
-                        Log.warn('UI.Enhancement', '未找到 Logo，執行頂部插入。');
                         const newP = editorDoc.createElement('p');
                         newP.innerHTML = '<br>';
                         editorBody.prepend(newP);
                         targetContainer = newP;
                     }
 
-                    // --- 步驟 6: 執行光標設置 ---
                     if (targetContainer) {
-                        // 選中 P 標籤內部
                         range.selectNodeContents(targetContainer);
-                        range.collapse(true); // 折疊到開頭
-
-                        selection.removeAllRanges();
-                        selection.addRange(range);
-
+                        range.collapse(true);
+                        const sel = iframe.contentWindow.getSelection();
+                        sel.removeAllRanges();
+                        sel.addRange(range);
                         targetContainer.scrollIntoView({ behavior: 'auto', block: 'center' });
 
-                        // 觸發事件，通知編輯器選區已變更
                         try {
-                            const syncEventConfig = { bubbles: true, cancelable: true, view: iframe.contentWindow };
-                            targetContainer.dispatchEvent(new MouseEvent('mousedown', syncEventConfig));
-                            targetContainer.dispatchEvent(new MouseEvent('mouseup', syncEventConfig));
+                            const win = iframe.contentWindow;
+                            targetContainer.dispatchEvent(new MouseEvent('mousedown', { view: win, bubbles: true, cancelable: true }));
+                            targetContainer.dispatchEvent(new MouseEvent('mouseup', { view: win, bubbles: true, cancelable: true }));
                         } catch (e) {}
                     }
-
                     iframe.contentWindow.focus();
                 }
-            } catch (e) {
-                console.error('定位錯誤:', e);
-            }
-        }
 
-        // 3. Pre-Conversion
-        if (conversionMode !== 'off') {
-            try {
-                const iframe = findElementInShadows(document.body, EDITOR_IFRAME_SELECTOR);
-                if (iframe && iframe.contentDocument && iframe.contentWindow) {
-                    const win = iframe.contentWindow;
-                    const doc = iframe.contentDocument;
-                    const sel = win.getSelection();
-                    if (sel.rangeCount > 0) {
-                        const range = sel.getRangeAt(0);
-                        const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, null, false);
-                        let node;
-                        while (node = walker.nextNode()) {
-                            const position = range.comparePoint(node, 0);
-                            if (position !== 1) {
-                                const originalText = node.nodeValue;
-                                const convertedText = ChineseConverter.convert(originalText, conversionMode);
-                                if (originalText !== convertedText) {
-                                    node.nodeValue = convertedText;
-                                }
-                            } else {
+                // 3. 執行插入動作
+                const iconElement = await waitForElementWithObserver(document.body, BUTTON_ICON_SELECTOR, TIMEOUT);
+                clickableButton = iconElement.closest('a[role="button"]');
+                if (clickableButton.getAttribute('aria-expanded') !== 'true') {
+                    clickableButton.click();
+                    await waitForAttributeChange(clickableButton, 'aria-expanded', 'true', TIMEOUT);
+                }
+
+                const menuId = clickableButton.getAttribute('aria-controls');
+                const menuContainer = await waitForElementWithObserver(document.body, `[id="${menuId}"]`, TIMEOUT);
+                const targetOption = findElementInShadows(menuContainer, MENU_ITEM_SELECTOR);
+
+                if (targetOption) {
+                    const changePromise = waitForContentChange(iframe, 5000);
+                    targetOption.click();
+                    await changePromise; // 等待插入完成
+
+                    // 4. Post Insertion (雙軌處理)
+                    if (GM_getValue('postInsertionEnhancementsEnabled', DEFAULTS.postInsertionEnhancementsEnabled)) {
+                        const iframeDocument = iframe.contentDocument;
+                        const editorBody = iframeDocument.body;
+
+                        // --- 重新定位 Logo (錨點) ---
+                        let currentLogo = null;
+                        const children = Array.from(editorBody.children);
+                        for (const child of children) {
+                            if (child.tagName === 'TABLE' && (child.classList.contains('mce-item-table') || child.querySelector('img[src*="ups-shield.png"]'))) {
+                                currentLogo = child;
                                 break;
                             }
                         }
+                        if (!currentLogo) currentLogo = safeQuery(editorBody, 'table.mce-item-table');
+
+                        // ==========================================
+                        // 軌道 A: 繁簡轉換 (掃描 Logo 後的所有內容)
+                        // ==========================================
+                        if (conversionMode !== 'off') {
+                            try {
+                                // 從 Logo 的下一個兄弟節點開始，一直處理到文檔末尾
+                                // 這樣保證了無論模版有多少段落，只要插在 Logo 下面，都會被覆蓋
+                                let scanNode = currentLogo ? currentLogo.nextElementSibling : editorBody.firstChild;
+
+                                while (scanNode) {
+                                    // 對每個頂層節點進行深度遍歷，替換文本
+                                    const walker = iframeDocument.createTreeWalker(scanNode, NodeFilter.SHOW_TEXT, null, false);
+                                    let textNode;
+                                    while(textNode = walker.nextNode()) {
+                                        const originalText = textNode.nodeValue;
+                                        const convertedText = ChineseConverter.convert(originalText, conversionMode);
+                                        if (originalText !== convertedText) {
+                                            textNode.nodeValue = convertedText;
+                                        }
+                                    }
+                                    scanNode = scanNode.nextElementSibling;
+                                }
+                                Log.info(logPrefix, `已對 Logo 下方的內容執行 ${conversionMode} 轉換。`);
+                            } catch (e) {
+                                Log.warn(logPrefix, `轉換過程出錯: ${e.message}`);
+                            }
+                        }
+
+                        // ==========================================
+                        // 軌道 B: 光標跳轉 (物理路徑尋找 Target)
+                        // ==========================================
+                        let finalContainer = null;
+                        if (currentLogo) {
+                            // 物理路徑：Logo -> Spacer -> Bogus1 -> Target
+                            const el1 = currentLogo.nextElementSibling;
+                            const el2 = el1 ? el1.nextElementSibling : null;
+                            const el3 = el2 ? el2.nextElementSibling : null;
+                            finalContainer = el3;
+                        } else {
+                            finalContainer = editorBody.lastElementChild;
+                        }
+
+                        if (finalContainer) {
+                            // 在 finalContainer 及其後續節點中尋找 BR
+                            const allBrTags = [];
+                            let brScanNode = finalContainer;
+                            // 為了性能，我們只掃描接下來的 10 個兄弟節點
+                            let siblingsLimit = 10;
+
+                            while (brScanNode && siblingsLimit > 0) {
+                                const brs = brScanNode.querySelectorAll('br');
+                                allBrTags.push(...brs);
+                                if (brScanNode.tagName === 'BR') allBrTags.push(brScanNode);
+
+                                brScanNode = brScanNode.nextElementSibling;
+                                siblingsLimit--;
+                            }
+
+                            const userBrPosition = GM_getValue('cursorPositionBrIndex', DEFAULTS.cursorPositionBrIndex);
+                            const brIndex = userBrPosition - 1;
+
+                            if (allBrTags.length > brIndex && brIndex >= 0) {
+                                const targetPositionNode = allBrTags[brIndex];
+                                const range = iframeDocument.createRange();
+                                range.setStartBefore(targetPositionNode);
+                                range.collapse(true);
+                                iframe.contentWindow.getSelection().removeAllRanges();
+                                iframe.contentWindow.getSelection().addRange(range);
+                                targetPositionNode.scrollIntoView({ behavior: 'auto', block: 'center' });
+                                Log.info(logPrefix, `光標已重定位至第 ${userBrPosition} 個 BR。`);
+                            }
+                        }
+
+                        // 綁定全局事件 (Paste/Keydown)
+                        if (!editorBody.dataset.cecGlobalHandlersAttached) {
+                            setupGlobalEnhancements(iframe.contentWindow, iframeDocument, editorBody);
+                        }
                     }
+                    iframe.contentWindow.focus();
+                } else {
+                    Log.warn(logPrefix, `未找到菜單選項 "${templateTitle}"`);
                 }
-            } catch (e) {
-                Log.warn('Converter', `Pre-Conversion 執行異常: ${e.message}`);
+
+            } catch (error) {
+                Log.warn(logPrefix, `模版操作警告: ${error.message}`);
+                if (clickableButton && clickableButton.getAttribute('aria-expanded') === 'true') clickableButton.click();
             }
         }
 
-        // 4. 執行插入
-        try {
-            const iconElement = await waitForElementWithObserver(document.body, BUTTON_ICON_SELECTOR, TIMEOUT);
-            clickableButton = iconElement.closest('a[role="button"]');
-            if (clickableButton.getAttribute('aria-expanded') !== 'true') {
-                clickableButton.click();
-                await waitForAttributeChange(clickableButton, 'aria-expanded', 'true', TIMEOUT);
-            }
+        /**
+         * @description 設置全局編輯器增強功能 (粘貼過濾、回車攔截、實時轉換)
+         */
+        function setupGlobalEnhancements(iframeWindow, iframeDocument, editorBody) {
+             if (editorBody.dataset.cecGlobalHandlersAttached) return;
 
-            const menuId = clickableButton.getAttribute('aria-controls');
-            const menuContainer = await waitForElementWithObserver(document.body, `[id="${menuId}"]`, TIMEOUT);
-            const targetOption = findElementInShadows(menuContainer, MENU_ITEM_SELECTOR);
+             const isCursorInTemplate = () => true;
 
-            if (targetOption) {
-                targetOption.click();
-                await delay(50);
+             // A. 粘貼攔截器
+             editorBody.addEventListener('paste', (event) => {
+                if (isCursorInTemplate()) {
+                    const clipboardData = event.clipboardData || iframeWindow.clipboardData;
+                    const items = clipboardData.items;
+                    let hasImage = false;
 
-                if (!GM_getValue('postInsertionEnhancementsEnabled', DEFAULTS.postInsertionEnhancementsEnabled)) return;
-
-                const iframe = findElementInShadows(document.body, EDITOR_IFRAME_SELECTOR);
-                if (!iframe || !iframe.contentDocument) throw new Error('無法找到編輯器');
-
-                const structureReady = await waitForExpectedTemplateStructure(iframe, TIMEOUT);
-                if (!structureReady) throw new Error('未找到預期的模板結構');
-
-                const iframeWindow = iframe.contentWindow;
-                const iframeDocument = iframe.contentDocument;
-                const editorBody = iframeDocument.body;
-
-                const firstParagraph = editorBody.querySelector('p');
-                const targetContainerSpan = firstParagraph ? firstParagraph.querySelector('span') : null;
-
-                if (!targetContainerSpan || targetContainerSpan.getElementsByTagName('br').length === 0) {
-                    throw new Error('未找到預期的模板結構');
-                }
-
-                targetContainerSpan.dataset.cecTemplateZone = 'true';
-
-                // --- 5. 樣式同步 & 已有文本轉換 ---
-                if (conversionMode !== 'off') {
-                    try {
-                        const computedStyle = iframeWindow.getComputedStyle(targetContainerSpan);
-                        const targetFont = computedStyle.fontFamily;
-                        const targetSize = computedStyle.fontSize;
-
-                        const walker = iframeDocument.createTreeWalker(editorBody, NodeFilter.SHOW_TEXT, null, false);
-                        let node;
-                        while (node = walker.nextNode()) {
-                            const position = targetContainerSpan.compareDocumentPosition(node);
-                            if (position & Node.DOCUMENT_POSITION_PRECEDING) {
-                                const originalText = node.nodeValue;
-                                const convertedText = ChineseConverter.convert(originalText, conversionMode);
-                                if (originalText !== convertedText) {
-                                    node.nodeValue = convertedText;
-                                }
-                                const parent = node.parentElement;
-                                if (parent && ['P', 'DIV', 'SPAN', 'FONT', 'STRONG', 'B'].includes(parent.nodeName)) {
-                                    parent.style.fontFamily = targetFont;
-                                    parent.style.fontSize = targetSize;
-                                }
-                            }
+                    // 1. 圖片保護
+                    for (let i = 0; i < items.length; i++) {
+                        if (items[i].type.indexOf("image") !== -1) {
+                            hasImage = true;
+                            break;
                         }
-                    } catch (e) {
-                        Log.warn('UI.Style', `樣式同步執行異常: ${e.message}`);
                     }
-                }
+                    if (hasImage) return;
 
-                // --- 6. 全局增強 ---
-                if (!editorBody.dataset.cecGlobalHandlersAttached) {
+                    // 2. [V83 新增] Excel/表格數據保護
+                    const htmlData = clipboardData.getData('text/html');
+                    if (htmlData && /<(table|tr|td|th)/i.test(htmlData)) {
+                        return; // 如果是表格，直接返回，保留原始格式
+                    }
 
-                    const isCursorInTemplate = () => {
-                        const selection = iframeWindow.getSelection();
-                        if (!selection.rangeCount) return false;
-                        let node = selection.anchorNode;
-                        while (node && node !== editorBody) {
-                            if (node.nodeType === 1 && node.dataset.cecTemplateZone === 'true') {
-                                return true;
-                            }
-                            node = node.parentNode;
-                        }
-                        return false;
-                    };
+                    // 3. 純文本轉換邏輯
+                    event.preventDefault();
+                    event.stopPropagation();
 
-                    // A. 粘貼攔截器
-                    editorBody.addEventListener('paste', (event) => {
-                        if (isCursorInTemplate()) {
-                            const items = (event.clipboardData || iframeWindow.clipboardData).items;
-                            let hasImage = false;
-                            for (let i = 0; i < items.length; i++) {
-                                if (items[i].type.indexOf("image") !== -1) {
-                                    hasImage = true;
-                                    break;
-                                }
-                            }
-                            if (hasImage) return;
+                    const textToPaste = clipboardData.getData('text/plain');
+                    const currentMode = editorBody.dataset.cecConversionMode;
+                    const finalPasteText = (currentMode && currentMode !== 'off')
+                        ? ChineseConverter.convert(textToPaste, currentMode)
+                        : textToPaste;
 
-                            event.preventDefault();
-                            event.stopPropagation();
+                    const selection = iframeWindow.getSelection();
+                    if (!selection.rangeCount) return;
+                    const range = selection.getRangeAt(0);
+                    range.deleteContents();
 
-                            const textToPaste = (event.clipboardData || iframeWindow.clipboardData).getData('text/plain');
-                            const currentMode = editorBody.dataset.cecConversionMode;
-                            const finalPasteText = (currentMode && currentMode !== 'off')
-                            ? ChineseConverter.convert(textToPaste, currentMode)
-                            : textToPaste;
-
-                            const selection = iframeWindow.getSelection();
-                            const range = selection.getRangeAt(0);
-                            range.deleteContents();
-                            const fragment = iframeDocument.createDocumentFragment();
-                            const lines = finalPasteText.split('\n');
-                            lines.forEach((line, index) => {
-                                fragment.appendChild(iframeDocument.createTextNode(line));
-                                if (index < lines.length - 1) fragment.appendChild(iframeDocument.createElement('br'));
-                            });
-                            range.insertNode(fragment);
-                            range.collapse(false);
-                            selection.removeAllRanges();
-                            selection.addRange(range);
-                        }
-                    }, true);
-
-                    // B. Enter 鍵攔截器
-                    editorBody.addEventListener('keydown', (event) => {
-                        if (event.key === 'Enter') {
-                            if (isCursorInTemplate()) {
-                                event.preventDefault();
-                                event.stopPropagation();
-                                const selection = iframeWindow.getSelection();
-                                const range = selection.getRangeAt(0);
-                                range.deleteContents();
-                                const br = iframeDocument.createElement('br');
-                                range.insertNode(br);
-                                range.setStartAfter(br);
-                                range.setEndAfter(br);
-                                selection.removeAllRanges();
-                                selection.addRange(range);
-                                br.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-                            }
-                        }
-                    }, true);
-
-                    // C. [極致優化] 全局實時轉換監聽器
-                    const processQueue = new Set();
-                    let isProcessing = false;
-
-                    const processMutations = () => {
-                        isProcessing = false;
-                        const mode = editorBody.dataset.cecConversionMode;
-                        if (!mode || mode === 'off' || processQueue.size === 0) {
-                            processQueue.clear();
-                            return;
-                        }
-
-                        // 優化：緩存 templateZone，避免在循環中重複查詢 DOM
-                        const templateZone = editorBody.querySelector('[data-cec-template-zone="true"]');
-                        if (!templateZone) {
-                            processQueue.clear();
-                            return;
-                        }
-
-                        processQueue.forEach(textNode => {
-                            if (!textNode.isConnected) return;
-
-                            // 再次檢查內容 (Double Check)，防止 race condition
-                            const original = textNode.nodeValue;
-                            const converted = ChineseConverter.convert(original, mode);
-
-                            if (original === converted) return; // 再次確認無需轉換，跳過位置計算
-
-                            // 只有確定文字需要轉換時，才執行昂貴的邊界檢查 (Reflow)
-                            let shouldConvert = false;
-                            if (templateZone.contains(textNode)) shouldConvert = true;
-                            else {
-                                const position = templateZone.compareDocumentPosition(textNode);
-                                if (position & Node.DOCUMENT_POSITION_PRECEDING) shouldConvert = true;
-                            }
-
-                            if (shouldConvert) {
-                                // 執行轉換與光標恢復
-                                const selection = iframeWindow.getSelection();
-                                let savedOffset = null;
-                                if (selection.rangeCount > 0 && selection.anchorNode === textNode) {
-                                    savedOffset = selection.anchorOffset;
-                                }
-
-                                textNode.nodeValue = converted;
-
-                                if (savedOffset !== null) {
-                                    const newRange = iframeDocument.createRange();
-                                    const safeOffset = Math.min(savedOffset, converted.length);
-                                    newRange.setStart(textNode, safeOffset);
-                                    newRange.collapse(true);
-                                    selection.removeAllRanges();
-                                    selection.addRange(newRange);
-                                }
-                            }
-                        });
-
-                        processQueue.clear();
-                    };
-
-                    const scheduleProcessing = () => {
-                        if (!isProcessing) {
-                            isProcessing = true;
-                            requestAnimationFrame(processMutations);
-                        }
-                    };
-
-                    const globalObserver = new MutationObserver((mutations) => {
-                        const mode = editorBody.dataset.cecConversionMode;
-                        if (!mode || mode === 'off') return;
-
-                        let hasWork = false;
-
-                        for (const mutation of mutations) {
-                            // [核心過濾]
-                            // 在加入隊列前，先做一次輕量級的字串比對
-                            // 如果 original === converted，說明該次變動與繁簡轉換無關
-                            // (可能是光標移動導致編輯器重排 DOM，或者是輸入了標點符號/英文)
-                            // 直接忽略，避免後續昂貴的 DOM 計算
-
-                            if (mutation.type === 'characterData') {
-                                const node = mutation.target;
-                                if (node.nodeType === 3) {
-                                    const text = node.nodeValue;
-                                    // 只有當轉換前後不一致時，才視為有工作要做
-                                    if (text !== ChineseConverter.convert(text, mode)) {
-                                        processQueue.add(node);
-                                        hasWork = true;
-                                    }
-                                }
-                            } else if (mutation.type === 'childList') {
-                                if (mutation.addedNodes.length > 0) {
-                                    mutation.addedNodes.forEach(addedNode => {
-                                        if (addedNode.nodeType === 3) {
-                                            const text = addedNode.nodeValue;
-                                            if (text !== ChineseConverter.convert(text, mode)) {
-                                                processQueue.add(addedNode);
-                                                hasWork = true;
-                                            }
-                                        } else if (addedNode.nodeType === 1) {
-                                            const walker = iframeDocument.createTreeWalker(addedNode, NodeFilter.SHOW_TEXT, null, false);
-                                            let subNode;
-                                            while(subNode = walker.nextNode()) {
-                                                const text = subNode.nodeValue;
-                                                if (text !== ChineseConverter.convert(text, mode)) {
-                                                    processQueue.add(subNode);
-                                                    hasWork = true;
-                                                }
-                                            }
-                                        }
-                                    });
-                                }
-                            }
-                        }
-
-                        if (hasWork) {
-                            scheduleProcessing();
-                        }
+                    const fragment = iframeDocument.createDocumentFragment();
+                    const lines = finalPasteText.split('\n');
+                    lines.forEach((line, index) => {
+                        fragment.appendChild(iframeDocument.createTextNode(line));
+                        if (index < lines.length - 1) fragment.appendChild(iframeDocument.createElement('br'));
                     });
 
-                    PageResourceRegistry.addObserver(globalObserver);
-
-                    globalObserver.observe(editorBody, { childList: true, subtree: true, characterData: true });
-                    editorBody.dataset.cecGlobalHandlersAttached = 'true';
-                }
-
-                // 更新轉換模式
-                editorBody.dataset.cecConversionMode = conversionMode;
-
-                // --- 7. Post-Insertion 光標跳轉 ---
-                const userBrPosition = GM_getValue('cursorPositionBrIndex', DEFAULTS.cursorPositionBrIndex);
-                const brIndex = userBrPosition - 1;
-                const allBrTags = targetContainerSpan.getElementsByTagName('br');
-                if (allBrTags.length > brIndex && brIndex >= 0) {
-                    const targetPositionNode = allBrTags[brIndex];
-                    const selection = iframeWindow.getSelection();
-                    const range = iframeDocument.createRange();
-                    range.setStartBefore(targetPositionNode);
-                    range.collapse(true);
+                    range.insertNode(fragment);
+                    range.collapse(false);
                     selection.removeAllRanges();
                     selection.addRange(range);
+                }
+            }, true);
 
-                    if (typeof targetPositionNode.scrollIntoView === 'function') {
-                        targetPositionNode.scrollIntoView({ behavior: 'auto', block: 'center' });
-                        requestAnimationFrame(() => { setTimeout(() => { window.scrollBy(0, VIEW_ADJUSTMENT_OFFSET_PX); }, 50); });
+            // B. Enter 鍵攔截器
+            editorBody.addEventListener('keydown', (event) => {
+                if (event.key === 'Enter') {
+                    if (isCursorInTemplate()) {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        const selection = iframeWindow.getSelection();
+                        const range = selection.getRangeAt(0);
+                        range.deleteContents();
+                        const br = iframeDocument.createElement('br');
+                        range.insertNode(br);
+                        range.setStartAfter(br);
+                        range.setEndAfter(br);
+                        selection.removeAllRanges();
+                        selection.addRange(range);
+                        br.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
                     }
                 }
-                iframeWindow.focus();
+            }, true);
 
-            } else {
-                throw new Error(`未找到標題為 "${templateTitle}" 的選項。`);
-            }
-        } catch (error) {
-            Log.error('UI.Enhancement', `執行模板插入錯誤: ${error.message}`);
-            if (clickableButton && clickableButton.getAttribute('aria-expanded') === 'true') clickableButton.click();
-            throw error;
+            // C. 實時轉換監聽器
+            const processQueue = new Set();
+            let isProcessing = false;
+
+            const processMutations = () => {
+                isProcessing = false;
+                const mode = editorBody.dataset.cecConversionMode;
+                if (!mode || mode === 'off' || processQueue.size === 0) {
+                    processQueue.clear();
+                    return;
+                }
+                processQueue.forEach(textNode => {
+                    if (!textNode.isConnected) return;
+                    const original = textNode.nodeValue;
+                    const converted = ChineseConverter.convert(original, mode);
+                    if (original === converted) return;
+
+                    const selection = iframeWindow.getSelection();
+                    let savedOffset = null;
+                    if (selection.rangeCount > 0 && selection.anchorNode === textNode) {
+                        savedOffset = selection.anchorOffset;
+                    }
+                    textNode.nodeValue = converted;
+                    if (savedOffset !== null) {
+                        const newRange = iframeDocument.createRange();
+                        const safeOffset = Math.min(savedOffset, converted.length);
+                        newRange.setStart(textNode, safeOffset);
+                        newRange.collapse(true);
+                        selection.removeAllRanges();
+                        selection.addRange(newRange);
+                    }
+                });
+                processQueue.clear();
+            };
+
+            const scheduleProcessing = () => {
+                if (!isProcessing) {
+                    isProcessing = true;
+                    requestAnimationFrame(processMutations);
+                }
+            };
+
+            const globalObserver = new MutationObserver((mutations) => {
+                const mode = editorBody.dataset.cecConversionMode;
+                if (!mode || mode === 'off') return;
+                let hasWork = false;
+                for (const mutation of mutations) {
+                    if (mutation.type === 'characterData') {
+                        const node = mutation.target;
+                        if (node.nodeType === 3) {
+                            const text = node.nodeValue;
+                            if (text !== ChineseConverter.convert(text, mode)) {
+                                processQueue.add(node);
+                                hasWork = true;
+                            }
+                        }
+                    } else if (mutation.type === 'childList') {
+                        if (mutation.addedNodes.length > 0) {
+                            mutation.addedNodes.forEach(addedNode => {
+                                if (addedNode.nodeType === 3) {
+                                    const text = addedNode.nodeValue;
+                                    if (text !== ChineseConverter.convert(text, mode)) {
+                                        processQueue.add(addedNode);
+                                        hasWork = true;
+                                    }
+                                } else if (addedNode.nodeType === 1) {
+                                    const walker = iframeDocument.createTreeWalker(addedNode, NodeFilter.SHOW_TEXT, null, false);
+                                    let subNode;
+                                    while(subNode = walker.nextNode()) {
+                                        const text = subNode.nodeValue;
+                                        if (text !== ChineseConverter.convert(text, mode)) {
+                                            processQueue.add(subNode);
+                                            hasWork = true;
+                                        }
+                                    }
+                                }
+                            });
+                        }
+                    }
+                }
+                if (hasWork) scheduleProcessing();
+            });
+
+            PageResourceRegistry.addObserver(globalObserver);
+            globalObserver.observe(editorBody, { childList: true, subtree: true, characterData: true });
+
+            editorBody.dataset.cecGlobalHandlersAttached = 'true';
         }
-    }
 
 
     /**
