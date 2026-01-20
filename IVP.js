@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IVP顯示注釋
 // @namespace    IVP顯示注釋
-// @version      V20
+// @version      V21
 // @description  IVP顯示注釋、一眼模式、定義字體顏色。
 // @author       Jerry Law
 // @match        *://ivp.inside.ups.com/*
@@ -36,6 +36,7 @@
 #RASALAT-PPWK|清關文件送達給收件人
 #OBSERVED PKG|主動監控的貨件
 #MONITORING|監控中
+#LOCKER|儲物櫃
 #RETURN GOODS|退回包裹
 #POA/IRS|需要提供授權書及收件人稅號
 #SAT DELIVERY|星期六送貨
@@ -52,10 +53,13 @@
 #OUT SVC AREA|所選的服務不適用於該目的地地址
 #LAST SELLER|需要賣家資料
 #LATE TOFC|拖車延遲
+#CANCELLED ARRIVAL|到達已被取消
+#VACATION|收件人正在休假
 #INSIDE DELIV|室內派送
 #DOCK|倉庫或裝卸區域
 #LOCAL CHOSEN|已在當地選擇派送
 #NO SAT ACC |不收取週六附加費
+#NO PAY CCD|收件人因價格爭議而拒絕付款
 #LBL DETACH|標籤從包裹脫落
 #NO LISTING|需要收件地址信息
 #REF UPS BROK|拒絕UPS擔任報關代理
@@ -278,9 +282,9 @@
 #CLAIM INVEST|損壞索賠調查中
 #CLAIM ISSUED|已批准索賠
 #CLIMATE CTRL|放置於溫控環境中
-#CLOSED 1|收件人地點關閉1
-#CLOSED 2|收件人地點關閉2
-#CLOSED 3|收件人地點關閉3
+#CLOSED 1|派送地址關門1
+#CLOSED 2|派送地址關門2
+#CLOSED 3|派送地址關門3
 #CLR AGY CLO|清關行辦公室關閉；無法清關
 #CLR AGY DOW|清關行電腦故障
 #CLR AGY RESU|包裹已重新提交給清關行
@@ -739,7 +743,7 @@
 #LC|聖露西亞
 #MF|法屬聖馬丁
 #WS|西薩摩亞
-#SA|沙烏地阿拉伯
+#SA|沙特阿拉伯
 #SN|塞內加爾
 #RS|塞爾維亞
 #SL|塞拉利昂
@@ -966,7 +970,7 @@
 #SAINT LUCIA|聖露西亞 - LC
 #SAINT MARTIN|法屬聖馬丁 - MF
 #SAMOA|西薩摩亞 - WS
-#SAUDI ARABIA|沙烏地阿拉伯 - SA
+#SAUDI ARABIA|沙特阿拉伯 - SA
 #SENEGAL|塞內加爾 - SN
 #SERBIA|塞爾維亞 - RS
 #SIERRA LEONE|塞拉利昂 - SL
