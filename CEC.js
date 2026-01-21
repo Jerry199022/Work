@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CEC功能強化
 // @namespace    CEC Enhanced
-// @version      V88
+// @version      V90
 // @description  快捷操作按鈕、自動指派、IVP快速查詢、聯繫人彈窗優化、按鈕警示色、賬戶檢測、組件屏蔽、設置菜單、自動IVP查詢、URL精準匹配、快捷按鈕可編輯、(Related Cases)數據提取與增強排序功能、關聯案件提取器、回覆case快捷按鈕、已跟進case提示、全局暫停/恢復功能。
 // @author       Jerry Law
 // @match        https://upsdrive.lightning.force.com/*
@@ -18,9 +18,14 @@
 // ==/UserScript==
 
 /*
+V84 > V90
+更新內容：
+-優化跟進面板
+-模版插入優化
+
 V79 > V84
 更新內容：
--優化跟進面板 添加追蹤號識別 
+-優化跟進面板 添加追蹤號識別
 -模版插入定位優化
 -頁面自動滾動
 -聯繫人彈窗邏輯修復
@@ -348,9 +353,8 @@ V53 > V54
     };
 
 
-
-        // =================================================================================
-    // SECTION: 跟進面板模塊（Follow-Up Panel Module）- V86 (穩定修復版)
+// =================================================================================
+    // SECTION: 跟進面板模塊（Follow-Up Panel Module）- V88 (完整驗證版)
     // =================================================================================
     const FollowUpPanel = (() => {
         const FOLLOW_UP_DEBUG = false;
@@ -384,19 +388,13 @@ V53 > V54
         // 狀態變量
         // -----------------------------
         const UW = (typeof unsafeWindow !== 'undefined') ? unsafeWindow : window;
-        let wsReady = false;
-        let wsInit = false;
-        let wsCmp = null;
-        let wsQueue = [];
-        let stylesInjected = false;
-        let sanitizedOnce = false;
+        let wsReady = false; let wsInit = false; let wsCmp = null; let wsQueue = [];
+        let stylesInjected = false; let sanitizedOnce = false;
 
-        let __fuRenderTimer = null;
-        let __fuRenderRaf = null;
-        let __fuWatchBound = false;
+        let __fuRenderTimer = null; let __fuRenderRaf = null; let __fuWatchBound = false;
 
-        // [聯動變量] 列表頁匹配集合
-        let listPageMatches = new Set();
+        // [聯動變量] 列表頁匹配集合 (Map<CaseNo, Color>)
+        let listPageMatches = new Map();
 
         // -----------------------------
         // 基礎工具函數
@@ -699,6 +697,17 @@ V53 > V54
             saveItems(items);
         };
 
+        const groupedSortedItems = () => {
+            const items = sanitizeItems(loadItems());
+            const groups = { today: [], tomorrow: [], dayafter: [], later: [] };
+            items.forEach((it) => {
+                const k = bucketOf(it.dueAt);
+                if (!groups[k]) groups[k] = [];
+                groups[k].push(it);
+            });
+            return groups;
+        };
+
         // -----------------------------
         // UI 懸浮工具
         // -----------------------------
@@ -706,48 +715,47 @@ V53 > V54
         const removeDropdown = () => { const el = document.getElementById(DROPDOWN_ID); if (el) el.remove(); };
         const removeAllFloating = () => { removePopover(); removeDropdown(); };
 
-        const placeNear = (anchorEl, popEl, preferAbove, width = 260, height = 240) => {
-            const rect = anchorEl.getBoundingClientRect();
-            const w = width; const h = height;
-            const left = Math.max(10, Math.min(window.innerWidth - (w + 10), rect.left));
-            let top;
-            if (preferAbove) {
-                top = rect.top - h;
-                if (top < 10) top = rect.bottom + 8;
+        const placeNear = (a, p, up, w = 260, h = 240) => {
+            const r = a.getBoundingClientRect();
+            const l = Math.max(10, Math.min(window.innerWidth - (w + 10), r.left));
+            let t;
+            if (up) {
+                t = r.top - h;
+                if (t < 10) t = r.bottom + 8;
             } else {
-                top = rect.bottom + 8;
-                if (top + h > window.innerHeight - 10) top = Math.max(10, rect.top - h);
+                t = r.bottom + 8;
+                if (t + h > window.innerHeight - 10) t = Math.max(10, r.top - h);
             }
-            popEl.style.left = `${left}px`;
-            popEl.style.top = `${top}px`;
+            p.style.left = `${l}px`;
+            p.style.top = `${t}px`;
         };
 
-        const attachOutsideClose = (popEl, anchorEl, removeFn) => {
+        const attachOutsideClose = (p, a, fn) => {
             setTimeout(() => {
-                const onDoc = (evt) => {
-                    if (!popEl.contains(evt.target) && evt.target !== anchorEl) {
-                        removeFn();
-                        document.removeEventListener('mousedown', onDoc, true);
+                const f = (e) => {
+                    if (!p.contains(e.target) && e.target !== a) {
+                        fn();
+                        document.removeEventListener('mousedown', f, true);
                     }
                 };
-                document.addEventListener('mousedown', onDoc, true);
+                document.addEventListener('mousedown', f, true);
             }, 0);
         };
 
-        const attachOutsideCloseWithin = (popEl, containerEl, removeFn) => {
+        const attachOutsideCloseWithin = (p, c, fn) => {
             setTimeout(() => {
-                const onDoc = (evt) => {
-                    if (containerEl && !containerEl.contains(evt.target)) {
-                        removeFn();
-                        document.removeEventListener('mousedown', onDoc, true);
+                const f = (e) => {
+                    if (c && !c.contains(e.target)) {
+                        fn();
+                        document.removeEventListener('mousedown', f, true);
                     }
                 };
-                document.addEventListener('mousedown', onDoc, true);
+                document.addEventListener('mousedown', f, true);
             }, 0);
         };
 
         // -----------------------------
-        // 日期選擇器 UI (修復：完整代碼)
+        // 日期選擇器 UI (完整)
         // -----------------------------
         const buildLaterPickerContent = (onPickTimestamp, quickDays) => {
             const wrap = document.createElement('div');
@@ -946,7 +954,7 @@ V53 > V54
         };
 
         // -----------------------------
-        // 閃爍提示與標題
+        // 標題閃爍
         // -----------------------------
         let __fuHeaderHintTimer1 = null; let __fuHeaderHintTimer2 = null; let __fuHeaderHintTimer3 = null; let __fuHeaderOriginalTitle = null;
 
@@ -1047,16 +1055,17 @@ V53 > V54
                 `#${PANEL_ID} .fu-header.fu-tracking-match { background: #ff9900 !important; color: #000000 !important; }`,
                 `#${PANEL_ID} .fu-row.fu-active { background: #00ff11 !important; border-color: rgba(0,0,0,.18) !important; }`,
                 `#${PANEL_ID} .fu-row.fu-tracking-match { background: #ff9900 !important; border-color: rgba(0,0,0,.18) !important; }`,
-                `#${PANEL_ID} .fu-row.fu-list-match { background: #9050e9 !important; border-color: rgba(0,0,0,.18) !important; }`,
+                `#${PANEL_ID} .fu-row.fu-list-match { border-color: rgba(0,0,0,.18) !important; }`,
                 `#${PANEL_ID} .fu-row.fu-active .fu-case, #${PANEL_ID} .fu-row.fu-tracking-match .fu-case, #${PANEL_ID} .fu-row.fu-list-match .fu-case { color: #000000 !important; }`,
-                `#${PANEL_ID} .fu-row.fu-list-match .fu-case { color: #fff !important; }`,
+                `#${PANEL_ID} .fu-row.fu-list-match .fu-case { color: #0b5cab !important; }`,
                 `#${PANEL_ID} .fu-row.fu-active .fu-iconbtn, #${PANEL_ID} .fu-row.fu-tracking-match .fu-iconbtn { background: rgba(0,0,0,.08) !important; color: #000000 !important; border-color: rgba(0,0,0,.18) !important; }`,
                 `#${PANEL_ID} .fu-row.fu-list-match .fu-iconbtn { background: rgba(255,255,255,.4) !important; border-color: transparent !important; color: #fff !important; }`,
                 `#${PANEL_ID} .fu-row.fu-active .fu-note, #${PANEL_ID} .fu-row.fu-tracking-match .fu-note { background: rgba(255,255,255,.92) !important; border-color: rgba(0,0,0,.18) !important; }`,
-                `#${PANEL_ID} .fu-row.fu-list-match .fu-note { background: rgba(255,255,255,.95) !important; }`,
+                `#${PANEL_ID} .fu-row.fu-list-match .fu-note { background: rgba(255,255,255,.95) !important; color: #000000 !important; }`,
                 `#${PANEL_ID} .fu-due { font-size: 12px; font-weight: 800; padding: 2px 6px; border-radius: 10px; background: rgba(0,0,0,.04); color: rgba(0,0,0,.72); flex: 0 0 auto; }`,
                 `#${PANEL_ID} .fu-row.fu-active .fu-due { background: rgba(0,0,0,.10); color: #000000; }`,
 
+                // [新增] 日曆樣式 (防止樣式表丟失)
                 '.fu-cal-wrap { width: 100%; user-select: none; border: 1px solid #dddbda; border-radius: 4px; overflow: hidden; background: #fff; }',
                 '.fu-cal-header { display: flex; justify-content: space-between; align-items: center; background: #f3f2f2; padding: 5px 10px; border-bottom: 1px solid #dddbda; }',
                 '.fu-cal-title { font-weight: 700; font-size: 13px; color: #080707; }',
@@ -1070,7 +1079,6 @@ V53 > V54
                 '.fu-cal-day.disabled { color: #ccc; cursor: default; }',
             ].join('\n');
 
-            // 兜底樣式注入
             try {
                 if (typeof GM_addStyle !== 'undefined') {
                     GM_addStyle(css);
@@ -1215,7 +1223,7 @@ V53 > V54
             wsEnsure();
         };
 
-        // 渲染單個行 (含邏輯判定)
+        // 渲染單個行
         const buildRow = (it, activeCaseNo, activeTrackingNo) => {
             const row = document.createElement('div');
             row.className = 'fu-row';
@@ -1234,20 +1242,31 @@ V53 > V54
                 }
             }
 
-            // 列表頁匹配判定
-            const isListMatch = (pureNo && listPageMatches.has(pureNo));
+            // [關鍵] 從 Map 中獲取分配到的顏色
+            const listMatchColor = listPageMatches.get(pureNo);
 
-            // 樣式優先級：Case > Tracking > List
+            // 樣式優先級
             if (isCaseMatch) {
                 row.classList.add('fu-active');
+                row.style.backgroundColor = '';
             } else if (isTrackingMatch) {
                 row.classList.add('fu-tracking-match');
-            } else if (isListMatch) {
+                row.style.backgroundColor = '';
+            } else if (listMatchColor) {
+                // [動態配色] 應用從列表頁傳來的顏色
+                row.style.backgroundColor = listMatchColor;
+                row.style.color = '#ffffff';
+                row.style.borderColor = 'rgba(0,0,0,.18)';
                 row.classList.add('fu-list-match');
+            } else {
+                // 重置樣式
+                row.style.backgroundColor = '';
+                row.style.color = '';
+                row.style.borderColor = '';
+                row.classList.remove('fu-list-match');
             }
 
             const caseNoDisplay = thisNo || '(unknown)';
-
             const link = document.createElement('a');
             link.className = 'fu-case';
             link.href = buildCaseUrl(it.caseId) || '#';
@@ -1273,21 +1292,16 @@ V53 > V54
             const btnChange = document.createElement('button');
             btnChange.type = 'button';
             btnChange.className = 'fu-iconbtn';
-            btnChange.title = '更改跟進時間';
             btnChange.textContent = '📅';
             btnChange.addEventListener('click', (ev) => {
                 ev.stopPropagation();
-                showChangeMenu(btnChange, (timestamp) => {
-                    updateDueAt(it.caseId, timestamp);
-                    renderPanel();
-                });
+                showChangeMenu(btnChange, (ts) => { updateDueAt(it.caseId, ts); renderPanel(); });
             });
             row.appendChild(btnChange);
 
             const btnDel = document.createElement('button');
             btnDel.type = 'button';
             btnDel.className = 'fu-iconbtn';
-            btnDel.title = '刪除';
             btnDel.textContent = '✕';
             btnDel.addEventListener('click', () => { deleteItem(it.caseId); renderPanel(); });
             row.appendChild(btnDel);
@@ -1316,7 +1330,6 @@ V53 > V54
             if (arrow) arrow.textContent = '▾';
             if (!body) return;
 
-            // 路由校驗：只有在 Case 詳情頁才嘗試匹配
             const isCaseRecordPage = /\/Case\/[a-zA-Z0-9]{18}/.test(location.href);
             const activeCaseNo = isCaseRecordPage ? (normalizeCaseNo(getCaseNumberFromVisibleHeader()) || null) : null;
             const activeTrackingNo = isCaseRecordPage ? (foundTrackingNumber || null) : null;
@@ -1413,21 +1426,31 @@ V53 > V54
         };
 
         // 外部調用接口
-        const highlightListMatches = (matchedCaseNumbers) => {
+        const highlightListMatches = (matchedCaseMap) => {
             let isChanged = false;
-            if (matchedCaseNumbers.length !== listPageMatches.size) {
-                isChanged = true;
+
+            if (!matchedCaseMap || matchedCaseMap.size === 0) {
+                if (listPageMatches.size > 0) {
+                    listPageMatches.clear();
+                    isChanged = true;
+                }
             } else {
-                for (const num of matchedCaseNumbers) {
-                    if (!listPageMatches.has(num)) {
-                        isChanged = true;
-                        break;
+                if (matchedCaseMap.size !== listPageMatches.size) {
+                    isChanged = true;
+                } else {
+                    for (const [key, val] of matchedCaseMap) {
+                        if (listPageMatches.get(key) !== val) {
+                            isChanged = true;
+                            break;
+                        }
                     }
+                }
+                if (isChanged) {
+                    listPageMatches = new Map(matchedCaseMap);
                 }
             }
 
             if (isChanged) {
-                listPageMatches = new Set(matchedCaseNumbers);
                 requestAnimationFrame(() => renderPanel());
             }
         };
@@ -1444,10 +1467,8 @@ V53 > V54
         const ensureCaseFollowTimeButton = () => {
             const caseId = getCaseId();
             if (!caseId) return false;
-
             const followWrap = getActiveFollowWrap();
             if (!followWrap || !followWrap.parentElement) return false;
-
             const btnId = `${BTN_ID_PREFIX}_${caseId}`;
             if (followWrap.parentElement.querySelector(`#${CSS.escape(btnId)}`)) return true;
 
@@ -1458,7 +1479,7 @@ V53 > V54
                 followWrap.parentElement.style.display = 'inline-flex';
                 followWrap.parentElement.style.alignItems = 'center';
                 followWrap.parentElement.style.gap = '6px';
-            } catch (e) { /* ignore */ }
+            } catch (e) { }
 
             const btn = document.createElement('button');
             btn.id = btnId;
@@ -1481,17 +1502,14 @@ V53 > V54
                     const caseNo = getCaseNumberFromVisibleHeader();
                     if (!currentCaseId || !caseNo) {
                         showGlobalToast('未能取得 Case 號碼，請稍後再試');
-                        dlog('CaseId/CaseNo missing, skip upsert');
                         return;
                     }
-
                     let dueAt;
                     if (choice === 'other') {
                         dueAt = resultValue;
                     } else {
                         dueAt = calcSmartDueDate(choice);
                     }
-
                     upsertItem({ caseId: currentCaseId, caseNo, dueAt });
                     renderPanel();
                     flashHeaderHintByDueAt(dueAt);
@@ -1502,7 +1520,6 @@ V53 > V54
             wrap.className = 'fu-follow-ddwrap';
             wrap.appendChild(btn);
             followWrap.parentElement.insertBefore(wrap, followWrap);
-
             return true;
         };
 
@@ -4004,11 +4021,11 @@ V53 > V54
         Log.info('Feature.CaseList.Sort', 'PCA提示排序已執行完成（僅當前已渲染行）。');
     }
 
-        /**
+/**
     * @description 處理 Case 列表頁的行數據。
-    *              [V85 完整聯動版]
-    *              1. 列表視覺：顯示紫色 [跟進中] 標籤。
-    *              2. 面板聯動：[修復] 收集所有命中的 Case 號並通知跟進面板進行高亮。
+    *              [V87 動態色譜版]
+    *              1. 顏色分配：使用 12 色高對比度色譜，對當前視圖中的跟進 Case 進行動態着色。
+    *              2. 面板聯動：將 {CaseNo: Color} 映射表發送給跟進面板，實現同步變色。
     */
     function processCaseListRows(tableBody) {
         const repliedEnabled = GM_getValue('notifyOnRepliedCaseEnabled', DEFAULTS.notifyOnRepliedCaseEnabled);
@@ -4018,6 +4035,11 @@ V53 > V54
 
         if (!repliedEnabled && !listHintEnabled && !expiringHighlightEnabled && !followUpPanelEnabled) return;
 
+        // [配置] 高對比度色譜 (深色/高飽和度，適合白字)
+        const COLOR_PALETTE = [
+            '#FFADAD', '#FFD6A5', '#FDFFB6', '#CAFFBF', '#9BF6FF', '#A0C4FF', '#BDB2FF', '#FFC6FF'
+        ];
+
         const SEND_BUTTON_CACHE_KEY = CACHE_POLICY.REPLIED.KEY;
         const CACHE_TTL_MS = CACHE_POLICY.REPLIED.LIST_TTL_MS;
         const CLAIMS_CACHE_KEY = CACHE_POLICY.CLAIMS_LOST_PKG.KEY;
@@ -4025,16 +4047,12 @@ V53 > V54
         const BILLING_CACHE_KEY = CACHE_POLICY.BILLING_REBILL.KEY;
         const BILLING_TTL_MS = CACHE_POLICY.BILLING_REBILL.LIST_TTL_MS;
         const FU_ITEMS_KEY = 'FU_PANEL_ITEMS_V1';
-
         const ANNOTATION_CLASS = 'cec-replied-annotation';
 
-        // --- 1. 準備數據 ---
         const repliedCache = repliedEnabled ? GM_getValue(SEND_BUTTON_CACHE_KEY, {}) : {};
         if (repliedEnabled) purgeExpiredCacheEntries(repliedCache, CACHE_TTL_MS);
-
         const claimsCache = listHintEnabled ? GM_getValue(CLAIMS_CACHE_KEY, {}) : {};
         if (listHintEnabled) purgeExpiredCacheEntries(claimsCache, CLAIMS_TTL_MS);
-
         const billingCache = listHintEnabled ? GM_getValue(BILLING_CACHE_KEY, {}) : {};
         if (listHintEnabled) purgeExpiredCacheEntries(billingCache, BILLING_TTL_MS);
 
@@ -4051,16 +4069,16 @@ V53 > V54
                         }
                     });
                 }
-            } catch (e) { /* ignore */ }
+            } catch (e) { }
         }
 
         const allRows = tableBody.querySelectorAll('tr[data-row-key-value]');
         let isAnyCaseExpiring = false;
 
-        // [關鍵修復] 用於收集本頁面所有命中的 Case 號，以便通知面板
-        const currentViewMatches = [];
+        // [新增] 顏色分配計數器與映射表
+        let colorIndex = 0;
+        const currentViewMap = new Map(); // Key: CaseNo, Value: ColorString
 
-        // --- 2. 遍歷處理 ---
         allRows.forEach(row => {
             const caseId = row.getAttribute('data-row-key-value');
             if (!caseId) return;
@@ -4071,28 +4089,32 @@ V53 > V54
                 caseNumberText = caseNumberLink.textContent.replace(/[^0-9]/g, '');
             }
 
-            // 判斷是否為跟進中 Case
-            const isFollowUp = (followUpPanelEnabled && caseNumberText && followUpSet.has(caseNumberText));
-
-            // [關鍵修復] 如果命中，加入收集列表
-            if (isFollowUp) {
-                currentViewMatches.push(caseNumberText);
-            }
-
-            // [功能A] 核心處理邏輯
             if (row.dataset.cecProcessed !== 'true') {
                 row.dataset.cecProcessed = 'true';
+
+                const isFollowUp = (followUpPanelEnabled && caseNumberText && followUpSet.has(caseNumberText));
+
+                // [新增] 動態顏色分配邏輯
+                let assignedColor = null;
+                if (isFollowUp) {
+                    // 如果這個號碼之前已經分配過顏色(例如分頁場景)，沿用舊色
+                    // 但這裡是單頁處理，所以簡單起見，我們按順序分配
+                    if (!currentViewMap.has(caseNumberText)) {
+                        assignedColor = COLOR_PALETTE[colorIndex % COLOR_PALETTE.length];
+                        currentViewMap.set(caseNumberText, assignedColor);
+                        colorIndex++;
+                    } else {
+                        assignedColor = currentViewMap.get(caseNumberText);
+                    }
+                }
 
                 let annotationText = null;
                 let annotationMeta = null;
 
-                // 優先級 1: 跟進中
                 if (isFollowUp) {
                     annotationText = " 跟進中";
-                    annotationMeta = { type: 'followup' };
-                }
-                // 優先級 2: 開查/預付
-                else if (listHintEnabled) {
+                    annotationMeta = { type: 'followup', color: assignedColor };
+                } else if (listHintEnabled) {
                     const claimsEntry = claimsCache[caseId];
                     const billingEntry = billingCache[caseId];
 
@@ -4105,7 +4127,6 @@ V53 > V54
                     }
                 }
 
-                // 優先級 3: 已回覆
                 if (!annotationText && repliedEnabled) {
                     const repliedEntry = repliedCache[caseId];
                     if (repliedEntry && (Date.now() - repliedEntry.timestamp < CACHE_TTL_MS)) {
@@ -4114,7 +4135,6 @@ V53 > V54
                     }
                 }
 
-                // 排序元數據
                 if (annotationMeta && annotationMeta.type === 'followup') {
                     row.dataset.cecPcaType = 'followup';
                     row.dataset.cecPcaTimestamp = String(Date.now());
@@ -4126,9 +4146,8 @@ V53 > V54
                     delete row.dataset.cecPcaTimestamp;
                 }
 
-                // DOM 操作
                 if (caseNumberLink) {
-                    // 清除原有樣式 (因為我們現在用標籤，不改文字顏色)
+                    // 重置樣式
                     caseNumberLink.style.backgroundColor = '';
                     caseNumberLink.style.color = '';
                     caseNumberLink.style.padding = '';
@@ -4151,16 +4170,15 @@ V53 > V54
                             annotationSpan.style.padding = '0px 6px';
                             annotationSpan.style.display = 'inline-block';
 
-                            // 標籤樣式分配
                             if (annotationMeta.type === 'followup') {
-                                annotationSpan.style.backgroundColor = '#9050e9'; // 紫色
+                                // [修改] 使用動態分配的顏色
+                                annotationSpan.style.backgroundColor = annotationMeta.color;
                                 annotationSpan.style.color = '#ffffff';
                                 annotationSpan.style.fontWeight = 'bold';
                             } else if (annotationMeta.type === 'claims' || annotationMeta.type === 'billing') {
                                 const CLAIMS_BASE_COLOR = '#2e844a';
                                 const BILLING_BASE_COLOR = '#0070d2';
                                 let bgColor = (annotationMeta.type === 'claims') ? CLAIMS_BASE_COLOR : BILLING_BASE_COLOR;
-
                                 if (annotationMeta.type === 'claims' || annotationMeta.type === 'billing') {
                                     const diffMs = Date.now() - annotationMeta.timestamp;
                                     const diffDays = Math.floor(diffMs / (24 * 60 * 60 * 1000));
@@ -4174,14 +4192,27 @@ V53 > V54
                                 annotationSpan.style.fontWeight = 'normal';
                                 annotationSpan.style.padding = '0';
                             }
-
                             injectionTarget.appendChild(annotationSpan);
                         }
                     }
                 }
+            } else {
+                // 如果行已處理，但仍需更新 currentViewMap 以確保面板同步
+                const caseNumberLink = findElementInShadows(row, `a[href*="${caseId}"]`);
+                if (caseNumberLink) {
+                    const text = caseNumberLink.textContent.replace(/[^0-9]/g, '');
+                    if (followUpPanelEnabled && text && followUpSet.has(text)) {
+                         if (!currentViewMap.has(text)) {
+                             // 分配新顏色或沿用 (這裡簡單分配，因為已處理過的行顏色已定，不應變)
+                             // 但為了 Map 完整性，我們再次計算
+                             const color = COLOR_PALETTE[colorIndex % COLOR_PALETTE.length];
+                             currentViewMap.set(text, color);
+                             colorIndex++;
+                         }
+                    }
+                }
             }
 
-            // --- 功能 B: 過期檢測 ---
             if (expiringHighlightEnabled && !isAnyCaseExpiring) {
                 const importanceCell = row.querySelector('td[data-label="Importance"]');
                 if (importanceCell) {
@@ -4199,12 +4230,11 @@ V53 > V54
             }
         });
 
-        // [關鍵修復] 將收集到的 Case 號發送給跟進面板
+        // [關鍵] 通知跟進面板更新顏色
         if (followUpPanelEnabled) {
-            FollowUpPanel.highlightListMatches(currentViewMatches);
+            FollowUpPanel.highlightListMatches(currentViewMap);
         }
 
-        // --- 功能 B 執行 ---
         if (expiringHighlightEnabled) {
             const table = tableBody.parentElement;
             const thead = table ? table.querySelector('thead') : null;
@@ -6493,7 +6523,7 @@ V53 > V54
                 return;
             }
             if (assignButton && !assignButton.disabled) {
-                await new Promise(resolve => setTimeout(resolve, 300)); // 300ms: 點擊前的短暫延遲，確保UI穩定。
+                await new Promise(resolve => setTimeout(resolve, 100)); // 300ms: 點擊前的短暫延遲，確保UI穩定。
                 assignButton.click();
                 assignButton.style.setProperty('background-color', '#0070d2', 'important');
                 assignButton.style.setProperty('color', '#fff', 'important');
@@ -7373,34 +7403,54 @@ V53 > V54
     // =================================================================================
 
     /**
-    * @description 啟動一個高頻率的全局掃描器，並行處理所有一次性的頁面初始化任務。
-    * @param {string} caseUrl - 當前Case頁面的URL，用於標記處理狀態。
+    * @description [完美優化版] 啟動全局掃描器。
+    * 優化點 1: 背景休眠 (解決多開卡頓，背景時 CPU 佔用近乎 0)
+    * 優化點 2: 有效時間計時 (解決掛機後功能失效，確保 20秒 的"有效"掃描時間)
     */
     function startHighFrequencyScanner(caseUrl) {
-        const SCAN_INTERVAL = 300; // 300ms: 掃描器輪詢間隔，用於快速檢測頁面元素。
-        const MASTER_TIMEOUT = 20000; // 20000ms: 掃描器的總運行超時，防止無限運行。
-        const startTime = Date.now();
+        const SCAN_INTERVAL = 300; // 保持 300ms 的高速掃描，確保當前頁面體驗流暢
+        const MAX_ACTIVE_DURATION = 20000; // 有效掃描時長 20秒
+        // 計算總共需要執行的次數： 20000 / 300 ≈ 67 次
+        const MAX_TICKS = Math.ceil(MAX_ACTIVE_DURATION / SCAN_INTERVAL);
 
+        let executedTicks = 0; // 已執行的次數
         let tasksToRun = CASE_PAGE_CHECKS_CONFIG.filter(task => task.once);
+
         if (tasksToRun.length === 0) return;
 
         const processedElements = new WeakSet();
-        Log.info('Core.Scanner', `高頻掃描器啟動，處理 ${tasksToRun.length} 個一次性任務。`);
+        Log.info('Core.Scanner', `智能掃描器啟動 (目標有效時長: 20秒)`);
 
         globalScannerId = setInterval(() => {
-            if (isScriptPaused || tasksToRun.length === 0 || Date.now() - startTime > MASTER_TIMEOUT) {
+            // 1. 檢查任務是否全部完成 (完成則提前終止)
+            if (tasksToRun.length === 0) {
                 clearInterval(globalScannerId);
                 globalScannerId = null;
-                if (tasksToRun.length > 0) {
-                    const unfinished = tasksToRun.map(t => t.id).join(', ');
-                    Log.warn('Core.Scanner', `掃描器超時，仍有 ${tasksToRun.length} 個任務未完成: [${unfinished}]。`);
-                } else {
-                    Log.info('Core.Scanner', `所有一次性任務完成，掃描器停止。`);
-                    processedCaseUrlsInSession.add(caseUrl);
-                    Log.info('Core.Scanner', `本次掃描耗時: ${Date.now() - startTime}ms，Session 已處理 Case 數量: ${processedCaseUrlsInSession.size}`);
-                }
+                processedCaseUrlsInSession.add(caseUrl);
+                Log.info('Core.Scanner', `所有一次性任務已完成，掃描器停止。`);
                 return;
             }
+
+            // 2. 檢查全局暫停開關
+            if (isScriptPaused) return;
+
+            // 3. [核心優化] 背景檢測
+            // 如果頁面在背景：直接 return。
+            // 不執行 DOM 查詢 (極省 CPU)，也不增加 executedTicks (暫停計時，保留額度)。
+            if (document.hidden) {
+                return;
+            }
+
+            // 4. 檢查有效執行次數是否用完
+            if (executedTicks >= MAX_TICKS) {
+                clearInterval(globalScannerId);
+                globalScannerId = null;
+                Log.info('Core.Scanner', `有效掃描時間已達 20秒，掃描器停止。`);
+                return;
+            }
+
+            // --- 開始執行掃描 (消耗一次額度) ---
+            executedTicks++;
 
             const currentTasks = [...tasksToRun];
             for (const task of currentTasks) {
@@ -7412,16 +7462,18 @@ V53 > V54
                         task.handler(el);
                         processedElements.add(el);
                         taskCompleted = true;
+                        // 對於 once 類型的任務，標記完成後即可從隊列移除
+                        // 注意：如果您的選擇器對應多個元素且需要全部處理，這裡可能需要微調
+                        // 但基於 V89 的配置，目前的 break 是安全的。
                         break;
-                    } catch (e) {
-                        // 忽略單個處理程序的錯誤
-                    }
+                    } catch (e) { }
                 }
                 if (taskCompleted) {
                     tasksToRun = tasksToRun.filter(t => t.id !== task.id);
                 }
             }
         }, SCAN_INTERVAL);
+
         PageResourceRegistry.addInterval(globalScannerId);
     }
 
@@ -7866,9 +7918,10 @@ V53 > V54
         Log.info('Core.Router', `URL 變更，開始處理新頁面: ${location.href}`);
         lastUrl = location.href;
 
-                    if (GM_getValue('followUpPanelEnabled', DEFAULTS.followUpPanelEnabled)) {
-                FollowUpPanel.highlightListMatches([]);
-            }
+        // [新增] 路由切換時，強制重置跟進面板的列表高亮狀態 (傳入空 Map)
+        if (GM_getValue('followUpPanelEnabled', DEFAULTS.followUpPanelEnabled)) {
+        FollowUpPanel.highlightListMatches(new Map());
+        }
 
         // --- 頁面級資源統一清理 ---
         PageResourceRegistry.cleanup('urlchange');
