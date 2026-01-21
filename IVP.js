@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IVP顯示注釋
 // @namespace    IVP顯示注釋
-// @version      V21
+// @version      V22
 // @description  IVP顯示注釋、一眼模式、定義字體顏色。
 // @author       Jerry Law
 // @match        *://ivp.inside.ups.com/*
@@ -31,7 +31,7 @@
 #7600 LTC PARKWAY|亞馬遜倉庫
 #27505 SW 132ND AVE|亞馬遜倉庫
 #4806 Cotter Ln|亞馬遜倉庫
-#2845 W 48th Pl|亞馬遜倉庫
+2845 W 48th Pl|亞馬遜倉庫
 #550 OAK RIDGE ROAD|亞馬遜倉庫
 #RASALAT-PPWK|清關文件送達給收件人
 #OBSERVED PKG|主動監控的貨件
@@ -1008,7 +1008,7 @@
 #UZBEKISTAN|烏茲別克 - 烏茲別克斯坦 - UZ
 #NETHERLANDS, KINGDOM OF THE|荷蘭
 #VANUATU|新赫布裡底 - VU
-#VENEZUELA, BOLIVARIAN REPUBLIC OF|委內瑞拉 - VE
+#VENEZUELA~ BOLIVARIAN REPUBLIC OF|委內瑞拉 - VE
 #ZAMBIA|尚比亞 - ZM
 #ZIMBABWE|辛巴威 - ZW
 #BAHRAIN|巴林 - BH
@@ -1090,6 +1090,7 @@ BLVD LOS AN
             } else {
                 keys.split(",").forEach(key => {
                     if (key) {
+                        key = key.replace(/~/g, ','); 
                         if (key.startsWith('#')) {
                             const boundaryKey = key.substring(1);
                             keyToNote.set(boundaryKey, note);
