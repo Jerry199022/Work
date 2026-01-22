@@ -4766,7 +4766,7 @@ V53 > V54
                     return;
                 }
 
-                // 命中 A/B：若 doNotCloseEnabled 或 listHintEnabled 任一啟用，採用 bypass 方案（確保緩存寫入在真正送出那次）
+                // 命中 A/B：若 doNotCloseEnabled 或 listHintEnabled 任一啟用...
                 if (doNotCloseEnabled || listHintEnabled) {
                     event.preventDefault();
                     event.stopImmediatePropagation();
@@ -4775,20 +4775,30 @@ V53 > V54
 
                     if (doNotCloseEnabled) {
                         const userChoice = await showSendInterceptDialog(typeLabel);
+
+                        // 用戶點擊了右上角關閉或按了 ESC，取消發送
                         if (!userChoice) {
                             Log.info('Feature.SendIntercept', '用戶取消送出。');
                             return;
                         }
+
+                        // [核心修改] 根據用戶選擇，強制設定 Checkbox 狀態
                         if (userChoice === 'YES') {
-                            ensureSendAndDoNotCloseChecked();
+                            // 選擇"是" -> 強制勾選
+                            setSendAndDoNotCloseState(true);
+                        } else if (userChoice === 'NO') {
+                            // 選擇"否" -> 強制取消勾選
+                            setSendAndDoNotCloseState(false);
                         }
                     }
 
                     sendButtonPendingSpecialType = special.type;
                     sendButtonBypassNextClick = true;
+
+                    // 給一點點緩衝時間讓 Checkbox 的 DOM 事件傳播完成
                     setTimeout(() => {
                         try { sendButton.click(); } catch (e) {}
-                    }, 0);
+                    }, 50);
                     return;
                 }
 
