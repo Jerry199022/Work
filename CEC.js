@@ -1545,30 +1545,6 @@ V53 > V54
             __fuRenderRaf = null;
         };
 
-        // [新增] 用於外部檢測匹配狀態的函數 (供 Send 按鈕攔截器使用)
-        const checkMatch = (targetCaseId, targetTrackingNo) => {
-            if (!targetCaseId && !targetTrackingNo) return null;
-            
-            const items = sanitizeItems(loadItems());
-            
-            // 1. 優先檢查 Case ID (精確匹配)
-            if (targetCaseId) {
-                const caseMatch = items.find(i => i.caseId === targetCaseId);
-                if (caseMatch) return { type: 'case', item: caseMatch };
-            }
-
-            // 2. 檢查追蹤號 (模糊匹配：TrackingNo 字段 或 Note 字段)
-            if (targetTrackingNo) {
-                const cleanTrack = targetTrackingNo.trim();
-                const trackMatch = items.find(i => 
-                    (i.trackingNo && i.trackingNo.trim() === cleanTrack) || 
-                    (i.note && i.note.includes(cleanTrack))
-                );
-                if (trackMatch) return { type: 'tracking', item: trackMatch };
-            }
-            return null;
-        };
-
         return {
             ensureMounted,
             render: renderPanel,
@@ -1576,9 +1552,6 @@ V53 > V54
             removeAllFloating,
             unmount,
             highlightListMatches,
-            // [新增] 暴露接口給外部使用
-            checkMatch,
-            deleteItem
         };
     })();
 
@@ -1606,60 +1579,6 @@ V53 > V54
             return match[1];
         }
         Log.warn('Core.Utils', `未能從 URL 中提取 Case ID: ${urlString}`);
-        return null;
-    }
-
-    /**
-    * @description [新增全局函數] 從頁面可見的 Header 區域提取 Case Number (如 C-1234567890)。
-    */
-    function getCaseNumberFromVisibleHeader() {
-        const selectors = [
-            'slot[name="primaryField"] lightning-formatted-text',
-            'slot[name="primaryField"]',
-            '.primaryFieldRow slot[name="primaryField"] lightning-formatted-text',
-            '.primaryFieldRow slot[name="primaryField"]',
-            'h1 slot[name="primaryField"] lightning-formatted-text',
-            'h1 slot[name="primaryField"]'
-        ];
-        
-        // 內部輔助：標準化 Case 號碼格式
-        const normalize = (raw) => {
-            if (!raw) return null;
-            const s = String(raw).trim();
-            const m = s.match(/C-\d{10}/i);
-            if (m && m[0]) {
-                const digits0 = m[0].replace(/c-/i, '').replace(/[^0-9]/g, '');
-                return 'C-' + digits0.slice(0, 10);
-            }
-            const m2 = s.match(/C-(\d+)/i);
-            if (m2 && m2[1]) {
-                const digits = String(m2[1]).replace(/[^0-9]/g, '');
-                if (digits.length >= 10) return 'C-' + digits.slice(0, 10);
-            }
-            return null;
-        };
-
-        for (const sel of selectors) {
-            let candidates = [];
-            try {
-                candidates = findAllElementsInShadows(document.body, sel) || [];
-            } catch (e) {
-                candidates = [];
-            }
-            for (const el of candidates) {
-                try { if (!isElementVisible(el)) continue; } catch (e) { }
-                const t = (el.textContent || '').trim();
-                const n = normalize(t);
-                if (n) return n;
-            }
-        }
-        
-        const title = (document.title || '').trim();
-        if (title) {
-            const left = title.split('\n')[0].trim();
-            const left2 = left.split(' - ')[0].trim();
-            return normalize(left2) || normalize(left);
-        }
         return null;
     }
 
@@ -2329,168 +2248,6 @@ V53 > V54
         });
     }
 
-    /**
-    * @description [從局部移至全局] 顯示 PCA (開查/預付) 攔截彈窗
-    */
-    const showSendInterceptDialog = (typeLabel) => {
-        return new Promise((resolve) => {
-            const accentColor = (typeLabel === '開查') ? '#2e844a' : '#0070d2';
-
-            const overlay = document.createElement('div');
-            overlay.className = 'cec-global-completion-overlay show';
-            overlay.style.zIndex = '10002';
-
-            const box = document.createElement('div');
-            box.className = 'cec-send-intercept-modal';
-            box.style.cssText = 'width: min(860px, calc(100vw - 140px)); box-sizing: border-box; padding: 20px 24px 18px; border-radius: 20px; background-color: #ffffff; border: 3px solid rgba(206, 230, 248, 1); position: relative; display: flex; flex-direction: column; font-family: "Segoe UI", sans-serif;';
-
-            const accentBar = document.createElement('div');
-            accentBar.style.cssText = `position: absolute; left: 0; top: 0; bottom: 0; width: 10px; border-top-left-radius: 18px; border-bottom-left-radius: 18px; background-color: ${accentColor};`;
-            box.appendChild(accentBar);
-
-            const closeBtn = document.createElement('div');
-            closeBtn.textContent = '×';
-            closeBtn.style.cssText = 'position: absolute; right: 14px; top: 10px; cursor: pointer; font-size: 30px; line-height: 1; color: #62666a; padding: 6px;';
-            box.appendChild(closeBtn);
-
-            const iconCircle = document.createElement('div');
-            iconCircle.style.cssText = `position: absolute; left: 24px; top: 14px; width: 34px; height: 34px; border-radius: 50%; background-color: ${accentColor}; display: flex; align-items: center; justify-content: center; color: #ffffff; font-size: 18px; font-weight: 800;`;
-            iconCircle.textContent = '!';
-            box.appendChild(iconCircle);
-
-            const messageWrapper = document.createElement('div');
-            messageWrapper.style.cssText = 'flex: 1 1 auto; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 32px 16px 20px;';
-
-            const line1 = document.createElement('div');
-            line1.style.cssText = 'font-size: 28px; font-weight: 800; color: #1a1a1a; line-height: 1.25;';
-            line1.textContent = `這是【${typeLabel}】Case`;
-
-            const line2 = document.createElement('div');
-            line2.style.cssText = 'font-size: 28px; font-weight: 800; color: #1a1a1a; line-height: 1.25; margin-top: 10px; white-space: nowrap;';
-            line2.textContent = '是否需要勾選“Send and Do Not Close”';
-
-            messageWrapper.appendChild(line1);
-            messageWrapper.appendChild(line2);
-            box.appendChild(messageWrapper);
-
-            const btnBar = document.createElement('div');
-            btnBar.style.cssText = 'display: flex; justify-content: center; gap: 14px; margin-top: 6px; padding-bottom: 6px;';
-
-            const btnNo = document.createElement('button');
-            btnNo.className = 'slds-button slds-button_neutral';
-            btnNo.textContent = '否（直接發送）';
-            btnNo.style.cssText = 'min-width: 190px; height: 54px; border-radius: 12px; font-weight: 700;';
-
-            const btnYes = document.createElement('button');
-            btnYes.className = 'slds-button slds-button_brand';
-            btnYes.textContent = '是（勾選後發送）';
-            btnYes.style.cssText = `min-width: 210px; height: 54px; border-radius: 12px; background-color: ${accentColor}; border-color: ${accentColor}; font-weight: 700;`;
-
-            const cleanup = () => {
-                try { document.removeEventListener('keydown', onKeyDown); } catch (e) {}
-                try { overlay.remove(); } catch (e) {}
-            };
-
-            const onKeyDown = (e) => {
-                if (e.key === 'Escape') { cleanup(); resolve(null); }
-            };
-
-            btnNo.addEventListener('click', () => { cleanup(); resolve('NO'); });
-            btnYes.addEventListener('click', () => { cleanup(); resolve('YES'); });
-            closeBtn.addEventListener('click', () => { cleanup(); resolve(null); });
-            overlay.addEventListener('click', (e) => { if (e.target === overlay) { cleanup(); resolve(null); } });
-            document.addEventListener('keydown', onKeyDown);
-
-            btnBar.appendChild(btnNo);
-            btnBar.appendChild(btnYes);
-            box.appendChild(btnBar);
-            overlay.appendChild(box);
-            document.body.appendChild(overlay);
-        });
-    };
-
-    /**
-    * @description [新增] 顯示跟進面板的攔截彈窗 (樣式與 PCA 彈窗保持一致但顏色不同)
-    * @param {'case'|'tracking'} matchType - 匹配類型
-    */
-    const showFollowUpInterceptDialog = (matchType) => {
-        return new Promise((resolve) => {
-            // 定義顏色：Case匹配(綠色), 追蹤號匹配(橙色)
-            const accentColor = (matchType === 'case') ? '#2e844a' : '#ff9900';
-            const titleText = (matchType === 'case') ? '這是【跟進面板】中的 Case' : '這是【跟進面板】追蹤號關聯';
-            
-            const overlay = document.createElement('div');
-            overlay.className = 'cec-global-completion-overlay show';
-            overlay.style.zIndex = '10005'; // 層級比 PCA 彈窗更高一點
-
-            const box = document.createElement('div');
-            box.className = 'cec-send-intercept-modal';
-            box.style.cssText = 'width: min(860px, calc(100vw - 140px)); box-sizing: border-box; padding: 20px 24px 18px; border-radius: 20px; background-color: #ffffff; border: 3px solid rgba(206, 230, 248, 1); position: relative; display: flex; flex-direction: column; font-family: "Segoe UI", sans-serif;';
-
-            const accentBar = document.createElement('div');
-            accentBar.style.cssText = `position: absolute; left: 0; top: 0; bottom: 0; width: 10px; border-top-left-radius: 18px; border-bottom-left-radius: 18px; background-color: ${accentColor};`;
-            box.appendChild(accentBar);
-
-            const closeBtn = document.createElement('div');
-            closeBtn.textContent = '×';
-            closeBtn.style.cssText = 'position: absolute; right: 14px; top: 10px; cursor: pointer; font-size: 30px; line-height: 1; color: #62666a; padding: 6px;';
-            box.appendChild(closeBtn);
-
-            const iconCircle = document.createElement('div');
-            iconCircle.style.cssText = `position: absolute; left: 24px; top: 14px; width: 34px; height: 34px; border-radius: 50%; background-color: ${accentColor}; display: flex; align-items: center; justify-content: center; color: #ffffff; font-size: 18px; font-weight: 800;`;
-            iconCircle.textContent = '!';
-            box.appendChild(iconCircle);
-
-            const messageWrapper = document.createElement('div');
-            messageWrapper.style.cssText = 'flex: 1 1 auto; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 32px 16px 20px;';
-
-            const line1 = document.createElement('div');
-            line1.style.cssText = 'font-size: 28px; font-weight: 800; color: #1a1a1a; line-height: 1.25;';
-            line1.textContent = titleText;
-
-            const line2 = document.createElement('div');
-            line2.style.cssText = 'font-size: 28px; font-weight: 800; color: #1a1a1a; line-height: 1.25; margin-top: 10px; white-space: nowrap;';
-            line2.textContent = '是否從面板中移除此記錄？';
-
-            messageWrapper.appendChild(line1);
-            messageWrapper.appendChild(line2);
-            box.appendChild(messageWrapper);
-
-            const btnBar = document.createElement('div');
-            btnBar.style.cssText = 'display: flex; justify-content: center; gap: 14px; margin-top: 6px; padding-bottom: 6px;';
-
-            const btnNo = document.createElement('button');
-            btnNo.className = 'slds-button slds-button_neutral';
-            btnNo.textContent = '否（保留記錄）';
-            btnNo.style.cssText = 'min-width: 190px; height: 54px; border-radius: 12px; font-weight: 700;';
-
-            const btnYes = document.createElement('button');
-            btnYes.className = 'slds-button slds-button_brand';
-            btnYes.textContent = '是（移除記錄）';
-            btnYes.style.cssText = `min-width: 210px; height: 54px; border-radius: 12px; background-color: ${accentColor}; border-color: ${accentColor}; font-weight: 700;`;
-
-            const cleanup = () => {
-                try { document.removeEventListener('keydown', onKeyDown); } catch (e) {}
-                try { overlay.remove(); } catch (e) {}
-            };
-
-            const onKeyDown = (e) => {
-                if (e.key === 'Escape') { cleanup(); resolve(null); }
-            };
-
-            btnNo.addEventListener('click', () => { cleanup(); resolve('NO'); });
-            btnYes.addEventListener('click', () => { cleanup(); resolve('YES'); });
-            closeBtn.addEventListener('click', () => { cleanup(); resolve(null); });
-            overlay.addEventListener('click', (e) => { if (e.target === overlay) { cleanup(); resolve(null); } });
-            document.addEventListener('keydown', onKeyDown);
-
-            btnBar.appendChild(btnNo);
-            btnBar.appendChild(btnYes);
-            box.appendChild(btnBar);
-            overlay.appendChild(box);
-            document.body.appendChild(overlay);
-        });
-    };
 
     // =================================================================================
     // SECTION: 樣式注入與UI創建 (Styles & UI)
@@ -4611,17 +4368,84 @@ V53 > V54
     }
 
     /**
+    * @description 處理編輯器加載完畢後的模板快捷按鈕注入流程。
+    *              [修改版] 強制每次獲取最新排序，並使用 Observer 確保按鈕在 DOM 重繪後依然存在。
+    */
+    async function handleEditorReadyForTemplateButtons() {
+        try {
+            // 1. 等待編輯器核心加載
+            const editorSelector = ".slds-rich-text-editor .tox-tinymce";
+            const editor = await waitForElementWithObserver(document.body, editorSelector, 15000);
+
+            // 調整高度
+            const desiredHeight = GM_getValue("richTextEditorHeight", DEFAULTS.richTextEditorHeight) + "px";
+            if (editor.style.height !== desiredHeight) {
+                editor.style.height = desiredHeight;
+            }
+
+            // 2. [核心步驟] 獲取最新模板列表 (實時抓取，不緩存)
+            // 注意：這裡會觸發一次菜單的打開與關閉，為了獲取最新排序，這是必須的代價
+            const templates = await getAndLogTemplateOptions();
+
+            if (templates && templates.length > 1) {
+                const anchorIconSelector = 'lightning-icon[icon-name="utility:new_window"]';
+                const anchorIcon = await waitForElementWithObserver(document.body, anchorIconSelector, 5000);
+                // 找到工具欄的容器 (ul.cuf-attachmentsList)
+                const anchorLi = anchorIcon.closest('li.cuf-attachmentsItem');
+                const toolbarContainer = anchorLi ? anchorLi.parentElement : null;
+
+                if (anchorLi && toolbarContainer) {
+                    // 3. [第一次注入]
+                    injectTemplateShortcutButtons(anchorLi, templates);
+
+                    // 4. [關鍵修改] 啟動 Observer 守護按鈕
+                    // 防止 Salesforce 在數據加載後重繪工具欄導致按鈕消失
+                    if (!toolbarContainer.dataset.cecObserverAttached) {
+                        const observer = new MutationObserver((mutations) => {
+                            // 檢查我們的按鈕是否還在
+                            const myButtons = toolbarContainer.querySelector('.cec-template-shortcut-button');
+                            if (!myButtons) {
+                                // 如果按鈕丟失，使用剛剛獲取的 templates 列表重新注入
+                                // 必須重新獲取最新的錨點，因為舊的錨點可能已被銷毀
+                                const currentAnchorIcon = toolbarContainer.querySelector(anchorIconSelector);
+                                const currentAnchorLi = currentAnchorIcon ? currentAnchorIcon.closest('li.cuf-attachmentsItem') : null;
+                                if (currentAnchorLi) {
+                                    // 重置注入標記，強制重新注入
+                                    toolbarContainer.dataset.shortcutsInjected = 'false';
+                                    Log.info('UI.Enhancement', '檢測到按鈕丟失，正在重新注入...');
+                                    injectTemplateShortcutButtons(currentAnchorLi, templates);
+                                }
+                            }
+                        });
+
+                        PageResourceRegistry.addObserver(observer);
+
+                        observer.observe(toolbarContainer, { childList: true, subtree: true });
+                        toolbarContainer.dataset.cecObserverAttached = 'true';
+                        // 將 observer 存儲在元素上以便後續清理（如果需要）
+                        toolbarContainer._cecObserver = observer;
+                    }
+                } else {
+                    Log.warn('UI.Enhancement', `未能找到用於注入快捷按鈕的錨點元素。`);
+                }
+            }
+
+            setupSendButtonListener();
+        } catch (error) {
+            Log.warn('UI.Enhancement', `初始化模板快捷按鈕時出錯: ${error.message}`);
+        }
+    }
+
+    /**
     * @description 部署一個一次性的監聽器，用於捕獲郵件發送事件並記錄緩存。
-    *              [優化版] 整合了跟進面板攔截(第一關)與PCA攔截(第二關)。
     */
     async function setupSendButtonListener() {
         const doNotCloseEnabled = GM_getValue('pcaDoNotClosePromptEnabled', DEFAULTS.pcaDoNotClosePromptEnabled);
         const listHintEnabled = GM_getValue('pcaCaseListHintEnabled', DEFAULTS.pcaCaseListHintEnabled);
         const repliedEnabled = GM_getValue('notifyOnRepliedCaseEnabled', DEFAULTS.notifyOnRepliedCaseEnabled);
-        const followUpEnabled = GM_getValue('followUpPanelEnabled', DEFAULTS.followUpPanelEnabled);
 
-        // 如果所有相關功能都關閉，則不部署
-        if (!doNotCloseEnabled && !listHintEnabled && !repliedEnabled && !followUpEnabled) {
+        // 三個都關才不需要部署
+        if (!doNotCloseEnabled && !listHintEnabled && !repliedEnabled) {
             return;
         }
 
@@ -4632,35 +4456,60 @@ V53 > V54
         const BILLING_CACHE_KEY = CACHE_POLICY.BILLING_REBILL.KEY;
         const BILLING_TTL_MS = CACHE_POLICY.BILLING_REBILL.TTL_MS;
 
-        // --- 輔助函數定義 ---
+        // --- 緩存寫入：已回覆（保持原邏輯：可覆寫 timestamp）---
         const updateRepliedCache = (caseId) => {
             if (!caseId) return;
             const cache = GM_getValue(SEND_BUTTON_CACHE_KEY, {});
             const purgeResult = purgeExpiredCacheEntries(cache, REPLIED_PURGE_MS);
+            if (purgeResult.changed) {
+                Log.info('Feature.NotifyReplied', `已清理過期的已回覆 Case 緩存條目（寫入前, removed: ${purgeResult.removed}）。`);
+            }
             cache[caseId] = { timestamp: Date.now() };
             GM_setValue(SEND_BUTTON_CACHE_KEY, cache);
         };
 
+        // --- 緩存寫入：A/B（不可複寫 + 跨類型替換）---
         const updateSpecialCache = (caseId, type) => {
             if (!caseId || !type) return;
             const now = Date.now();
+
             const claimsCache = GM_getValue(CLAIMS_CACHE_KEY, {});
             const billingCache = GM_getValue(BILLING_CACHE_KEY, {});
-            
-            purgeExpiredCacheEntries(claimsCache, CLAIMS_TTL_MS);
-            purgeExpiredCacheEntries(billingCache, BILLING_TTL_MS);
+
+            const claimsPurgeResult = purgeExpiredCacheEntries(claimsCache, CLAIMS_TTL_MS);
+            const billingPurgeResult = purgeExpiredCacheEntries(billingCache, BILLING_TTL_MS);
+
+            let changed = false;
 
             if (type === 'A') {
-                if (billingCache[caseId]) delete billingCache[caseId];
-                claimsCache[caseId] = { timestamp: now };
+                const entry = claimsCache[caseId];
+                if (entry && (now - entry.timestamp < CLAIMS_TTL_MS)) {
+                    // 不覆寫
+                } else {
+                    if (billingCache[caseId]) { delete billingCache[caseId]; changed = true; }
+                    claimsCache[caseId] = { timestamp: now };
+                    changed = true;
+                }
             } else if (type === 'B') {
-                if (claimsCache[caseId]) delete claimsCache[caseId];
-                billingCache[caseId] = { timestamp: now };
+                const entry = billingCache[caseId];
+                if (entry && (now - entry.timestamp < BILLING_TTL_MS)) {
+                    // 不覆寫
+                } else {
+                    if (claimsCache[caseId]) { delete claimsCache[caseId]; changed = true; }
+                    billingCache[caseId] = { timestamp: now };
+                    changed = true;
+                }
             }
-            GM_setValue(CLAIMS_CACHE_KEY, claimsCache);
-            GM_setValue(BILLING_CACHE_KEY, billingCache);
+
+            if (claimsPurgeResult.changed || changed) {
+                GM_setValue(CLAIMS_CACHE_KEY, claimsCache);
+            }
+            if (billingPurgeResult.changed || changed) {
+                GM_setValue(BILLING_CACHE_KEY, billingCache);
+            }
         };
 
+        // --- UI 讀取：Case Category / Case Sub Category ---
         const detectSpecialType = () => {
             const categoryButton = findFirstElementInShadows(document.body, [
                 'button[aria-label*="Case Category"]',
@@ -4670,33 +4519,208 @@ V53 > V54
                 'button[aria-label*="Case Sub Category"]',
                 'button[title*="Case Sub Category"]'
             ]);
+
             const category = getSelectedValue(categoryButton);
             const subCategory = getSelectedValue(subCategoryButton);
+
             const c = (category || '').toLowerCase();
             const s = (subCategory || '').toLowerCase();
 
-            if (c.includes('claims') || s.includes('claim')) return { type: 'A', category, subCategory };
-            if (c.includes('bill') || s.includes('bill') || s.includes('rebill')) return { type: 'B', category, subCategory };
+            // A: Claims / Claim
+            if (c.includes('claims') || s.includes('claim')) {
+                return { type: 'A', category, subCategory };
+            }
+
+            // B: Billing / Rebill
+            if (c.includes('bill') || s.includes('bill') || s.includes('rebill')) {
+                return { type: 'B', category, subCategory };
+            }
+
             return null;
         };
 
-        const setSendAndDoNotCloseState = (shouldCheck) => {
-             try {
+        // --- 勾選 “Send and Do Not Close” checkbox（你已提供穩定定位）---
+        const ensureSendAndDoNotCloseChecked = () => {
+            try {
                 const container = findElementInShadows(document.body, '[data-target-selection-name="sfdc:RecordField.EmailMessage.CEC_Send_and_Do_Not_Close__c"]');
                 const checkbox = container ? container.querySelector('input[type="checkbox"]') : null;
-                if (checkbox) {
-                    if (shouldCheck && !checkbox.checked) {
-                        checkbox.click();
-                        checkbox.dispatchEvent(new Event('change', { bubbles: true }));
-                    } else if (!shouldCheck && checkbox.checked) {
-                        checkbox.click();
-                        checkbox.dispatchEvent(new Event('change', { bubbles: true }));
-                    }
+                if (!checkbox) {
+                    Log.warn('Feature.SendIntercept', '未找到 "Send and Do Not Close" checkbox，將不阻塞送出。');
+                    return;
                 }
-            } catch (e) {}
+                if (!checkbox.checked) {
+                    checkbox.click();
+                    checkbox.dispatchEvent(new Event('change', { bubbles: true }));
+                    Log.info('Feature.SendIntercept', '已自動勾選 "Send and Do Not Close" checkbox。');
+                }
+            } catch (e) {
+                Log.warn('Feature.SendIntercept', `勾選 checkbox 時發生異常：${e.message}，將不阻塞送出。`);
+            }
         };
 
-        // --- 主邏輯 ---
+        // --- 彈窗（兩行居中，按鈕居中；只在 doNotCloseEnabled 啟用時彈出）---
+        const showSendInterceptDialog = (typeLabel) => {
+            return new Promise((resolve) => {
+                const accentColor = (typeLabel === '開查') ? '#2e844a' : '#0070d2';
+
+                const overlay = document.createElement('div');
+                overlay.className = 'cec-global-completion-overlay show';
+                overlay.style.zIndex = '10002';
+
+                const box = document.createElement('div');
+                box.className = 'cec-send-intercept-modal';
+                box.style.width = 'min(860px, calc(100vw - 140px))';
+                box.style.boxSizing = 'border-box';
+                box.style.padding = '20px 24px 18px';
+                box.style.borderRadius = '20px';
+                box.style.backgroundColor = '#ffffff';
+                box.style.border = '3px solid rgba(206, 230, 248, 1)';
+                box.style.position = 'relative';
+                box.style.display = 'flex';
+                box.style.flexDirection = 'column';
+                box.style.fontFamily = 'Segoe UI, Microsoft YaHei, PingFang TC, sans-serif';
+
+                const accentBar = document.createElement('div');
+                accentBar.style.position = 'absolute';
+                accentBar.style.left = '0';
+                accentBar.style.top = '0';
+                accentBar.style.bottom = '0';
+                accentBar.style.width = '10px';
+                accentBar.style.borderTopLeftRadius = '18px';
+                accentBar.style.borderBottomLeftRadius = '18px';
+                accentBar.style.backgroundColor = accentColor;
+                box.appendChild(accentBar);
+
+                const closeBtn = document.createElement('div');
+                closeBtn.textContent = '×';
+                closeBtn.style.position = 'absolute';
+                closeBtn.style.right = '14px';
+                closeBtn.style.top = '10px';
+                closeBtn.style.cursor = 'pointer';
+                closeBtn.style.fontSize = '30px';
+                closeBtn.style.lineHeight = '1';
+                closeBtn.style.color = '#62666a';
+                closeBtn.style.padding = '6px';
+                box.appendChild(closeBtn);
+
+                const iconCircle = document.createElement('div');
+                iconCircle.style.position = 'absolute';
+                iconCircle.style.left = '24px';
+                iconCircle.style.top = '14px';
+                iconCircle.style.width = '34px';
+                iconCircle.style.height = '34px';
+                iconCircle.style.borderRadius = '50%';
+                iconCircle.style.backgroundColor = accentColor;
+                iconCircle.style.display = 'flex';
+                iconCircle.style.alignItems = 'center';
+                iconCircle.style.justifyContent = 'center';
+                iconCircle.style.color = '#ffffff';
+                iconCircle.style.fontSize = '18px';
+                iconCircle.style.fontWeight = '800';
+                iconCircle.textContent = '!';
+                box.appendChild(iconCircle);
+
+                const messageWrapper = document.createElement('div');
+                messageWrapper.style.flex = '1 1 auto';
+                messageWrapper.style.display = 'flex';
+                messageWrapper.style.flexDirection = 'column';
+                messageWrapper.style.alignItems = 'center';
+                messageWrapper.style.justifyContent = 'center';
+                messageWrapper.style.textAlign = 'center';
+                messageWrapper.style.padding = '32px 16px 20px';
+
+                const line1 = document.createElement('div');
+                line1.style.fontSize = '28px';
+                line1.style.fontWeight = '800';
+                line1.style.color = '#1a1a1a';
+                line1.style.lineHeight = '1.25';
+                line1.textContent = `這是【${typeLabel}】Case`;
+
+                const line2 = document.createElement('div');
+                line2.style.fontSize = '28px';
+                line2.style.fontWeight = '800';
+                line2.style.color = '#1a1a1a';
+                line2.style.lineHeight = '1.25';
+                line2.style.marginTop = '10px';
+                line2.style.whiteSpace = 'nowrap';
+                line2.textContent = '是否需要勾選“Send and Do Not Close”';
+
+                messageWrapper.appendChild(line1);
+                messageWrapper.appendChild(line2);
+                box.appendChild(messageWrapper);
+
+                const btnBar = document.createElement('div');
+                btnBar.style.display = 'flex';
+                btnBar.style.justifyContent = 'center';
+                btnBar.style.gap = '14px';
+                btnBar.style.marginTop = '6px';
+                btnBar.style.paddingBottom = '6px';
+
+                const btnNo = document.createElement('button');
+                btnNo.className = 'slds-button slds-button_neutral';
+                btnNo.textContent = '否（直接發送）';
+                btnNo.style.minWidth = '190px';
+                btnNo.style.height = '54px';
+                btnNo.style.borderRadius = '12px';
+                btnNo.style.fontFamily = 'Segoe UI, Microsoft YaHei, PingFang TC, sans-serif';
+                btnNo.style.fontWeight = '700';
+
+                const btnYes = document.createElement('button');
+                btnYes.className = 'slds-button slds-button_brand';
+                btnYes.textContent = '是（勾選後發送）';
+                btnYes.style.minWidth = '210px';
+                btnYes.style.height = '54px';
+                btnYes.style.borderRadius = '12px';
+                btnYes.style.backgroundColor = accentColor;
+                btnYes.style.borderColor = accentColor;
+                btnYes.style.fontFamily = 'Segoe UI, Microsoft YaHei, PingFang TC, sans-serif';
+                btnYes.style.fontWeight = '700';
+
+                const onKeyDown = (e) => {
+                    if (e.key === 'Escape') {
+                        cleanup();
+                        resolve(null);
+                    }
+                };
+
+                const cleanup = () => {
+                    try { document.removeEventListener('keydown', onKeyDown); } catch (e) {}
+                    try { overlay.remove(); } catch (e) {}
+                };
+
+                btnNo.addEventListener('click', () => {
+                    cleanup();
+                    resolve('NO');
+                });
+
+                btnYes.addEventListener('click', () => {
+                    cleanup();
+                    resolve('YES');
+                });
+
+                closeBtn.addEventListener('click', () => {
+                    cleanup();
+                    resolve(null);
+                });
+
+                overlay.addEventListener('click', (e) => {
+                    if (e.target === overlay) {
+                        cleanup();
+                        resolve(null);
+                    }
+                });
+
+                document.addEventListener('keydown', onKeyDown);
+
+                btnBar.appendChild(btnNo);
+                btnBar.appendChild(btnYes);
+                box.appendChild(btnBar);
+
+                overlay.appendChild(box);
+                document.body.appendChild(overlay);
+            });
+        };
+
         try {
             const sendButtonSelector = 'button.slds-button--brand.cuf-publisherShareButton';
             const sendButton = await waitForElementWithObserver(document.body, sendButtonSelector, 15000);
@@ -4712,7 +4736,7 @@ V53 > V54
             sendButton.dataset.cecSendInterceptBound = 'true';
 
             sendButton.addEventListener('click', async (event) => {
-                // 0. 放行邏輯：如果是腳本觸發的第二次點擊，直接執行緩存寫入並返回
+                // bypass：我們自己放行的下一次 click（避免死循環）
                 if (sendButtonBypassNextClick) {
                     sendButtonBypassNextClick = false;
 
@@ -4723,93 +4747,70 @@ V53 > V54
                         if (listHintEnabled && sendButtonPendingSpecialType) {
                             updateSpecialCache(caseId, sendButtonPendingSpecialType);
                         }
-                        Log.info('Feature.Send', `Send 動作已執行，緩存已更新。`);
+                        Log.info('Feature.NotifyReplied', `\"Send\" 已放行並按設定寫入緩存（Case ID: ${caseId}）。`);
                     }
+
                     sendButtonPendingSpecialType = null;
                     return;
                 }
 
-                // --- 攔截邏輯開始 ---
-                const caseId = getCaseIdFromUrl(location.href);
-                const special = detectSpecialType(); // PCA 類型
-                
-                // 1. 預計算：檢測跟進面板匹配
-                let followUpMatch = null;
-                if (followUpEnabled && caseId) {
-                    // foundTrackingNumber 是全局變量，由掃描器維護
-                    followUpMatch = FollowUpPanel.checkMatch(caseId, foundTrackingNumber);
-                }
+                const special = detectSpecialType();
 
-                // 2. 判斷是否需要攔截
-                const needFollowUpIntercept = !!followUpMatch;
-                const needPcaIntercept = (special && (doNotCloseEnabled || listHintEnabled));
-
-                if (!needFollowUpIntercept && !needPcaIntercept) {
-                    // 無需攔截，直接放行 (但記錄普通已回覆緩存)
-                    if (caseId && repliedEnabled) updateRepliedCache(caseId);
+                // 非 A/B：不攔截，按需寫入 replied
+                if (!special) {
+                    const caseId = getCaseIdFromUrl(location.href);
+                    if (caseId && repliedEnabled) {
+                        updateRepliedCache(caseId);
+                        Log.info('Feature.NotifyReplied', `"Send" 按鈕被點擊，為 Case ID: ${caseId} 記錄緩存。`);
+                    }
                     return;
                 }
 
-                // 3. 執行攔截：阻止默認事件
-                event.preventDefault();
-                event.stopImmediatePropagation();
+                // 命中 A/B：若 doNotCloseEnabled 或 listHintEnabled 任一啟用...
+                if (doNotCloseEnabled || listHintEnabled) {
+                    event.preventDefault();
+                    event.stopImmediatePropagation();
 
-                // --- 階段 A: 跟進面板處理 (第一道關卡) ---
-                if (needFollowUpIntercept) {
-                    const userChoice = await showFollowUpInterceptDialog(followUpMatch.type);
-                    
-                    if (!userChoice) { 
-                        // 用戶取消/關閉彈窗 -> 終止發送
-                        Log.info('Feature.Send', '用戶在跟進面板彈窗中取消操作。');
-                        return; 
-                    }
+                    const typeLabel = (special.type === 'A') ? '開查' : '預付';
 
-                    if (userChoice === 'YES') {
-                        FollowUpPanel.deleteItem(followUpMatch.item.caseId);
-                        // 強制刷新面板以即時反映刪除
-                        FollowUpPanel.render();
-                        Log.info('Feature.Send', `已從跟進面板移除 Case: ${followUpMatch.item.caseId}`);
-                    } else {
-                        Log.info('Feature.Send', `用戶選擇保留跟進面板記錄。`);
-                    }
-                }
-
-                // --- 階段 B: PCA (開查/預付) 處理 (第二道關卡) ---
-                if (needPcaIntercept) {
-                    // 如果只開啟了 listHintEnabled 但沒開 doNotCloseEnabled，則不需要彈窗，直接標記類型即可
                     if (doNotCloseEnabled) {
-                        const typeLabel = (special.type === 'A') ? '開查' : '預付';
                         const userChoice = await showSendInterceptDialog(typeLabel);
 
+                        // 用戶點擊了右上角關閉或按了 ESC，取消發送
                         if (!userChoice) {
-                            // 用戶取消/關閉彈窗 -> 終止發送
-                            Log.info('Feature.Send', '用戶在 PCA 彈窗中取消操作。');
+                            Log.info('Feature.SendIntercept', '用戶取消送出。');
                             return;
                         }
 
+                        // [核心修改] 根據用戶選擇，強制設定 Checkbox 狀態
                         if (userChoice === 'YES') {
+                            // 選擇"是" -> 強制勾選
                             setSendAndDoNotCloseState(true);
                         } else if (userChoice === 'NO') {
+                            // 選擇"否" -> 強制取消勾選
                             setSendAndDoNotCloseState(false);
                         }
                     }
-                    // 記錄類型以便放行後寫入緩存
+
                     sendButtonPendingSpecialType = special.type;
+                    sendButtonBypassNextClick = true;
+
+                    // 給一點點緩衝時間讓 Checkbox 的 DOM 事件傳播完成
+                    setTimeout(() => {
+                        try { sendButton.click(); } catch (e) {}
+                    }, 50);
+                    return;
                 }
 
-                // --- 階段 C: 放行發送 ---
-                sendButtonBypassNextClick = true;
-                // 給一點緩衝讓 DOM 狀態更新 (如 checkbox)
-                setTimeout(() => {
-                    try { sendButton.click(); } catch (e) {}
-                }, 50);
+                // A/B 但兩個功能都關：不攔截、不寫入 A/B
+                return;
 
             }, true);
 
-            Log.info('Feature.Send', `"Send" 按鈕多重攔截監聽器已部署。`);
+            Log.info('Feature.NotifyReplied', `"Send" 按鈕監聽器已成功部署。`);
 
         } catch (error) {
-            Log.warn('Feature.Send', `部署 "Send" 按鈕監聽器失敗: ${error.message}`);
+            Log.warn('Feature.NotifyReplied', `部署 "Send" 按鈕監聽器失敗: ${error.message}`);
         }
     }
 
@@ -5435,6 +5436,94 @@ V53 > V54
             } catch (error) {
                 Log.error('UI.Enhancement', `嘗試滾動郵件框架時出錯: ${error.message}`);
             }
+        }
+    }
+
+    /**
+    * @description 從頁面中提取追踪號碼，並觸發自動IVP/Web查詢（如果已啟用）。
+    */
+    async function extractTrackingNumberAndTriggerIVP() {
+        const TRACKING_CACHE_KEY = CACHE_POLICY.TRACKING.KEY;
+        const CACHE_TTL_MS = CACHE_POLICY.TRACKING.TTL_MS; // 60分鐘: 追踪號緩存有效期。
+        const caseId = getCaseIdFromUrl(location.href);
+        if (!caseId) {
+            Log.warn('Feature.Query', `無法從當前 URL 提取 Case ID，追踪號緩存功能跳過。`);
+            return;
+        }
+
+        const cache = GM_getValue(TRACKING_CACHE_KEY, {});
+
+        const purgeResult = purgeExpiredCacheEntries(cache, CACHE_TTL_MS);
+        if (purgeResult.changed) {
+            GM_setValue(TRACKING_CACHE_KEY, purgeResult.cache);
+            Log.info('Feature.Query', `已清理過期的追踪號緩存條目（removed: ${purgeResult.removed}）。`);
+        }
+        const entry = cache[caseId];
+
+        // 輔助函數：執行所有啟用的自動查詢
+        const triggerAutoQueries = async () => {
+            // 1. 啟動 Web 查詢
+            await autoQueryWebOnLoad();
+
+            // 2. 啟動 IVP 查詢
+            await autoQueryIVPOnLoad();
+
+            // 3. [核心修復] 焦點強制鎖定機制
+            // 原因：Web 端在背景時容易被 Edge/Chromium 節流，短窗口下偶發無法完成自動查詢。
+            // 對策：不再 0/100/500ms 連續搶焦點；改成「只延後一次」搶回 IVP，給 Web 短暫前景窗口。
+            if (GM_getValue('autoIVPQueryEnabled', DEFAULTS.autoIVPQueryEnabled) &&
+                GM_getValue('autoSwitchEnabled', DEFAULTS.autoSwitchEnabled) &&
+                GM_getValue('autoWebQueryEnabled', DEFAULTS.autoWebQueryEnabled) &&
+                ivpWindowHandle && !ivpWindowHandle.closed) {
+
+                if (ivpFocusTimeoutId) {
+                    clearTimeout(ivpFocusTimeoutId);
+                    ivpFocusTimeoutId = null;
+                }
+
+                ivpFocusTimeoutId = setTimeout(() => {
+                    try {
+                        if (ivpWindowHandle && !ivpWindowHandle.closed) {
+                            ivpWindowHandle.focus();
+                        }
+                    } catch (e) {
+                        // ignore
+                    } finally {
+                        ivpFocusTimeoutId = null;
+                    }
+                }, 1200);
+            }
+        };
+
+        if (entry && (Date.now() - entry.timestamp < CACHE_TTL_MS)) {
+            foundTrackingNumber = entry.trackingNumber;
+            Log.info('Feature.Query', `從緩存中成功讀取追踪號 (Case ID: ${caseId}): ${foundTrackingNumber}`);
+            triggerAutoQueries();
+            return;
+        }
+
+        const trackingRegex = /(1Z[A-Z0-9]{16})/;
+        const selector = 'td[data-label="IDENTIFIER VALUE"] a, a[href*="/lightning/r/Shipment_Identifier"]';
+        try {
+            const element = await waitForElement(document.body, selector, 10000);
+            if (element && element.textContent) {
+                const match = element.textContent.trim().match(trackingRegex);
+                if (match) {
+                    const extractedNumber = match[0];
+                    Log.info('Feature.Query', `成功提取追踪號: ${extractedNumber}`);
+                    foundTrackingNumber = extractedNumber;
+                    cache[caseId] = {
+                        trackingNumber: extractedNumber,
+                        timestamp: Date.now()
+                    };
+                    GM_setValue(TRACKING_CACHE_KEY, cache);
+                    Log.info('Feature.Query', `追踪號已為 Case ID ${caseId} 寫入緩存，有效期60分鐘。`);
+
+                    triggerAutoQueries();
+                }
+            }
+        } catch (error) {
+            Log.warn('Feature.Query', `在10秒內未找到追踪號元素，自動查詢將不會觸發。`);
         }
     }
 
@@ -7358,138 +7447,75 @@ V53 > V54
     // =================================================================================
 
     /**
-    * @description [終極優化版] 頁面任務掃描器
-    *              整合了：一次性 DOM 修改任務、Case Number 變更監測、追蹤號延遲提取。
+    * @description [完美優化版] 啟動全局掃描器。
+    * 優化點 1: 背景休眠 (解決多開卡頓，背景時 CPU 佔用近乎 0)
+    * 優化點 2: 有效時間計時 (解決掛機後功能失效，確保 20秒 的"有效"掃描時間)
     */
     function startHighFrequencyScanner(caseUrl) {
-        const SCAN_INTERVAL = 300; 
-        const MAX_ACTIVE_DURATION = 20000; 
+        const SCAN_INTERVAL = 300; // 保持 300ms 的高速掃描，確保當前頁面體驗流暢
+        const MAX_ACTIVE_DURATION = 20000; // 有效掃描時長 20秒
+        // 計算總共需要執行的次數： 20000 / 300 ≈ 67 次
         const MAX_TICKS = Math.ceil(MAX_ACTIVE_DURATION / SCAN_INTERVAL);
 
-        let executedTicks = 0; 
-        
-        // 1. 定義一次性 DOM 任務隊列
+        let executedTicks = 0; // 已執行的次數
         let tasksToRun = CASE_PAGE_CHECKS_CONFIG.filter(task => task.once);
 
-        // 2. 狀態標記
-        let lastSeenCaseNo = null;
-        let hasExtractedTracking = false; // 標記是否已成功提取過追蹤號
-
-        // 3. 獲取當前 Case ID (用於緩存寫入)
-        const currentCaseId = getCaseIdFromUrl(caseUrl);
+        if (tasksToRun.length === 0) return;
 
         const processedElements = new WeakSet();
-        Log.info('Core.Scanner', `智能掃描器啟動 (CaseID: ${currentCaseId})`);
+        Log.info('Core.Scanner', `智能掃描器啟動 (目標有效時長: 20秒)`);
 
         globalScannerId = setInterval(() => {
-            // --- 終止條件檢查 ---
-            if (isScriptPaused) return;
-            if (document.hidden) return; // 背景休眠
-            
-            // 停止條件：任務全空 且 運行超過一定時間 (確保 CaseNo 監測能覆蓋加載期)
-            if (tasksToRun.length === 0 && executedTicks > 30) { 
+            // 1. 檢查任務是否全部完成 (完成則提前終止)
+            if (tasksToRun.length === 0) {
                 clearInterval(globalScannerId);
                 globalScannerId = null;
-                Log.info('Core.Scanner', `所有任務完成且監測期結束，掃描器停止。`);
+                processedCaseUrlsInSession.add(caseUrl);
+                Log.info('Core.Scanner', `所有一次性任務已完成，掃描器停止。`);
                 return;
             }
 
+            // 2. 檢查全局暫停開關
+            if (isScriptPaused) return;
+
+            // 3. [核心優化] 背景檢測
+            // 如果頁面在背景：直接 return。
+            // 不執行 DOM 查詢 (極省 CPU)，也不增加 executedTicks (暫停計時，保留額度)。
+            if (document.hidden) {
+                return;
+            }
+
+            // 4. 檢查有效執行次數是否用完
             if (executedTicks >= MAX_TICKS) {
                 clearInterval(globalScannerId);
                 globalScannerId = null;
-                Log.info('Core.Scanner', `掃描器達到最大時長 (20s)，強制停止。`);
+                Log.info('Core.Scanner', `有效掃描時間已達 20秒，掃描器停止。`);
                 return;
             }
 
+            // --- 開始執行掃描 (消耗一次額度) ---
             executedTicks++;
 
-            // ============================================================
-            // 任務 A: Case Number 變更監測 (解決搜索進入無高亮)
-            // ============================================================
-            try {
-                // 調用全局工具函數
-                const currentCaseNo = getCaseNumberFromVisibleHeader(); 
-                if (currentCaseNo && currentCaseNo !== lastSeenCaseNo) {
-                    Log.info('Core.Scanner', `檢測到 Case Number 變更 (${lastSeenCaseNo} -> ${currentCaseNo})`);
-                    lastSeenCaseNo = currentCaseNo;
-                    
-                    // 強制面板刷新 (高亮匹配)
-                    if (GM_getValue('followUpPanelEnabled', DEFAULTS.followUpPanelEnabled)) {
-                        FollowUpPanel.render();
-                    }
+            const currentTasks = [...tasksToRun];
+            for (const task of currentTasks) {
+                const elements = findAllElementsInShadows(document, task.selector);
+                let taskCompleted = false;
+                for (const el of elements) {
+                    if (processedElements.has(el)) continue;
+                    try {
+                        task.handler(el);
+                        processedElements.add(el);
+                        taskCompleted = true;
+                        // 對於 once 類型的任務，標記完成後即可從隊列移除
+                        // 注意：如果您的選擇器對應多個元素且需要全部處理，這裡可能需要微調
+                        // 但基於 V89 的配置，目前的 break 是安全的。
+                        break;
+                    } catch (e) { }
                 }
-            } catch (e) {}
-
-            // ============================================================
-            // 任務 B: 追蹤號延遲提取 & 自動查詢 (解決追蹤號加載慢)
-            // ============================================================
-            if (!hasExtractedTracking && !foundTrackingNumber) {
-                try {
-                    const trackingRegex = /(1Z[A-Z0-9]{16})/;
-                    // 使用更高效的選擇器查找
-                    const element = findFirstElementInShadows(document.body, [
-                        'td[data-label="IDENTIFIER VALUE"] a',
-                        'a[href*="/lightning/r/Shipment_Identifier"]',
-                        'lightning-formatted-text[data-output-element-id="output-field"]'
-                    ]);
-
-                    if (element && element.textContent) {
-                        const match = element.textContent.trim().match(trackingRegex);
-                        if (match) {
-                            const extractedNumber = match[0];
-                            Log.info('Feature.Query', `掃描器成功捕獲追蹤號: ${extractedNumber}`);
-                            
-                            // 1. 更新全局狀態
-                            foundTrackingNumber = extractedNumber;
-                            hasExtractedTracking = true; 
-
-                            // 2. 寫入緩存
-                            if (currentCaseId) {
-                                const cache = GM_getValue(CACHE_POLICY.TRACKING.KEY, {});
-                                cache[currentCaseId] = {
-                                    trackingNumber: extractedNumber,
-                                    timestamp: Date.now()
-                                };
-                                GM_setValue(CACHE_POLICY.TRACKING.KEY, cache);
-                            }
-
-                            // 3. 觸發業務邏輯
-                            if (GM_getValue('followUpPanelEnabled', DEFAULTS.followUpPanelEnabled)) {
-                                FollowUpPanel.render();
-                            }
-                            autoQueryWebOnLoad();
-                            autoQueryIVPOnLoad();
-                        }
-                    }
-                } catch (e) {}
-            }
-
-            // ============================================================
-            // 任務 C: 一次性 DOM 注入任務 (IVP按鈕, 聯繫人高亮等)
-            // ============================================================
-            if (tasksToRun.length > 0) {
-                const pendingTasks = [];
-                for (const task of tasksToRun) {
-                    const elements = findAllElementsInShadows(document, task.selector);
-                    let taskSuccess = false;
-                    
-                    for (const el of elements) {
-                        if (processedElements.has(el)) continue;
-                        try {
-                            task.handler(el);
-                            processedElements.add(el);
-                            taskSuccess = true; 
-                            if (task.once) break; 
-                        } catch (e) {}
-                    }
-
-                    if (!taskSuccess) {
-                        pendingTasks.push(task);
-                    }
+                if (taskCompleted) {
+                    tasksToRun = tasksToRun.filter(t => t.id !== task.id);
                 }
-                tasksToRun = pendingTasks;
             }
-
         }, SCAN_INTERVAL);
 
         PageResourceRegistry.addInterval(globalScannerId);
@@ -7919,6 +7945,7 @@ V53 > V54
 
     /**
     * @description 監控URL的變化。當URL變化時，重置狀態並根據新的URL觸發相應的頁面初始化邏輯。
+    *              [修正版] 修正了 Case 詳情頁 URL 的正則表達式匹配錯誤，並將關鍵字段檢查邏輯移至僅中止自動指派。
     */
     async function monitorUrlChanges() {
         if (isScriptPaused) {
@@ -7935,13 +7962,14 @@ V53 > V54
         Log.info('Core.Router', `URL 變更，開始處理新頁面: ${location.href}`);
         lastUrl = location.href;
 
-        // [新增] 路由切換時，強制重置跟進面板的列表高亮狀態
+        // [新增] 路由切換時，強制重置跟進面板的列表高亮狀態 (傳入空 Map)
         if (GM_getValue('followUpPanelEnabled', DEFAULTS.followUpPanelEnabled)) {
-            FollowUpPanel.highlightListMatches(new Map());
+        FollowUpPanel.highlightListMatches(new Map());
         }
 
         // --- 頁面級資源統一清理 ---
         PageResourceRegistry.cleanup('urlchange');
+        // Follow-Up Panel: 清理浮層（避免 SPA 切頁殘留）
         FollowUpPanel.removeAllFloating();
 
         // --- 狀態重置 ---
@@ -7955,8 +7983,10 @@ V53 > V54
         window.contactLogicDone = false;
 
         // --- 路由匹配 ---
+        // [核心修正] 使用了正確的正則表達式，確保能匹配帶有查詢參數的 URL
         const caseRecordPagePattern = /^https:\/\/upsdrive\.lightning\.force\.com\/lightning\/r\/Case\/[a-zA-Z0-9]{18}\/.*/;
         const myOpenCasesListPagePattern = /^https:\/\/upsdrive\.lightning\.force\.com\/lightning\/o\/Case\/list\?.*filterName=My_Open_Cases_CEC.*/;
+        const isTargetExportPage = /^https:\/\/upsdrive\.lightning\.force\.com\/lightning\/o\/Case\/list\?.*filterName=CEC_HK_ERN_Export_Case*/;
 
         // =================================================================================
         // 分支 1: Case 詳情頁邏輯
@@ -7982,15 +8012,17 @@ V53 > V54
             initModalButtonObserver();
             initIWantToModuleWatcher();
 
+            // Follow-Up Panel: Case 詳情頁注入『設定跟進時間』按鈕（支援 Console 多 Tab）
             if (GM_getValue('followUpPanelEnabled', DEFAULTS.followUpPanelEnabled)) {
                 FollowUpPanel.ensureMounted();
                 await FollowUpPanel.ensureCaseButton();
                 FollowUpPanel.render();
             }
 
-            // --- 步驟 3: 直接啟動數據依賴型任務 (掃描器接管追蹤號提取) ---
-            Log.info('Core.Router', `正在啟動數據依賴型任務（掃描器）。`);
+            // --- 步驟 3: 直接啟動數據依賴型任務 (前置守衛已移除) ---
+            Log.info('Core.Router', `正在啟動數據依賴型任務（掃描器、追踪號提取）。`);
             startHighFrequencyScanner(caseUrl);
+            extractTrackingNumberAndTriggerIVP();
 
             // --- 步驟 4: 執行自動指派邏輯 ---
             if (caseUrl.includes('c__triggeredfrom=reopen')) {
@@ -8005,7 +8037,7 @@ V53 > V54
             }
 
             const ASSIGNMENT_CACHE_KEY = CACHE_POLICY.ASSIGNMENT.KEY;
-            const CACHE_EXPIRATION_MS = CACHE_POLICY.ASSIGNMENT.TTL_MS;
+            const CACHE_EXPIRATION_MS = CACHE_POLICY.ASSIGNMENT.TTL_MS; // 60分鐘: 自動指派緩存有效期。
             const cache = GM_getValue(ASSIGNMENT_CACHE_KEY, {});
 
             const purgeResult = purgeExpiredCacheEntries(cache, CACHE_EXPIRATION_MS);
@@ -8033,18 +8065,24 @@ V53 > V54
                 return;
             }
 
-            // --- 步驟 5: 關鍵字段檢查 ---
+            // --- 步驟 5: 將關鍵字段檢查移至此處，僅中止自動指派 ---
             if (await areRequiredFieldsEmpty()) {
                 Log.warn('Feature.AutoAssign', `因關鍵字段為空，自動指派流程已中止。其他頁面任務不受影響。`);
-                return;
+                return; // 僅中止自動指派
             }
 
             handleAutoAssign(caseUrl, false);
 
+            // =================================================================================
+            // 分支 2: "My Open Cases CEC" 列表頁邏輯
+            // =================================================================================
         } else if (myOpenCasesListPagePattern.test(location.href)) {
             Log.info('Core.Router', `"My Open Cases CEC" 列表頁已識別，準備啟動列表監控器。`);
             initCaseListMonitor();
 
+            // =================================================================================
+            // 分支 3: 其他所有頁面
+            // =================================================================================
         } else {
             Log.info('Core.Router', `非目標頁面 (詳情頁/指定列表頁)，跳過核心功能初始化。`);
         }
