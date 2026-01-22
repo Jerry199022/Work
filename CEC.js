@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CEC功能強化
 // @namespace    CEC Enhanced
-// @version      V90
+// @version      V91
 // @description  快捷操作按鈕、自動指派、IVP快速查詢、聯繫人彈窗優化、按鈕警示色、賬戶檢測、組件屏蔽、設置菜單、自動IVP查詢、URL精準匹配、快捷按鈕可編輯、(Related Cases)數據提取與增強排序功能、關聯案件提取器、回覆case快捷按鈕、已跟進case提示、全局暫停/恢復功能。
 // @author       Jerry Law
 // @match        https://upsdrive.lightning.force.com/*
@@ -6819,19 +6819,53 @@ V53 > V54
     }
 
     /**
-    * @description 檢查是否存在關聯案件，如果存在，則將 "Associate Contact" 按鈕標紅。
+    * @description 檢查是否存在關聯案件，如果存在，則將 "Associate Contact" 按鈕和 "Related Cases" 標籤頁同時標紅。
     */
     function checkAndColorAssociateButton() {
+        // 1. 獲取元素
         const relatedCasesTab = findElementInShadows(document.body, 'li[data-label^="Related Cases ("]');
         const associateButton = findElementInShadows(document.body, 'button[title="Associate Contact"]');
-        if (!associateButton) return;
-        const hasRelatedCases = relatedCasesTab && relatedCasesTab.getAttribute("title") !== "Related Cases (0)";
-        const isAlreadyRed = associateButton.style.backgroundColor === "red";
-        if (hasRelatedCases && !isAlreadyRed) {
-            associateButton.style.backgroundColor = "red";
-            Log.info('UI.ButtonAlert', `"Associate Contact" 按鈕已因存在關聯案件標紅。`);
-        } else if (!hasRelatedCases && isAlreadyRed) {
-            associateButton.style.backgroundColor = "";
+
+        // 2. 判斷條件：是否存在關聯案件
+        // 邏輯：檢查 Tab 的 title 屬性是否不等於 "Related Cases (0)"
+        const tabTitle = relatedCasesTab ? relatedCasesTab.getAttribute("title") : null;
+        const hasRelatedCases = relatedCasesTab && tabTitle && tabTitle !== "Related Cases (0)";
+
+        // 3. 執行動作 A：處理 "Associate Contact" 按鈕 (原有功能)
+        if (associateButton) {
+            if (hasRelatedCases) {
+                // 變紅
+                if (associateButton.style.backgroundColor !== "red") {
+                    associateButton.style.backgroundColor = "red";
+                    associateButton.style.color = "white";  //可刪除變成黑色字體
+                }
+            } else {
+                // 還原
+                if (associateButton.style.backgroundColor === "red") {
+                    associateButton.style.backgroundColor = "";
+                    associateButton.style.color = "";
+                }
+            }
+        }
+
+        // 4. 執行動作 B：處理 "Related Cases" 標籤頁 (新增功能)
+        if (relatedCasesTab) {
+            // Salesforce 的 Tab 樣式通常在內部的 <a> 標籤上，直接改 li 背景會很醜
+            const tabLink = relatedCasesTab.querySelector('a');
+
+            if (tabLink) {
+                if (hasRelatedCases) {
+                    // 變紅 (使用 setProperty 和 !important 確保覆蓋原生樣式)
+                    tabLink.style.setProperty('background-color', 'red', 'important');
+                    tabLink.style.setProperty('color', 'white', 'important'); //可刪除變成黑色字體
+                } else {
+                    // 還原
+                    tabLink.style.removeProperty('background-color');
+                    tabLink.style.removeProperty('color');
+                    tabLink.style.removeProperty('border-radius');
+                    tabLink.style.removeProperty('box-shadow');
+                }
+            }
         }
     }
 
