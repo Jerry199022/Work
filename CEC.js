@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         CEC功能強化
 // @namespace    CEC Enhanced
-// @version      V91
-// @description  快捷操作按鈕、自動指派、IVP快速查詢、聯繫人彈窗優化、按鈕警示色、賬戶檢測、組件屏蔽、設置菜單、自動IVP查詢、URL精準匹配、快捷按鈕可編輯、(Related Cases)數據提取與增強排序功能、關聯案件提取器、回覆case快捷按鈕、已跟進case提示、全局暫停/恢復功能。
+// @version      V117
+// @description  快捷操作按鈕、自動指派、IVP/官網快速查詢、聯繫人彈窗優化、按鈕警示色、賬戶檢測(含Suspended)、組件屏蔽、設置菜單、自動IVP/Web查詢、URL精準匹配、快捷按鈕可編輯、(Related Cases)數據提取與增強排序、跟進面板、繁簡轉換、I Want To自動化、開查/預付提示、快過期提示、自動加載Updates、模版插入優化、全局暫停/恢復功能。
 // @author       Jerry Law
 // @match        https://upsdrive.lightning.force.com/*
 // @exclude      https://upsdrive.lightning.force.com/lightning/r/Contact/*
@@ -18,6 +18,15 @@
 // ==/UserScript==
 
 /*
+V90 > V117
+-架構重構：單一引擎化
+-強化跟進面板
+-優化攔截提示
+-模版功能修正
+-開查預付優化
+-優化I Want to功能
+-自動加載 Updates 全部內容
+
 V84 > V90
 更新內容：
 -優化跟進面板
@@ -77,9 +86,7 @@ V53 > V54
     // SECTION: 專業級日誌記錄器 (Professional Logger)
     // =================================================================================
 
-    /**
-    * @description 一個專業的、可配置的日誌記錄器，提供帶時間戳、級別和模塊的結構化輸出。
-    */
+
     const Log = {
         levels: {
             DEBUG: 0,
@@ -90,15 +97,7 @@ V53 > V54
         },
         level: 0, // 默認日誌級別：INFO。設為 0 可查看 DEBUG 信息。
 
-        /**
-        * @private
-        * @description 內部日誌處理函數，格式化並輸出日誌。
-        * @param {number} level - 日誌級別枚舉值。
-        * @param {string} levelStr - 日誌級別的字符串表示。
-        * @param {string} module - 產生日誌的功能模塊名。
-        * @param {string} message - 日誌消息。
-        * @param {Function} logFn - 用於輸出的 console 函數 (e.g., console.log)。
-        */
+
         _log(level, levelStr, module, message, logFn) {
             if (level >= this.level) {
                 const timestamp = new Date().toLocaleTimeString('en-US', {
@@ -127,15 +126,13 @@ V53 > V54
     // SECTION: 全局配置與狀態管理 (Global Configuration & State)
     // =================================================================================
 
-    /**
-    * @description 存儲腳本所有功能的默認配置。
-    *              當 GM 存儲中沒有對應值時，將使用此處的默認值。
-    */
+
     const DEFAULTS = {
         followUpPanelEnabled: true,
         notifyOnRepliedCaseEnabled: false,
         pcaDoNotClosePromptEnabled: false,
         pcaCaseListHintEnabled: false,
+        highlightExpiringCasesEnabled: false,
         autoSwitchEnabled: true,
         autoScrollAfterActionButtons: false,
         autoAssignUser: '',
@@ -143,6 +140,7 @@ V53 > V54
         blockIVPCard: false,
         autoIVPQueryEnabled: false,
         autoWebQueryEnabled: false,
+        autoLoadAllUpdates: true,
         accountHighlightMode: 'pca',
         richTextEditorHeight: 500,
         caseDescriptionHeight: 160,
@@ -269,9 +267,8 @@ V53 > V54
         }, ]
     };
 
-    /**
-    * @description 存儲性能相關的配置，如輪詢間隔和防抖延時。
-    */
+
+    // [設定/狀態持久化] 功能：`PERF_CONFIG`。
     const PERF_CONFIG = {
         HEARTBEAT_INTERVAL_MS: 10000, // 10000ms: 心跳檢測間隔。用於捕獲由非標準事件觸發的URL變化，作為事件監聽器的補充。
         URL_CHANGE_DEBOUNCE_MS: 350, // 350ms: URL變化事件的防抖延遲。防止因URL在短時間內多次變化（如重定向）導致主邏輯重複執行。
@@ -280,6 +277,7 @@ V53 > V54
     // 全局狀態變量
     let isScriptPaused = GM_getValue('isScriptPaused', false);
     let lastUrl = '';
+    let foundCaseNumber = null;
     let foundTrackingNumber = null;
     let ivpWindowHandle = null;
     let webWindowHandle = null;
@@ -290,15 +288,19 @@ V53 > V54
     let pcaCaseListOriginalRowKeys = null;
     let pcaCaseListIsSorted = false;
     let ivpFocusTimeoutId = null;
+    const completedTasksRegister = new Set();
+    let DOM_PATH_CACHE = {};
+
+    // [優化] 運行時配置緩存，避免高頻調用 GM_getValue
+    let RUNTIME_CONFIG = {};
+
+    // 數據緩存：用於跨 Tab 瞬間恢復 Case 數據，消除面板顯示延遲
+    const CASE_DATA_CACHE = new Map();
 
     // =================================================================================
     // SECTION: 頁面級資源註冊與清理 (Page Resource Registry)
     // =================================================================================
-    /**
-    * @description 用於註冊並統一清理「頁面級」的 Observer / Timeout / Interval。
-    *              目的：避免 SPA 切頁 / 暫停恢復後殘留幽靈監聽器造成性能浪費或重複動作。
-    *              注意：此 Registry 僅管理「可安全重建」的頁面級資源；全局常駐監聽器不應註冊於此。
-    */
+
     const PageResourceRegistry = {
         observers: new Set(),
         timeouts: new Set(),
@@ -352,9 +354,8 @@ V53 > V54
         }
     };
 
-
-// =================================================================================
-    // SECTION: 跟進面板模塊（Follow-Up Panel Module）- V88 (完整驗證版)
+    // =================================================================================
+    // SECTION: 跟進面板模塊（Follow-Up Panel Module）- (ID直連匹配版)
     // =================================================================================
     const FollowUpPanel = (() => {
         const FOLLOW_UP_DEBUG = false;
@@ -382,7 +383,7 @@ V53 > V54
         const DROPDOWN_ID = 'fuFollowTimeMenu';
 
         const QUICK_DAYS_CASE_OTHER = [0, 1, 7, 14];
-        const QUICK_DAYS_PANEL_PICKER = [1, 3, 7, 14];
+        const QUICK_DAYS_PANEL_PICKER = [1, 2, 3, 7];
 
         // -----------------------------
         // 狀態變量
@@ -396,6 +397,14 @@ V53 > V54
         // [聯動變量] 列表頁匹配集合 (Map<CaseNo, Color>)
         let listPageMatches = new Map();
 
+        // [狀態柵欄] 當前頁面是否匹配跟進記錄的快照
+        let _currentMatchState = {
+            isMatched: false,
+            matchType: null, // 'case' | 'tracking'
+            matchedRecordId: null, // 用於刪除操作
+            color: null // 用於彈窗顏色
+        };
+
         // -----------------------------
         // 基礎工具函數
         // -----------------------------
@@ -403,10 +412,12 @@ V53 > V54
             try { return GM_getValue(key, fallback); } catch (e) { return fallback; }
         };
 
+        // [設定/狀態持久化 / 事件監聽 / 定時/防抖] 功能：`gmSet`。
         const gmSet = (key, val) => {
             try { GM_setValue(key, val); } catch (e) { }
         };
 
+        // [事件監聽 / 定時/防抖] 功能：`scheduleRenderPanel`。
         const scheduleRenderPanel = (delayMs = 0) => {
             if (!document.getElementById(PANEL_ID)) return;
             if (__fuRenderTimer) clearTimeout(__fuRenderTimer);
@@ -419,6 +430,7 @@ V53 > V54
             }, delayMs);
         };
 
+        // [事件監聽] 功能：`bindFollowUpPanelWatchers`。
         const bindFollowUpPanelWatchers = () => {
             if (__fuWatchBound) return;
             __fuWatchBound = true;
@@ -436,6 +448,7 @@ V53 > V54
             return x;
         };
 
+        // 功能：`calcSmartDueDate`。
         const calcSmartDueDate = (offsetDays) => {
             const d = new Date();
             d.setHours(0, 0, 0, 0);
@@ -456,12 +469,14 @@ V53 > V54
             return d.getTime();
         };
 
+        // 功能：`dayDiffFromToday`。
         const dayDiffFromToday = (dueAtMs) => {
             const today0 = startOfDay(new Date()).getTime();
             const due0 = startOfDay(new Date(dueAtMs)).getTime();
             return Math.round((due0 - today0) / 86400000);
         };
 
+        // 功能：`bucketOf`。
         const bucketOf = (dueAtMs) => {
             const diff = dayDiffFromToday(dueAtMs);
             if (diff <= 0) return 'today';
@@ -470,6 +485,7 @@ V53 > V54
             return 'later';
         };
 
+        // 功能：`bucketTitle`。
         const bucketTitle = (key) => {
             if (key === 'today') return '今天跟進';
             if (key === 'tomorrow') return '明天跟進';
@@ -478,6 +494,7 @@ V53 > V54
             return key;
         };
 
+        // 功能：`formatDueAtDDMon`。
         const formatDueAtDDMon = (ms) => {
             const d = new Date(ms);
             const day = String(d.getDate()).padStart(2, '0');
@@ -490,6 +507,7 @@ V53 > V54
         // -----------------------------
         const getCaseId = () => getCaseIdFromUrl(location.href);
 
+        // [Console 分頁] 功能：`normalizeCaseNo`。
         const normalizeCaseNo = (raw) => {
             if (!raw) return null;
             const s = String(raw).trim();
@@ -506,38 +524,7 @@ V53 > V54
             return null;
         };
 
-        const getCaseNumberFromVisibleHeader = () => {
-            const selectors = [
-                'slot[name="primaryField"] lightning-formatted-text',
-                'slot[name="primaryField"]',
-                '.primaryFieldRow slot[name="primaryField"] lightning-formatted-text',
-                '.primaryFieldRow slot[name="primaryField"]',
-                'h1 slot[name="primaryField"] lightning-formatted-text',
-                'h1 slot[name="primaryField"]'
-            ];
-            for (const sel of selectors) {
-                let candidates = [];
-                try {
-                    candidates = findAllElementsInShadows(document.body, sel) || [];
-                } catch (e) {
-                    candidates = [];
-                }
-                for (const el of candidates) {
-                    try { if (!isElementVisible(el)) continue; } catch (e) { }
-                    const t = (el.textContent || '').trim();
-                    const n = normalizeCaseNo(t);
-                    if (n) return n;
-                }
-            }
-            const title = (document.title || '').trim();
-            if (title) {
-                const left = title.split('\n')[0].trim();
-                const left2 = left.split(' - ')[0].trim();
-                return normalizeCaseNo(left2) || normalizeCaseNo(left);
-            }
-            return null;
-        };
-
+        // [Console 分頁 / 定時/防抖] 功能：`buildCaseUrl`。
         const buildCaseUrl = (caseId) => caseId ? `${location.origin}/lightning/r/Case/${caseId}/view` : null;
 
         // -----------------------------
@@ -550,6 +537,7 @@ V53 > V54
             return fn;
         };
 
+        // [Console 分頁 / 定時/防抖] 功能：`wsFlush`。
         const wsFlush = () => {
             if (!wsReady || !wsQueue.length) return;
             const q = wsQueue.slice();
@@ -557,6 +545,7 @@ V53 > V54
             q.forEach((f) => { try { f(); } catch (e) { } });
         };
 
+        // [Console 分頁 / 定時/防抖] 功能：`wsEnsure`。
         const wsEnsure = () => {
             if (wsReady || wsInit) return;
             wsInit = true;
@@ -582,10 +571,12 @@ V53 > V54
             } catch (e) { wsInit = false; }
         };
 
+        // [Console 分頁] 功能：`openCaseInConsoleTab`。
         const openCaseInConsoleTab = (caseId, focus = true) => {
             if (!caseId) return;
             wsEnsure();
             const url = `/lightning/r/Case/${caseId}/view`;
+            // [Console 分頁] 功能：`doOpen`。
             const doOpen = () => {
                 try {
                     if (wsReady && wsCmp && typeof wsCmp.openTab === 'function') {
@@ -609,6 +600,7 @@ V53 > V54
                 const cid = String(it.caseId);
                 const score = Number(it.updatedAt || it.createdAt || 0);
                 const cn = normalizeCaseNo(it.caseNo) || it.caseNo || '';
+                // 功能：`clean`。
                 const clean = {
                     id: it.id || (cid + '_' + score),
                     caseId: cid,
@@ -630,6 +622,7 @@ V53 > V54
             return out;
         };
 
+        // 功能：`loadItems`。
         const loadItems = () => {
             const raw = gmGet(KEY_ITEMS, '[]');
             let arr;
@@ -643,15 +636,17 @@ V53 > V54
             return arr;
         };
 
+        // 功能：`saveItems`。
         const saveItems = (items) => gmSet(KEY_ITEMS, JSON.stringify(items || []));
 
+        // 功能：`upsertItem`。
         const upsertItem = ({ caseId, caseNo, dueAt }) => {
             if (!caseId || !caseNo || !dueAt) return;
             const items = sanitizeItems(loadItems());
             const now = Date.now();
             const cn = normalizeCaseNo(caseNo) || caseNo;
             const idx = items.findIndex((x) => x && x.caseId === caseId);
-            const autoTrackingNote = foundTrackingNumber || '';
+            const autoTrackingNote = foundTrackingNumber ? (foundTrackingNumber + " - ") : '';
 
             if (idx >= 0) {
                 items[idx].dueAt = dueAt;
@@ -676,11 +671,13 @@ V53 > V54
             saveItems(sanitizeItems(items));
         };
 
+        // [定時/防抖] 功能：`deleteItem`。
         const deleteItem = (caseId) => {
             const items = sanitizeItems(loadItems());
             saveItems(items.filter((it) => it && it.caseId !== caseId));
         };
 
+        // [事件監聽 / 定時/防抖] 功能：`updateNote`。
         const updateNote = (caseId, note) => {
             const items = sanitizeItems(loadItems());
             for (const it of items) {
@@ -689,6 +686,7 @@ V53 > V54
             saveItems(items);
         };
 
+        // [事件監聽 / 定時/防抖] 功能：`updateDueAt`。
         const updateDueAt = (caseId, dueAt) => {
             const items = sanitizeItems(loadItems());
             for (const it of items) {
@@ -697,24 +695,16 @@ V53 > V54
             saveItems(items);
         };
 
-        const groupedSortedItems = () => {
-            const items = sanitizeItems(loadItems());
-            const groups = { today: [], tomorrow: [], dayafter: [], later: [] };
-            items.forEach((it) => {
-                const k = bucketOf(it.dueAt);
-                if (!groups[k]) groups[k] = [];
-                groups[k].push(it);
-            });
-            return groups;
-        };
-
         // -----------------------------
         // UI 懸浮工具
         // -----------------------------
         const removePopover = () => { const el = document.getElementById(POPOVER_ID); if (el) el.remove(); };
+        // [事件監聽 / 定時/防抖] 功能：`removeDropdown`。
         const removeDropdown = () => { const el = document.getElementById(DROPDOWN_ID); if (el) el.remove(); };
+        // [事件監聽 / 定時/防抖] 功能：`removeAllFloating`。
         const removeAllFloating = () => { removePopover(); removeDropdown(); };
 
+        // [事件監聽 / 定時/防抖] 功能：`placeNear`。
         const placeNear = (a, p, up, w = 260, h = 240) => {
             const r = a.getBoundingClientRect();
             const l = Math.max(10, Math.min(window.innerWidth - (w + 10), r.left));
@@ -730,8 +720,10 @@ V53 > V54
             p.style.top = `${t}px`;
         };
 
+        // [事件監聽 / 定時/防抖] 功能：`attachOutsideClose`。
         const attachOutsideClose = (p, a, fn) => {
             setTimeout(() => {
+                // [事件監聽 / 定時/防抖] 功能：`f`。
                 const f = (e) => {
                     if (!p.contains(e.target) && e.target !== a) {
                         fn();
@@ -742,8 +734,10 @@ V53 > V54
             }, 0);
         };
 
+        // [事件監聽 / 定時/防抖] 功能：`attachOutsideCloseWithin`。
         const attachOutsideCloseWithin = (p, c, fn) => {
             setTimeout(() => {
+                // [事件監聽] 功能：`f`。
                 const f = (e) => {
                     if (c && !c.contains(e.target)) {
                         fn();
@@ -788,6 +782,7 @@ V53 > V54
             let viewMonth = currDate.getMonth();
             const todayStr = `${currDate.getFullYear()}-${currDate.getMonth()}-${currDate.getDate()}`;
 
+            // 功能：`renderCalendar`。
             const renderCalendar = () => {
                 calContainer.innerHTML = '';
                 const header = document.createElement('div');
@@ -854,6 +849,7 @@ V53 > V54
                 calContainer.appendChild(calGrid);
             };
 
+            // [事件監聽] 功能：`changeMonth`。
             const changeMonth = (offset) => {
                 viewMonth += offset;
                 if (viewMonth > 11) { viewMonth = 0; viewYear++; }
@@ -866,6 +862,7 @@ V53 > V54
             return wrap;
         };
 
+        // [事件監聽] 功能：`showChangeMenu`。
         const showChangeMenu = (anchorEl, onPickTimestamp) => {
             removePopover();
             removeDropdown();
@@ -881,6 +878,7 @@ V53 > V54
             attachOutsideClose(pop, anchorEl, removePopover);
         };
 
+        // [事件監聽] 功能：`renderOtherPickerInMenu`。
         const renderOtherPickerInMenu = (menuEl, anchorEl, onPickTimestamp) => {
             while (menuEl.firstChild) menuEl.removeChild(menuEl.firstChild);
             const head = document.createElement('div');
@@ -908,11 +906,13 @@ V53 > V54
             menuEl.style.minWidth = '250px';
         };
 
+        // [事件監聽] 功能：`buildFollowTimeMenu`。
         const buildFollowTimeMenu = (menuEl, anchorEl, onPick) => {
             while (menuEl.firstChild) menuEl.removeChild(menuEl.firstChild);
             menuEl.style.minWidth = '';
             menuEl.style.width = '';
             menuEl.__onPick = onPick;
+            // [事件監聽 / 元素定位] 功能：`addItem`。
             const addItem = (label, value) => {
                 const item = document.createElement('div');
                 item.className = 'fu-dditem';
@@ -934,6 +934,7 @@ V53 > V54
             addItem('Other', 'other');
         };
 
+        // [定時/防抖 / 元素定位] 功能：`showFollowTimeDropdown`。
         const showFollowTimeDropdown = (anchorEl, onPick) => {
             removeDropdown();
             removePopover();
@@ -958,12 +959,14 @@ V53 > V54
         // -----------------------------
         let __fuHeaderHintTimer1 = null; let __fuHeaderHintTimer2 = null; let __fuHeaderHintTimer3 = null; let __fuHeaderOriginalTitle = null;
 
+        // [定時/防抖 / 元素定位] 功能：`getHeaderTitleEl`。
         const getHeaderTitleEl = () => {
             const root = document.getElementById(PANEL_ID);
             if (!root) return null;
             return root.querySelector('.fu-title');
         };
 
+        // [定時/防抖] 功能：`flashHeaderHint`。
         const flashHeaderHint = (message) => {
             ensurePanel();
             const titleEl = getHeaderTitleEl();
@@ -986,6 +989,7 @@ V53 > V54
             __fuHeaderHintTimer3 = setTimeout(() => { titleEl.style.transition = ''; }, 1050);
         };
 
+        // 功能：`flashHeaderHintByDueAt`。
         const flashHeaderHintByDueAt = (dueAt) => {
             const key = bucketOf(dueAt);
             const title = bucketTitle(key);
@@ -1005,6 +1009,8 @@ V53 > V54
                 `#${PANEL_ID} .fu-resize-left { position: absolute; left: 0; top: 0; bottom: 0; width: 8px; cursor: ew-resize; background: transparent; z-index: 3; }`,
                 `#${PANEL_ID} .fu-header { opacity: 1; }`,
                 `#${PANEL_ID} .fu-panel.fu-collapsed { opacity: 0.75; }`,
+                `#${PANEL_ID} .fu-panel.fu-collapsed .fu-resize-top { display: none !important; }`,
+                `#${PANEL_ID} .fu-panel.fu-collapsed .fu-resize-left { display: none !important; }`,
                 `#${PANEL_ID} .fu-header { position: relative; background: #0176D3; color: #fff; display: grid; grid-template-columns: 1fr auto; align-items: center; padding: 5px 10px; user-select: none; cursor: pointer; }`,
                 `#${PANEL_ID} .fu-header-inner { grid-column: 1; justify-self: center; display: inline-flex; align-items: center; justify-content: center; gap: 8px; max-width: 100%; white-space: nowrap; overflow: hidden; }`,
                 `#${PANEL_ID} .fu-title { font-weight: 700; font-size: 14px; letter-spacing: .4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; writing-mode: horizontal-tb; }`,
@@ -1049,8 +1055,6 @@ V53 > V54
                 `#${PANEL_ID} .fu-section-title[data-sec="dayafter"] { background: #f87800 !important; color: #fff !important; }`,
                 `#${PANEL_ID} .fu-section-title[data-sec="later"] { background: #006860 !important; color: #fff !important; }`,
                 `#${PANEL_ID} .fu-section-title[data-sec]:hover { filter: brightness(1.05); }`,
-
-                // Active & Tracking Match Styles
                 `#${PANEL_ID} .fu-header.fu-active { background: #00ff11 !important; color: #000000 !important; }`,
                 `#${PANEL_ID} .fu-header.fu-tracking-match { background: #ff9900 !important; color: #000000 !important; }`,
                 `#${PANEL_ID} .fu-row.fu-active { background: #00ff11 !important; border-color: rgba(0,0,0,.18) !important; }`,
@@ -1064,8 +1068,6 @@ V53 > V54
                 `#${PANEL_ID} .fu-row.fu-list-match .fu-note { background: rgba(255,255,255,.95) !important; color: #000000 !important; }`,
                 `#${PANEL_ID} .fu-due { font-size: 12px; font-weight: 800; padding: 2px 6px; border-radius: 10px; background: rgba(0,0,0,.04); color: rgba(0,0,0,.72); flex: 0 0 auto; }`,
                 `#${PANEL_ID} .fu-row.fu-active .fu-due { background: rgba(0,0,0,.10); color: #000000; }`,
-
-                // [新增] 日曆樣式 (防止樣式表丟失)
                 '.fu-cal-wrap { width: 100%; user-select: none; border: 1px solid #dddbda; border-radius: 4px; overflow: hidden; background: #fff; }',
                 '.fu-cal-header { display: flex; justify-content: space-between; align-items: center; background: #f3f2f2; padding: 5px 10px; border-bottom: 1px solid #dddbda; }',
                 '.fu-cal-title { font-weight: 700; font-size: 13px; color: #080707; }',
@@ -1098,8 +1100,10 @@ V53 > V54
             try { const obj = JSON.parse(raw); return (obj && typeof obj === 'object') ? obj : {}; } catch (e) { return {}; }
         };
 
+        // 功能：`saveUI`。
         const saveUI = (ui) => gmSet(KEY_UI, JSON.stringify(ui || {}));
 
+        // 功能：`ensurePanel`。
         const ensurePanel = () => {
             injectStyles();
             if (document.getElementById(PANEL_ID)) return;
@@ -1168,6 +1172,7 @@ V53 > V54
 
             // Width resize
             let resizingW = false; let startX = 0; let startW = 0;
+            // [事件監聽] 功能：`onMoveW`。
             const onMoveW = (ev) => {
                 if (!resizingW) return;
                 const dx = startX - ev.clientX;
@@ -1176,6 +1181,7 @@ V53 > V54
                 newW = Math.max(MIN_PANEL_WIDTH, Math.min(maxW2, newW));
                 panel.style.width = `${newW}px`;
             };
+            // [事件監聽] 功能：`onUpW`。
             const onUpW = () => {
                 if (!resizingW) return;
                 resizingW = false;
@@ -1186,6 +1192,8 @@ V53 > V54
                 saveUI(ui3);
             };
             resizeLeft.addEventListener('mousedown', (ev) => {
+                const uiNow = loadUI();
+                if (uiNow && uiNow.collapsed) return;
                 resizingW = true; startX = ev.clientX; startW = panel.getBoundingClientRect().width;
                 document.addEventListener('mousemove', onMoveW, true);
                 document.addEventListener('mouseup', onUpW, true);
@@ -1194,6 +1202,7 @@ V53 > V54
 
             // Height resize
             let resizingH = false; let startY = 0; let startH = 0;
+            // [事件監聽] 功能：`onMoveH`。
             const onMoveH = (ev) => {
                 if (!resizingH) return;
                 const dy = startY - ev.clientY;
@@ -1202,6 +1211,7 @@ V53 > V54
                 newH = Math.max(MIN_PANEL_HEIGHT, Math.min(maxH2, newH));
                 body.style.height = `${newH}px`;
             };
+            // [事件監聽] 功能：`onUpH`。
             const onUpH = () => {
                 if (!resizingH) return;
                 resizingH = false;
@@ -1231,7 +1241,13 @@ V53 > V54
             const thisNo = normalizeCaseNo(it.caseNo) || (it.caseNo || '');
             const pureNo = thisNo.replace(/[^0-9]/g, '');
 
-            const isCaseMatch = (activeCaseNo && thisNo && thisNo === activeCaseNo);
+            // [修改] 增加 ID 匹配邏輯
+            const currentCaseId = getCaseId();
+            const isIdMatch = (currentCaseId && it.caseId && it.caseId.slice(0,15) === currentCaseId.slice(0,15));
+            const isTextMatch = (activeCaseNo && thisNo && thisNo === activeCaseNo);
+
+            const isCaseMatch = isIdMatch || isTextMatch;
+
             let isTrackingMatch = false;
             if (!isCaseMatch && activeTrackingNo) {
                 const noteVal = (it.note || '').trim();
@@ -1306,9 +1322,11 @@ V53 > V54
             btnDel.addEventListener('click', () => { deleteItem(it.caseId); renderPanel(); });
             row.appendChild(btnDel);
 
-            return { rowElement: row, isCaseMatch, isTrackingMatch };
+            // 返回匹配記錄的 ID，用於狀態柵欄
+            return { rowElement: row, isCaseMatch, isTrackingMatch, recordId: it.caseId };
         };
 
+        // [元素定位] 功能：`renderPanel`。
         const renderPanel = () => {
             ensurePanel();
             const root = document.getElementById(PANEL_ID);
@@ -1331,19 +1349,38 @@ V53 > V54
             if (!body) return;
 
             const isCaseRecordPage = /\/Case\/[a-zA-Z0-9]{18}/.test(location.href);
-            const activeCaseNo = isCaseRecordPage ? (normalizeCaseNo(getCaseNumberFromVisibleHeader()) || null) : null;
-            const activeTrackingNo = isCaseRecordPage ? (foundTrackingNumber || null) : null;
+            // [新增] 獲取 URL 中的 ID，這是最快的信息源
+            const currentCaseId = isCaseRecordPage ? getCaseId() : null;
+
+            let activeCaseNo = null;
+            let activeTrackingNo = null;
+
+            if (isCaseRecordPage) {
+                // 優先使用 Scanner 提取的全局變量 (如果有的話)
+                if (foundTrackingNumber) {
+                    activeTrackingNo = foundTrackingNumber;
+                }
+                if (foundCaseNumber) {
+                    activeCaseNo = foundCaseNumber;
+                }
+            }
+
+            // [狀態柵欄] 重置當前匹配狀態
+            _currentMatchState = { isMatched: false, matchType: null, matchedRecordId: null, color: null };
 
             let hasCaseMatch = false;
             let hasTrackingMatch = false;
+            let matchedRecordId = null;
 
             while (body.firstChild) body.removeChild(body.firstChild);
+
+            const items = sanitizeItems(loadItems());
 
             if (!collapsed) {
                 body.style.opacity = '1';
                 body.style.height = `${Number(ui.height || DEFAULT_PANEL_HEIGHT)}px`;
 
-                const items = sanitizeItems(loadItems());
+                // [事件監聽] 功能：`groups`。
                 const groups = { today: [], tomorrow: [], dayafter: [], later: [] };
 
                 items.forEach((it) => {
@@ -1377,9 +1414,9 @@ V53 > V54
                     ul.style.display = secCollapsed[key] ? 'none' : 'flex';
 
                     list.forEach((it) => {
-                        const { rowElement, isCaseMatch, isTrackingMatch } = buildRow(it, activeCaseNo, activeTrackingNo);
-                        if (isCaseMatch) hasCaseMatch = true;
-                        if (isTrackingMatch) hasTrackingMatch = true;
+                        const { rowElement, isCaseMatch, isTrackingMatch: isTrk, recordId } = buildRow(it, activeCaseNo, activeTrackingNo);
+                        if (isCaseMatch) { hasCaseMatch = true; matchedRecordId = recordId; }
+                        if (isTrk) { hasTrackingMatch = true; if(!hasCaseMatch) matchedRecordId = recordId; }
                         ul.appendChild(rowElement);
                     });
 
@@ -1395,30 +1432,40 @@ V53 > V54
                     });
                 });
             } else {
-                const items = sanitizeItems(loadItems());
+                // 摺疊狀態下也要計算匹配，但不渲染 DOM
                 items.forEach(it => {
                     const thisNo = normalizeCaseNo(it.caseNo) || (it.caseNo || '');
-                    if (activeCaseNo && thisNo === activeCaseNo) hasCaseMatch = true;
+                    // [修改] 摺疊狀態下的判斷也加入 ID 匹配
+                    const isIdMatch = (currentCaseId && it.caseId && it.caseId.slice(0,15) === currentCaseId.slice(0,15));
+                    if (isIdMatch || (activeCaseNo && thisNo === activeCaseNo)) {
+                        hasCaseMatch = true; matchedRecordId = it.caseId;
+                    }
                     else if (activeTrackingNo) {
                         const noteVal = (it.note || '').trim();
                         const trackVal = (it.trackingNo || '').trim();
                         const targetVal = activeTrackingNo.trim();
-                        if (noteVal === targetVal || trackVal === targetVal) hasTrackingMatch = true;
+                        if (noteVal === targetVal || trackVal === targetVal) { hasTrackingMatch = true; if(!hasCaseMatch) matchedRecordId = it.caseId; }
                     }
                 });
                 body.style.opacity = '0';
                 body.style.height = '0px';
             }
 
+            // 更新 Header 樣式與文本，同時更新 _currentMatchState
             if (headerEl && titleEl) {
                 headerEl.classList.remove('fu-active', 'fu-tracking-match');
 
                 if (hasCaseMatch) {
                     headerEl.classList.add('fu-active');
                     titleEl.textContent = 'Case已在列表中';
+                    _currentMatchState = { isMatched: true, matchType: 'case', matchedRecordId: matchedRecordId, color: '#04844b' }; // 綠色
                 } else if (hasTrackingMatch) {
                     headerEl.classList.add('fu-tracking-match');
                     titleEl.textContent = '追蹤號已在列表中';
+                     // 如果沒有Case匹配，才認為是追蹤號匹配
+                    if(!hasCaseMatch) {
+                        _currentMatchState = { isMatched: true, matchType: 'tracking', matchedRecordId: matchedRecordId, color: '#ff9900' }; // 橙色
+                    }
                 } else {
                     titleEl.textContent = '跟進面板';
                 }
@@ -1455,6 +1502,7 @@ V53 > V54
             }
         };
 
+        // [事件監聽 / 元素定位] 功能：`getActiveFollowWrap`。
         const getActiveFollowWrap = () => {
             const selector = 'div[data-target-selection-name="sfdc:StandardButton.Case.Follow"]';
             const firstVisible = findElementInShadows(document.body, selector);
@@ -1464,6 +1512,7 @@ V53 > V54
             return null;
         };
 
+        // [事件監聽 / 元素定位] 功能：`ensureCaseFollowTimeButton`。
         const ensureCaseFollowTimeButton = () => {
             const caseId = getCaseId();
             if (!caseId) return false;
@@ -1499,7 +1548,8 @@ V53 > V54
 
                 showFollowTimeDropdown(btn, (choice, resultValue) => {
                     const currentCaseId = btn.dataset.caseId || getCaseId();
-                    const caseNo = getCaseNumberFromVisibleHeader();
+                    // [修改] 使用全局變量，如果沒有則嘗試 Scanner 提取，不再依賴本地函數
+                    const caseNo = foundCaseNumber || (typeof extractCaseNumberFromHeader === 'function' ? extractCaseNumberFromHeader() : null) ? foundCaseNumber : null;
                     if (!currentCaseId || !caseNo) {
                         showGlobalToast('未能取得 Case 號碼，請稍後再試');
                         return;
@@ -1523,18 +1573,21 @@ V53 > V54
             return true;
         };
 
+        // 功能：`ensureCaseButton`。
         const ensureCaseButton = async () => {
             if (ensureCaseFollowTimeButton()) return true;
             try { await waitForElementWithObserver(document.body, 'div[data-target-selection-name="sfdc:StandardButton.Case.Follow"]', 12000); } catch (e) { }
             return ensureCaseFollowTimeButton();
         };
 
+        // 功能：`ensureMounted`。
         const ensureMounted = () => {
             ensurePanel();
             bindFollowUpPanelWatchers();
             scheduleRenderPanel(0);
         };
 
+        // 功能：`unmount`。
         const unmount = () => {
             removeAllFloating();
             const root = document.getElementById(PANEL_ID);
@@ -1552,6 +1605,12 @@ V53 > V54
             removeAllFloating,
             unmount,
             highlightListMatches,
+            // [新增] 獲取當前頁面匹配狀態
+            getMatchState: () => ({ ..._currentMatchState }),
+            // [新增] 對外暴露刪除方法
+            deleteItem: (caseId) => { deleteItem(caseId); renderPanel(); },
+            // [新增] 對外暴露刷新方法
+            refresh: () => scheduleRenderPanel(0)
         };
     })();
 
@@ -1567,11 +1626,7 @@ V53 > V54
     // SECTION: 核心工具函數 (Core Utilities)
     // =================================================================================
 
-    /**
-    * @description 從 URL 字符串中安全地提取 18 位的 Salesforce Case ID。
-    * @param {string} urlString - 包含 Case ID 的 URL。
-    * @returns {string|null} 成功則返回 Case ID 字符串，否則返回 null。
-    */
+
     function getCaseIdFromUrl(urlString) {
         if (!urlString) return null;
         const match = urlString.match(/\/Case\/([a-zA-Z0-9]{18})/);
@@ -1582,11 +1637,8 @@ V53 > V54
         return null;
     }
 
-    /**
-    * @description 規範化 Case URL，移除查詢參數和哈希值，確保緩存鍵的一致性。
-    * @param {string} urlString - 原始的 URL 字符串。
-    * @returns {string|null} 規範化後的 URL，如果輸入無效則返回 null。
-    */
+
+    // [元素定位] 功能：`normalizeCaseUrl`。
     function normalizeCaseUrl(urlString) {
         try {
             const url = new URL(urlString, location.origin);
@@ -1602,46 +1654,135 @@ V53 > V54
         }
     }
 
-    /**
-    * @description 檢查一個元素是否在DOM中實際可見。
-    * @param {HTMLElement} el - 要檢查的元素。
-    * @returns {boolean} 如果元素可見則返回 true。
-    */
+
+    // [元素定位] 功能：`isElementVisible`。
     function isElementVisible(el) {
         return el.offsetParent !== null;
     }
 
-    /**
-    * @description 遞歸地在根節點及其所有 Shadow DOM 中查找單個可見的元素。
-    * @param {Node} root - 開始搜索的根節點。
-    * @param {string} selector - CSS選擇器。
-    * @returns {HTMLElement|null} 找到的第一個可見元素，或 null。
-    */
+
+    // [元素定位] 功能：`findElementInShadows`。
     function findElementInShadows(root, selector) {
         if (!root) return null;
-        if (root.shadowRoot) {
-            const el = findElementInShadows(root.shadowRoot, selector);
-            if (el) return el;
+
+        // ---------------------------------------------------------
+        // 1. 緩存路徑嘗試 (Cache Attempt)
+        // ---------------------------------------------------------
+        // 僅當從 document.body 開始查找時才使用緩存，確保路徑的絕對性
+        if (root === document.body && DOM_PATH_CACHE[selector]) {
+            const cachedPath = DOM_PATH_CACHE[selector];
+            let current = root;
+            let isValidPath = true;
+
+            // 沿著緩存的路徑“瞬移”
+            try {
+                for (const step of cachedPath) {
+                    if (step === 'shadow') {
+                        if (current.shadowRoot) {
+                            current = current.shadowRoot;
+                        } else {
+                            isValidPath = false;
+                            break;
+                        }
+                    } else if (typeof step === 'number') {
+                        if (current.children && current.children[step]) {
+                            current = current.children[step];
+                        } else {
+                            isValidPath = false;
+                            break;
+                        }
+                    } else {
+                        isValidPath = false;
+                        break;
+                    }
+                }
+            } catch (e) {
+                isValidPath = false;
+            }
+
+            // 懶惰驗證 (Lazy Validation): 確保元素還活著且符合選擇器
+            if (isValidPath && current && current.isConnected) {
+                // 額外檢查：元素是否真的匹配選擇器（防止結構變位但索引碰巧對上的情況）
+                // 注意：如果 current 是 shadowRoot 容器本身，matches 可能不可用，需防禦
+                if (current.matches && current.matches(selector) && isElementVisible(current)) {
+                    return current; // 緩存命中！直接返回
+                }
+            }
+
+            // 如果走到這裡，說明緩存失效 (DOM 結構變了)，清除該條緩存
+            delete DOM_PATH_CACHE[selector];
         }
-        const el = root.querySelector(selector);
-        if (el && isElementVisible(el)) {
-            return el;
-        }
-        for (const child of root.querySelectorAll('*')) {
-            if (child.shadowRoot) {
-                const nestedEl = findElementInShadows(child.shadowRoot, selector);
-                if (nestedEl) return nestedEl;
+
+        // ---------------------------------------------------------
+        // 2. 遞歸遍歷查找 (Recursive Fallback) - 原有邏輯
+        // ---------------------------------------------------------
+        // 內部遞歸函數，用於執行深度優先搜索
+        const executeDeepSearch = (currentNode) => {
+            if (currentNode.shadowRoot) {
+                const found = executeDeepSearch(currentNode.shadowRoot);
+                if (found) return found;
+            }
+            const el = currentNode.querySelector(selector);
+            if (el && isElementVisible(el)) {
+                return el;
+            }
+            // 遍歷所有子節點，查找是否有更深層的 Shadow Root
+            const children = currentNode.querySelectorAll('*');
+            for (const child of children) {
+                if (child.shadowRoot) {
+                    const nestedEl = executeDeepSearch(child.shadowRoot);
+                    if (nestedEl) return nestedEl;
+                }
+            }
+            return null;
+        };
+
+        const result = executeDeepSearch(root);
+
+        // ---------------------------------------------------------
+        // 3. 構建並寫入緩存 (Cache Construction)
+        // ---------------------------------------------------------
+        if (result && root === document.body) {
+            try {
+                const path = [];
+                let curr = result;
+                let stop = false;
+
+                // 回溯路徑：從目標元素一直往上找，直到 document.body
+                while (curr !== document.body) {
+                    const parent = curr.parentNode;
+
+                    if (parent) {
+                        // 普通 DOM 層級：記錄索引
+                        // 注意：Array.from 可能有性能開銷，但在“寫入緩存”這一步是值得的
+                        const index = Array.prototype.indexOf.call(parent.children, curr);
+                        if (index === -1) { stop = true; break; } // 異常情況
+                        path.unshift(index);
+                        curr = parent;
+                    } else if (curr.host) {
+                        // Shadow DOM 邊界：記錄跨越標記
+                        path.unshift('shadow');
+                        curr = curr.host;
+                    } else {
+                        // 斷路了（可能是在 DocumentFragment 中但未掛載）
+                        stop = true;
+                        break;
+                    }
+                }
+
+                if (!stop) {
+                    DOM_PATH_CACHE[selector] = path;
+                }
+            } catch (e) {
+                // 生成路徑失敗不影響主邏輯返回結果
             }
         }
-        return null;
+
+        return result;
     }
 
-    /**
-    * @description 遞歸地在根節點及其所有 Shadow DOM 中查找所有可見的元素。
-    * @param {Node} root - 開始搜索的根節點。
-    * @param {string} selector - CSS選擇器。
-    * @returns {HTMLElement[]} 包含所有找到的可見元素的數組。
-    */
+
+    // [定時/防抖 / 元素定位] 功能：`findAllElementsInShadows`。
     function findAllElementsInShadows(root, selector) {
         let results = [];
         if (!root) return results;
@@ -1654,13 +1795,8 @@ V53 > V54
         return results;
     }
 
-    /**
-    * @description 使用輪詢的方式等待一個元素出現在DOM中。
-    * @param {Node} root - 開始搜索的根節點。
-    * @param {string} selector - CSS選擇器。
-    * @param {number} [timeout=10000] - 超時時間（毫秒）。
-    * @returns {Promise<HTMLElement>} 解析為找到的元素。
-    */
+
+    // [定時/防抖 / 元素定位] 功能：`waitForElement`。
     function waitForElement(root, selector, timeout = 10000) {
         return new Promise((resolve, reject) => {
             const startTime = Date.now();
@@ -1680,12 +1816,8 @@ V53 > V54
         });
     }
 
-    /**
-    * @description 創建一個防抖函數，在連續觸發後僅執行一次。
-    * @param {Function} func - 需要防抖的函數。
-    * @param {number} wait - 延遲執行的時間（毫秒）。
-    * @returns {Function} 防抖後的函數。
-    */
+
+    // [定時/防抖 / 元素定位] 功能：`debounce`。
     function debounce(func, wait) {
         let timeout;
         return function(...args) {
@@ -1695,12 +1827,8 @@ V53 > V54
         };
     }
 
-    /**
-    * @description 清理緩存對象中已過期的條目（依據 timestamp），避免長期累積造成存儲膨脹。
-    * @param {object} cacheObj - 從 GM_getValue 讀取的緩存對象。
-    * @param {number} ttlMs - 過期時間（毫秒）。
-    * @returns {{ cache: object, changed: boolean, removed: number }} 清理後的緩存與變更信息。
-    */
+
+    // [元素定位] 功能：`purgeExpiredCacheEntries`。
     function purgeExpiredCacheEntries(cacheObj, ttlMs) {
         if (!cacheObj || typeof cacheObj !== 'object') {
             return { cache: {}, changed: false, removed: 0 };
@@ -1721,12 +1849,8 @@ V53 > V54
         return { cache: cacheObj, changed, removed };
     }
 
-    /**
-    * @description 依序嘗試多個選擇器，在 Shadow DOM 中找到第一個可見匹配元素。
-    * @param {Node} root - 開始搜索的根節點。
-    * @param {string[]} selectors - 候選 CSS selector 列表。
-    * @returns {HTMLElement|null} 第一個匹配且可見的元素。
-    */
+
+    // [元素定位] 功能：`findFirstElementInShadows`。
     function findFirstElementInShadows(root, selectors) {
         if (!Array.isArray(selectors) || selectors.length === 0) return null;
         for (const selector of selectors) {
@@ -1736,9 +1860,8 @@ V53 > V54
         return null;
     }
 
-    /**
-    * @description 緩存策略與 TTL 統一定義，避免多處硬編碼導致維護成本上升。
-    */
+
+    // 功能：`CACHE_POLICY`。
     const CACHE_POLICY = {
         REPLIED: {
             KEY: 'sendButtonClickLog',
@@ -1769,15 +1892,12 @@ V53 > V54
     };
 
 
-    /**
-    * @description 繁簡轉換引擎，增加詞組修正功能 (Phrase-Based Patching)。
-    *              修復了「一簡多繁」或特定詞彙（如系統/系统）的轉換歧義問題。
-    */
+
+    // 功能：`ChineseConverter`。
     const ChineseConverter = {
-        s_chars: null,
-        t_chars: null,
         s2t_map: null,
         t2s_map: null,
+        isInitialized: false, // 標記是否已初始化
 
         // 簡 轉 繁 修正字典
         s2t_fix: {
@@ -1786,34 +1906,40 @@ V53 > V54
         },
 
         // 繁 轉 簡 修正字典
-        t2s_fix: {
+        t2s_fix: {},
+
+
+        _getData: function() {
+            return {
+                s: '复系为尝钟万与丑专业丛东丝丢两严丧个丬丰临为丽举么义乌乐乔习乡书买乱争于亏云亘亚产亩亲亵亸亿仅从仑仓仪们价众优伙会伛伞伟传伤伥伦伧伪伫体余佣佥侠侣侥侦侧侨侩侪侬俣俦俨俩俪俭债倾偬偻偾偿傥傧储傩儿兑兖党兰关兴兹养兽冁内冈册写军农冢冯冲决况冻净凄凉凌减凑凛几凤凫凭凯击凼凿刍划刘则刚创删别刬刭刽刿剀剂剐剑剥剧劝办务劢动励劲劳势勋勐勚匀匦匮区医华协单卖卢卤卧卫却卺厂厅历厉压厌厍厕厢厣厦厨厩厮县参叆叇双发变叙叠叶号叹叽吁后吓吕吗吣吨听启吴呒呓呕呖呗员呙呛呜咏咔咙咛咝咤咴咸哌响哑哒哓哔哕哗哙哜哝哟唛唝唠唡唢唣唤唿啧啬啭啮啰啴啸喷喽喾嗫呵嗳嘘嘤嘱噜噼嚣嚯团园囱围囵国图圆圣圹场坂坏块坚坛坜坝坞坟坠垄垅垆垒垦垧垩垫垭垯垱垲垴埘埙埚埝埯堑堕塆墙壮声壳壶壸处备复够头夸夹夺奁奂奋奖奥妆妇妈妩妪妫姗姜娄娅娆娇娈娱娲娴婳婴婵婶媪嫒嫔嫱嬷孙学孪宁宝实宠审宪宫宽宾寝对寻导寿将尔尘尧尴尸尽层屃屉届属屡屦屿岁岂岖岗岘岙岚岛岭岳岽岿峃峄峡峣峤峥峦崂崃崄崭嵘嵚嵛嵝嵴巅巩巯币帅师帏帐帘帜带帧帮帱帻帼幂幞干并广庄庆庐庑库应庙庞废庼廪开异弃张弥弪弯弹强归当录彟彦彻径徕御忆忏忧忾怀态怂怃怄怅怆怜总怼怿恋恳恶恸恹恺恻恼恽悦悫悬悭悯惊惧惨惩惫惬惭惮惯愍愠愤愦愿慑慭憷懑懒懔戆戋戏戗战戬户扎扑扦执扩扪扫扬扰抚抛抟抠抡抢护报担拟拢拣拥拦拧拨择挂挚挛挜挝挞挟挠挡挢挣挤挥挦捞损捡换捣据捻掳掴掷掸掺掼揸揽揿搀搁搂搅携摄摅摆摇摈摊撄撑撵撷撸撺擞攒敌敛数斋斓斗斩断无旧时旷旸昙昼昽显晋晒晓晔晕晖暂暧札术朴机杀杂权条来杨杩杰极构枞枢枣枥枧枨枪枫枭柜柠柽栀栅标栈栉栊栋栌栎栏树栖样栾桊桠桡桢档桤桥桦桧桨桩梦梼梾检棂椁椟椠椤椭楼榄榇榈榉槚槛槟槠横樯樱橥橱橹橼檐檩欢欤欧歼殁殇残殒殓殚殡殴毁毂毕毙毡毵氇气氢氩氲汇汉污汤汹沓沟没沣沤沥沦沧沨沩沪沵泞泪泶泷泸泺泻泼泽泾洁洒洼浃浅浆浇浈浉浊测浍济浏浐浑浒浓浔浕涂涌涛涝涞涟涠涡涢涣涤润涧涨涩淀渊渌渍渎渐渑渔渖渗温游湾湿溃溅溆溇滗滚滞滟滠满滢滤滥滦滨滩滪漤潆潇潋潍潜潴澜濑濒灏灭灯灵灾灿炀炉炖炜炝点炼炽烁烂烃烛烟烦烧烨烩烫烬热焕焖焘煅煳熘爱爷牍牦牵牺犊犟状犷犸犹狈狍狝狞独狭狮狯狰狱狲猃猎猕猡猪猫猬献獭玑玙玚玛玮环现玱玺珉珏珐珑珰珲琎琏琐琼瑶瑷璇璎瓒瓮瓯电画畅畲畴疖疗疟疠疡疬疮疯疱疴痈痉痒痖痨痪痫痴瘅瘆瘗瘘瘪瘫瘾瘿癞癣癫癯皑皱皲盏盐监盖盗盘眍眦眬着睁睐睑瞒瞩矫矶矾矿砀码砖砗砚砜砺砻砾础硁硅硕硖硗硙硚确硷碍碛碜碱碹磙礼祎祢祯祷祸禀禄禅离秃秆种积称秽秾稆税稣稳穑穷窃窍窑窜窝窥窦窭竖竞笃笋笔笕笺笼笾筑筚筛筜筝筹签简箓箦箧箨箩箪箫篑篓篮篱簖籁籴类籼粜粝粤粪粮糁糇紧絷纟纠纡红纣纤纥约级纨纩纪纫纬纭纮纯纰纱纲纳纴纵纶纷纸纹纺纻纼纽纾线绀绁绂练组绅细织终绉绊绋绌绍绎经绐绑绒结绔绕绖绗绘给绚绛络绝绞统绠绡绢绣绤绥绦继绨绩绪绫绬续绮绯绰绱绲绳维绵绶绷绸绹绺绻综绽绾绿缀缁缂缃缄缅缆缇缈缉缊缋缌缍缎缏缐缑缒缓缔缕编缗缘缙缚缛缜缝缞缟缠缡缢缣缤缥缦缧缨缩缪缫缬缭缮缯缰缱缲缳缴缵罂网罗罚罢罴羁羟羡翘翙翚耢耧耸耻聂聋职聍联聩聪肃肠肤肷肾肿胀胁胆胜胧胨胪胫胶脉脍脏脐脑脓脔脚脱脶脸腊腌腘腭腻腼腽腾膑臜舆舣舰舱舻艰艳艹艺节芈芗芜芦苁苇苈苋苌苍苎苏苘苹茎茏茑茔茕茧荆荐荙荚荛荜荞荟荠荡荣荤荥荦荧荨荩荪荫荬荭荮药莅莜莱莲莳莴莶获莸莹莺莼萚萝萤营萦萧萨葱蒇蒉蒋蒌蓝蓟蓠蓣蓥蓦蔷蔹蔺蔼蕲蕴薮藁藓虏虑虚虫虬虮虽虾虿蚀蚁蚂蚕蚝蚬蛊蛎蛏蛮蛰蛱蛲蛳蛴蜕蜗蜡蝇蝈蝉蝎蝼蝾螀螨蟏衅衔补衬衮袄袅袆袜袭袯装裆裈裢裣裤裥褛褴襁襕见观觃规觅视觇览觉觊觋觌觍觎觏觐觑觞触觯詟誉誊讠计订讣认讥讦讧讨让讪讫训议讯记讱讲讳讴讵讶讷许讹论讻讼讽设访诀证诂诃评诅识诇诈诉诊诋诌词诎诏诐译诒诓诔试诖诗诘诙诚诛诜话诞诟诠诡询诣诤该详诧诨诩诪诫诬语诮误诰诱诲诳说诵诶请诸诹诺读诼诽课诿谀谁谂调谄谅谆谇谈谊谋谌谍谎谏谐谑谒谓谔谕谖谗谘谙谚谛谜谝谞谟谠谡谢谣谤谥谦谧谨谩谪谫谬谭谮谯谰谱谲谳谴谵谶谷豮贝贞负贠贡财责贤败账货质贩贪贫贬购贮贯贰贱贲贳贴贵贶贷贸费贺贻贼贽贾贿赀赁赂赃资赅赆赇赈赉赊赋赌赍赎赏赐赑赒赓赔赕赖赗赘赙赚赛赜赝赞赟赠赡赢赣赪赵赶趋趱趸跃跄跖跞践跶跷跸跹跻踊踌踪踬踯蹑蹒蹰蹿躏躜躯车轧轨轩轪轫转轭轮软轰轱轲轳轴轵轶轷轸轹轺轻轼载轾轿辀辁辂较辄辅辆辇辈辉辊辋辌辍辎辏辐辑辒输辔辕辖辗辘辙辚辞辩辫边辽达迁过迈运还这进远违连迟迩迳迹适选逊递逦逻遗遥邓邝邬邮邹邺邻郁郄郏郐郑郓郦郧郸酝酦酱酽酾酿释里鉅鉴銮錾钆钇针钉钊钋钌钍钎钏钐钑钒钓钔钕钖钗钘钙钚钛钝钞钟钠钡钢钣钤钥钦钧钨钩钪钫钬钭钮钯钰钱钲钳钴钵钶钷钸钹钺钻钼钽钾钿铀铁铂铃铄铅铆铈铉铊铋铍铎铏铐铑铒铕铗铘铙铚铛铜铝铞铟铠铡铢铣铤铥铦铧铨铪铫铬铭铮铯铰铱铲铳铴铵银铷铸铹铺铻铼铽链铿销锁锂锃锄锅锆锇锈锉锊锋锌锍锎锏锐锑锒锓锔锕锖锗错锚锜锞锟锠锡锢锣锤锥锦锨锩锫锬锭键锯锰锱锲锳锴锵锶锷锸锹锺锻锼锽锾锿镀镁镂镃镆镇镈镉镊镌镍镎镏镐镑镒镕镖镗镙镚镛镜镝镞镟镠镡镢镣镤镥镦镧镨镩镪镫镬镭镮镯镰镱镲镳镴镶长门闩闪闫闬闭问闯闰闱闲闳间闵闶闷闸闹闺闻闼闽闾闿阀阁阂阃阄阅阆阇阈阉阊阋阌阍阎阏阐阑阒阓阔阕阖阗阘阙阚阛队阳阴阵阶际陆陇陈陉陕陧陨险随隐隶隽难雏雠雳雾霁霉霭靓静靥鞑鞒鞯鞴韦韧韨韩韪韫韬韵页顶顷顸项顺须顼顽顾顿颀颁颂颃预颅领颇颈颉颊颋颌颍颎颏颐频颒颓颔颕颖颗题颙颚颛颜额颞颟颠颡颢颣颤颥颦颧风飏飐飑飒飓飔飕飖飗飘飙飚飞飨餍饤饥饦饧饨饩饪饫饬饭饮饯饰饱饲饳饴饵饶饷饸饹饺饻饼饽饾饿馀馁馂馃馄馅馆馇馈馉馊馋馌馍馎馏馐馑馒馓馔馕马驭驮驯驰驱驲驳驴驵驶驷驸驹驺驻驼驽驾驿骀骁骂骃骄骅骆骇骈骉骊骋验骍骎骏骐骑骒骓骔骕骖骗骘骙骚骛骜骝骞骟骠骡骢骣骤骥骦骧髅髋髌鬓魇魉鱼鱽鱾鱿鲀鲁鲂鲄鲅鲆鲇鲈鲉鲊鲋鲌鲍鲎鲏鲐鲑鲒鲓鲔鲕鲖鲗鲘鲙鲚鲛鲜鲝鲞鲟鲠鲡鲢鲣鲤鲥鲦鲧鲨鲩鲪鲫鲬鲭鲮鲯鲰鲱鲲鲳鲴鲵鲶鲷鲸鲹鲺鲻鲼鲽鲾鲿鳀鳁鳂鳃鳄鳅鳆鳇鳈鳉鳊鳋鳌鳍鳎鳏鳐鳑鳒鳓鳔鳕鳖鳗鳘鳙鳛鳜鳝鳞鳟鳠鳡鳢鳣鸟鸠鸡鸢鸣鸤鸥鸦鸧鸨鸩鸪鸫鸬鸭鸮鸯鸰鸱鸲鸳鸴鸵鸶鸷鸸鸹鸺鸻鸼鸽鸾鸿鹀鹁鹂鹃鹄鹅鹆鹇鹈鹉鹊鹋鹌鹍鹎鹏鹐鹑鹒鹓鹔鹕鹖鹗鹘鹚鹛鹜鹝鹞鹟鹠鹡鹢鹣鹤鹥鹦鹧鹨鹩鹪鹫鹬鹭鹯鹰鹱鹲鹳鹴鹾麦麸黄黉黡黩黪黾鼋鼌鼍鼗鼹齄齐齑齿龀龁龂龃龄龅龆龇龈龉龊龋龌龙龚龛龟志制咨只里范松没闹面准钟别闲乾尽脏拼',
+                t: '覆繫為嘗鐘萬與醜專業叢東絲丟兩嚴喪個丬豐臨爲麗舉麼義烏樂喬習鄉書買亂爭於虧雲亙亞產畝親褻嚲億僅從侖倉儀們價衆優夥會傴傘偉傳傷倀倫傖僞佇體餘傭僉俠侶僥偵側僑儈儕儂俁儔儼倆儷儉債傾傯僂僨償儻儐儲儺兒兌兗黨蘭關興茲養獸囅內岡冊寫軍農冢馮沖決況凍淨淒涼凌減湊凜幾鳳鳧憑凱擊凼鑿芻劃劉則剛創刪別剗剄劊劌剴劑剮劍剝劇勸辦務勱動勵勁勞勢勳勐勩勻匭匱區醫華協單賣盧滷臥衛卻巹廠廳歷厲壓厭厙廁廂厴廈廚廄廝縣參靉靆雙發變敘疊葉號嘆嘰籲後嚇呂嗎唚噸聽啓吳嘸囈嘔嚦唄員咼嗆嗚詠咔嚨嚀噝吒咴鹹哌響啞噠嘵嗶噦譁噲嚌噥喲嘜嗊嘮啢嗩唣喚唿嘖嗇囀齧囉嘽嘯噴嘍嚳囁呵噯噓嚶囑嚕噼囂嚯團園囪圍圇國圖圓聖壙場阪壞塊堅壇壢壩塢墳墜壟壠壚壘墾垧堊墊埡墶壋塏堖塒壎堝埝垵塹墮壪牆壯聲殼壺壼處備復夠頭誇夾奪奩奐奮獎奧妝婦媽嫵嫗嬀姍姜婁婭嬈嬌孌娛媧嫺嫿嬰嬋嬸媼嬡嬪嬙嬤孫學孿寧寶實寵審憲宮寬賓寢對尋導壽將爾塵堯尷屍盡層屓屜屆屬屢屨嶼歲豈嶇崗峴嶴嵐島嶺嶽崬巋嶨嶧峽嶢嶠崢巒嶗崍嶮嶄嶸嶔嵛嶁嵴巔鞏巰幣帥師幃帳簾幟帶幀幫幬幘幗冪襆幹並廣莊慶廬廡庫應廟龐廢廎廩開異棄張彌弳彎彈強歸當錄彠彥徹徑徠御憶懺憂愾懷態慫憮慪悵愴憐總懟懌戀懇惡慟懨愷惻惱惲悅愨懸慳憫驚懼慘懲憊愜慚憚慣愍慍憤憒願懾憖憷懣懶懍戇戔戲戧戰戩戶扎撲扦執擴捫掃揚擾撫拋摶摳掄搶護報擔擬攏揀擁攔擰撥擇掛摯攣掗撾撻挾撓擋撟掙擠揮撏撈損撿換搗據捻擄摑擲撣摻摜揸攬撳攙擱摟攪攜攝攄擺搖擯攤攖撐攆擷擼攛擻攢敵斂數齋斕鬥斬斷無舊時曠暘曇晝曨顯晉曬曉曄暈暉暫曖札術樸機殺雜權條來楊榪傑極構樅樞棗櫪梘棖槍楓梟櫃檸檉梔柵標棧櫛櫳棟櫨櫟欄樹棲樣欒桊椏橈楨檔榿橋樺檜槳樁夢檮棶檢櫺槨櫝槧欏橢樓欖櫬櫚櫸檟檻檳櫧橫檣櫻櫫櫥櫓櫞檐檁歡歟歐殲歿殤殘殞殮殫殯毆毀轂畢斃氈毿氌氣氫氬氳匯漢污湯洶沓溝沒灃漚瀝淪滄渢潙滬沵濘淚澩瀧瀘濼瀉潑澤涇潔灑窪浹淺漿澆湞溮濁測澮濟瀏滻渾滸濃潯濜塗涌濤澇淶漣潿渦溳渙滌潤澗漲澀澱淵淥漬瀆漸澠漁瀋滲溫遊灣溼潰濺漵漊潷滾滯灩灄滿瀅濾濫灤濱灘澦漤瀠瀟瀲濰潛瀦瀾瀨瀕灝滅燈靈災燦煬爐燉煒熗點煉熾爍爛烴燭煙煩燒燁燴燙燼熱煥燜燾煅煳熘愛爺牘犛牽犧犢犟狀獷獁猶狽狍獮獰獨狹獅獪猙獄猻獫獵獼玀豬貓蝟獻獺璣璵瑒瑪瑋環現瑲璽珉珏琺瓏璫琿璡璉瑣瓊瑤璦璇瓔瓚甕甌電畫暢畲疇癤療瘧癘瘍癧瘡瘋皰痾癰痙癢瘂癆瘓癇癡癉瘮瘞瘻癟癱癮癭癩癬癲癯皚皺皸盞鹽監蓋盜盤瞘眥矓着睜睞瞼瞞矚矯磯礬礦碭碼磚硨硯碸礪礱礫礎硜硅碩硤磽磑礄確礆礙磧磣鹼碹磙禮禕禰禎禱禍稟祿禪離禿稈種積稱穢穠穭稅穌穩穡窮竊竅窯竄窩窺竇窶豎競篤筍筆筧箋籠籩築篳篩簹箏籌籤簡籙簀篋籜籮簞簫簣簍籃籬籪籟糴類秈糶糲粵糞糧糝餱緊縶糹糾紆紅紂纖紇約級紈纊紀紉緯紜紘純紕紗綱納紝縱綸紛紙紋紡紵紖紐紓線紺紲紱練組紳細織終縐絆紼絀紹繹經紿綁絨結絝繞絰絎繪給絢絳絡絕絞統綆綃絹繡綌綏絛繼綈績緒綾緓續綺緋綽鞝緄繩維綿綬繃綢綯綹綣綜綻綰綠綴緇緙緗緘緬纜緹緲緝縕繢緦綞緞緶線緱縋緩締縷編緡緣縉縛縟縝縫縗縞纏縭縊縑繽縹縵縲纓縮繆繅纈繚繕繒繮繾繰繯繳纘罌網羅罰罷羆羈羥羨翹翽翬耮耬聳恥聶聾職聹聯聵聰肅腸膚肷腎腫脹脅膽勝朧腖臚脛膠脈膾髒臍腦膿臠腳脫腡臉臘醃膕齶膩靦膃騰臏臢輿艤艦艙艫艱豔艹藝節羋薌蕪蘆蓯葦藶莧萇蒼苧蘇檾蘋莖蘢蔦塋煢繭荊薦薘莢蕘蓽蕎薈薺蕩榮葷滎犖熒蕁藎蓀蔭蕒葒葤藥蒞莜萊蓮蒔萵薟獲蕕瑩鶯蓴蘀蘿螢營縈蕭薩蔥蕆蕢蔣蔞藍薊蘺蕷鎣驀薔蘞藺藹蘄蘊藪藁蘚虜慮虛蟲虯蟣雖蝦蠆蝕蟻螞蠶蠔蜆蠱蠣蟶蠻蟄蛺蟯螄蠐蛻蝸蠟蠅蟈蟬蠍螻蠑螿蟎蠨釁銜補襯袞襖嫋褘襪襲襏裝襠褌褳襝褲襉褸襤襁襴見觀覎規覓視覘覽覺覬覡覿覥覦覯覲覷觴觸觶讋譽謄訁計訂訃認譏訐訌討讓訕訖訓議訊記訒講諱謳詎訝訥許訛論訩訟諷設訪訣證詁訶評詛識詗詐訴診詆謅詞詘詔詖譯詒誆誄試詿詩詰詼誠誅詵話誕詬詮詭詢詣諍該詳詫諢詡譸誡誣語誚誤誥誘誨誑說誦誒請諸諏諾讀諑誹課諉諛誰諗調諂諒諄誶談誼謀諶諜謊諫諧謔謁謂諤諭諼讒諮諳諺諦謎諞諝謨讜謖謝謠謗諡謙謐謹謾謫譾謬譚譖譙讕譜譎讞譴譫讖谷豶貝貞負貟貢財責賢敗賬貨質販貪貧貶購貯貫貳賤賁貰貼貴貺貸貿費賀貽賊贄賈賄貲賃賂贓資賅贐賕賑賚賒賦賭齎贖賞賜贔賙賡賠賧賴賵贅賻賺賽賾贗贊贇贈贍贏贛赬趙趕趨趲躉躍蹌跖躒踐躂蹺蹕躚躋踊躊蹤躓躑躡蹣躕躥躪躦軀車軋軌軒軑軔轉軛輪軟轟軲軻轤軸軹軼軤軫轢軺輕軾載輊轎輈輇輅較輒輔輛輦輩輝輥輞輬輟輜輳輻輯轀輸轡轅轄輾轆轍轔辭辯辮邊遼達遷過邁運還這進遠違連遲邇逕跡適選遜遞邐邏遺遙鄧鄺鄔郵鄒鄴鄰鬱郄郟鄶鄭鄆酈鄖鄲醞醱醬釅釃釀釋裏鉅鑑鑾鏨釓釔針釘釗釙釕釷釺釧釤鈒釩釣鍆釹鍚釵鈃鈣鈈鈦鈍鈔鍾鈉鋇鋼鈑鈐鑰欽鈞鎢鉤鈧鈁鈥鈄鈕鈀鈺錢鉦鉗鈷鉢鈳鉕鈽鈸鉞鑽鉬鉭鉀鈿鈾鐵鉑鈴鑠鉛鉚鈰鉉鉈鉍鈹鐸鉶銬銠鉺銪鋏鋣鐃銍鐺銅鋁銱銦鎧鍘銖銑鋌銩銛鏵銓鉿銚鉻銘錚銫鉸銥鏟銃鐋銨銀銣鑄鐒鋪鋙錸鋱鏈鏗銷鎖鋰鋥鋤鍋鋯鋨鏽銼鋝鋒鋅鋶鐦鐗銳銻鋃鋟鋦錒錆鍺錯錨錡錁錕錩錫錮鑼錘錐錦杴錈錇錟錠鍵鋸錳錙鍥鍈鍇鏘鍶鍔鍤鍬鍾鍛鎪鍠鍰鎄鍍鎂鏤鎡鏌鎮鎛鎘鑷鐫鎳鎿鎦鎬鎊鎰鎔鏢鏜鏍鏰鏞鏡鏑鏃鏇鏐鐔钁鐐鏷鑥鐓鑭鐠鑹鏹鐙鑊鐳鐶鐲鐮鐿鑔鑣鑞鑲長門閂閃閆閈閉問闖閏闈閒閎間閔閌悶閘鬧閨聞闥閩閭闓閥閣閡閫鬮閱閬闍閾閹閶鬩閿閽閻閼闡闌闃闠闊闋闔闐闒闕闞闤隊陽陰陣階際陸隴陳陘陝隉隕險隨隱隸雋難雛讎靂霧霽黴靄靚靜靨韃鞽韉鞴韋韌韍韓韙韞韜韻頁頂頃頇項順須頊頑顧頓頎頒頌頏預顱領頗頸頡頰頲頜潁熲頦頤頻頮頹頷頴穎顆題顒顎顓顏額顳顢顛顙顥纇顫顬顰顴風颺颭颮颯颶颸颼颻飀飄飆飈飛饗饜飣飢飥餳飩餼飪飫飭飯飲餞飾飽飼飿飴餌饒餉餄餎餃餏餅餑餖餓餘餒餕餜餛餡館餷饋餶餿饞饁饃餺餾饈饉饅饊饌饢馬馭馱馴馳驅馹駁驢駔駛駟駙駒騶駐駝駑駕驛駘驍罵駰驕驊駱駭駢驫驪騁驗騂駸駿騏騎騍騅騌驌驂騙騭騤騷騖驁騮騫騸驃騾驄驏驟驥驦驤髏髖髕鬢魘魎魚魛魢魷魨魯魴魺鮁鮃鮎鱸鮋鮓鮒鮊鮑鱟鮍鮐鮭鮚鮳鮪鮞鮦鰂鮜鱠鱭鮫鮮鮺鯗鱘鯁鱺鰱鰹鯉鰣鰷鯀鯊鯇鮶鯽鯒鯖鯪鯕鯫鯡鯤鯧鯝鯢鮎鯛鯨鰺鯴鯔鱝鰈鰏鱨鯷鰮鰃鰓鱷鰍鰒鰉鰁鱂鯿鰠鰲鰭鰨鰥鰩鰟鰜鰳鰾鱈鱉鰻鰵鱅鰼鱖鱔鱗鱒鱯鱤鱧鱣鳥鳩雞鳶鳴鳲鷗鴉鶬鴇鴆鴣鶇鸕鴨鴞鴦鴒鴟鴝鴛鷽鴕鷥鷙鴯鴰鵂鴴鵃鴿鸞鴻鵐鵓鸝鵑鵠鵝鵒鷳鵜鵡鵲鶓鵪鵾鵯鵬鵮鶉鶊鵷鷫鶘鶡鶚鶻鶿鶥鶩鷊鷂鶲鶹鶺鷁鶼鶴鷖鸚鷓鷚鷯鷦鷲鷸鷺鸇鷹鸌鸏鸛鸘鹺麥麩黃黌黶黷黲黽黿鼂鼉鞀鼴齇齊齏齒齔齕齗齟齡齙齠齜齦齬齪齲齷龍龔龕龜志制諮只裏範鬆沒鬧面準鍾別閒乾盡髒拼'
+};
         },
 
-        init: function() {
-            this.s_chars = '系为尝钟万与丑专业丛东丝丢两严丧个丬丰临为丽举么义乌乐乔习乡书买乱争于亏云亘亚产亩亲亵亸亿仅从仑仓仪们价众优伙会伛伞伟传伤伥伦伧伪伫体余佣佥侠侣侥侦侧侨侩侪侬俣俦俨俩俪俭债倾偬偻偾偿傥傧储傩儿兑兖党兰关兴兹养兽冁内冈册写军农冢冯冲决况冻净凄凉凌减凑凛几凤凫凭凯击凼凿刍划刘则刚创删别刬刭刽刿剀剂剐剑剥剧劝办务劢动励劲劳势勋勐勚匀匦匮区医华协单卖卢卤卧卫却卺厂厅历厉压厌厍厕厢厣厦厨厩厮县参叆叇双发变叙叠叶号叹叽吁后吓吕吗吣吨听启吴呒呓呕呖呗员呙呛呜咏咔咙咛咝咤咴咸哌响哑哒哓哔哕哗哙哜哝哟唛唝唠唡唢唣唤唿啧啬啭啮啰啴啸喷喽喾嗫呵嗳嘘嘤嘱噜噼嚣嚯团园囱围囵国图圆圣圹场坂坏块坚坛坜坝坞坟坠垄垅垆垒垦垧垩垫垭垯垱垲垴埘埙埚埝埯堑堕塆墙壮声壳壶壸处备复够头夸夹夺奁奂奋奖奥妆妇妈妩妪妫姗姜娄娅娆娇娈娱娲娴婳婴婵婶媪嫒嫔嫱嬷孙学孪宁宝实宠审宪宫宽宾寝对寻导寿将尔尘尧尴尸尽层屃屉届属屡屦屿岁岂岖岗岘岙岚岛岭岳岽岿峃峄峡峣峤峥峦崂崃崄崭嵘嵚嵛嵝嵴巅巩巯币帅师帏帐帘帜带帧帮帱帻帼幂幞干并广庄庆庐庑库应庙庞废庼廪开异弃张弥弪弯弹强归当录彟彦彻径徕御忆忏忧忾怀态怂怃怄怅怆怜总怼怿恋恳恶恸恹恺恻恼恽悦悫悬悭悯惊惧惨惩惫惬惭惮惯愍愠愤愦愿慑慭憷懑懒懔戆戋戏戗战戬户扎扑扦执扩扪扫扬扰抚抛抟抠抡抢护报担拟拢拣拥拦拧拨择挂挚挛挜挝挞挟挠挡挢挣挤挥挦捞损捡换捣据捻掳掴掷掸掺掼揸揽揿搀搁搂搅携摄摅摆摇摈摊撄撑撵撷撸撺擞攒敌敛数斋斓斗斩断无旧时旷旸昙昼昽显晋晒晓晔晕晖暂暧札术朴机杀杂权条来杨杩杰极构枞枢枣枥枧枨枪枫枭柜柠柽栀栅标栈栉栊栋栌栎栏树栖样栾桊桠桡桢档桤桥桦桧桨桩梦梼梾检棂椁椟椠椤椭楼榄榇榈榉槚槛槟槠横樯樱橥橱橹橼檐檩欢欤欧歼殁殇残殒殓殚殡殴毁毂毕毙毡毵氇气氢氩氲汇汉污汤汹沓沟没沣沤沥沦沧沨沩沪沵泞泪泶泷泸泺泻泼泽泾洁洒洼浃浅浆浇浈浉浊测浍济浏浐浑浒浓浔浕涂涌涛涝涞涟涠涡涢涣涤润涧涨涩淀渊渌渍渎渐渑渔渖渗温游湾湿溃溅溆溇滗滚滞滟滠满滢滤滥滦滨滩滪漤潆潇潋潍潜潴澜濑濒灏灭灯灵灾灿炀炉炖炜炝点炼炽烁烂烃烛烟烦烧烨烩烫烬热焕焖焘煅煳熘爱爷牍牦牵牺犊犟状犷犸犹狈狍狝狞独狭狮狯狰狱狲猃猎猕猡猪猫猬献獭玑玙玚玛玮环现玱玺珉珏珐珑珰珲琎琏琐琼瑶瑷璇璎瓒瓮瓯电画畅畲畴疖疗疟疠疡疬疮疯疱疴痈痉痒痖痨痪痫痴瘅瘆瘗瘘瘪瘫瘾瘿癞癣癫癯皑皱皲盏盐监盖盗盘眍眦眬着睁睐睑瞒瞩矫矶矾矿砀码砖砗砚砜砺砻砾础硁硅硕硖硗硙硚确硷碍碛碜碱碹磙礼祎祢祯祷祸禀禄禅离秃秆种积称秽秾稆税稣稳穑穷窃窍窑窜窝窥窦窭竖竞笃笋笔笕笺笼笾筑筚筛筜筝筹签简箓箦箧箨箩箪箫篑篓篮篱簖籁籴类籼粜粝粤粪粮糁糇紧絷纟纠纡红纣纤纥约级纨纩纪纫纬纭纮纯纰纱纲纳纴纵纶纷纸纹纺纻纼纽纾线绀绁绂练组绅细织终绉绊绋绌绍绎经绐绑绒结绔绕绖绗绘给绚绛络绝绞统绠绡绢绣绤绥绦继绨绩绪绫绬续绮绯绰绱绲绳维绵绶绷绸绹绺绻综绽绾绿缀缁缂缃缄缅缆缇缈缉缊缋缌缍缎缏缐缑缒缓缔缕编缗缘缙缚缛缜缝缞缟缠缡缢缣缤缥缦缧缨缩缪缫缬缭缮缯缰缱缲缳缴缵罂网罗罚罢罴羁羟羡翘翙翚耢耧耸耻聂聋职聍联聩聪肃肠肤肷肾肿胀胁胆胜胧胨胪胫胶脉脍脏脐脑脓脔脚脱脶脸腊腌腘腭腻腼腽腾膑臜舆舣舰舱舻艰艳艹艺节芈芗芜芦苁苇苈苋苌苍苎苏苘苹茎茏茑茔茕茧荆荐荙荚荛荜荞荟荠荡荣荤荥荦荧荨荩荪荫荬荭荮药莅莜莱莲莳莴莶获莸莹莺莼萚萝萤营萦萧萨葱蒇蒉蒋蒌蓝蓟蓠蓣蓥蓦蔷蔹蔺蔼蕲蕴薮藁藓虏虑虚虫虬虮虽虾虿蚀蚁蚂蚕蚝蚬蛊蛎蛏蛮蛰蛱蛲蛳蛴蜕蜗蜡蝇蝈蝉蝎蝼蝾螀螨蟏衅衔补衬衮袄袅袆袜袭袯装裆裈裢裣裤裥褛褴襁襕见观觃规觅视觇览觉觊觋觌觍觎觏觐觑觞触觯詟誉誊讠计订讣认讥讦讧讨让讪讫训议讯记讱讲讳讴讵讶讷许讹论讻讼讽设访诀证诂诃评诅识诇诈诉诊诋诌词诎诏诐译诒诓诔试诖诗诘诙诚诛诜话诞诟诠诡询诣诤该详诧诨诩诪诫诬语诮误诰诱诲诳说诵诶请诸诹诺读诼诽课诿谀谁谂调谄谅谆谇谈谊谋谌谍谎谏谐谑谒谓谔谕谖谗谘谙谚谛谜谝谞谟谠谡谢谣谤谥谦谧谨谩谪谫谬谭谮谯谰谱谲谳谴谵谶谷豮贝贞负贠贡财责贤败账货质贩贪贫贬购贮贯贰贱贲贳贴贵贶贷贸费贺贻贼贽贾贿赀赁赂赃资赅赆赇赈赉赊赋赌赍赎赏赐赑赒赓赔赕赖赗赘赙赚赛赜赝赞赟赠赡赢赣赪赵赶趋趱趸跃跄跖跞践跶跷跸跹跻踊踌踪踬踯蹑蹒蹰蹿躏躜躯车轧轨轩轪轫转轭轮软轰轱轲轳轴轵轶轷轸轹轺轻轼载轾轿辀辁辂较辄辅辆辇辈辉辊辋辌辍辎辏辐辑辒输辔辕辖辗辘辙辚辞辩辫边辽达迁过迈运还这进远违连迟迩迳迹适选逊递逦逻遗遥邓邝邬邮邹邺邻郁郄郏郐郑郓郦郧郸酝酦酱酽酾酿释里鉅鉴銮錾钆钇针钉钊钋钌钍钎钏钐钑钒钓钔钕钖钗钘钙钚钛钝钞钟钠钡钢钣钤钥钦钧钨钩钪钫钬钭钮钯钰钱钲钳钴钵钶钷钸钹钺钻钼钽钾钿铀铁铂铃铄铅铆铈铉铊铋铍铎铏铐铑铒铕铗铘铙铚铛铜铝铞铟铠铡铢铣铤铥铦铧铨铪铫铬铭铮铯铰铱铲铳铴铵银铷铸铹铺铻铼铽链铿销锁锂锃锄锅锆锇锈锉锊锋锌锍锎锏锐锑锒锓锔锕锖锗错锚锜锞锟锠锡锢锣锤锥锦锨锩锫锬锭键锯锰锱锲锳锴锵锶锷锸锹锺锻锼锽锾锿镀镁镂镃镆镇镈镉镊镌镍镎镏镐镑镒镕镖镗镙镚镛镜镝镞镟镠镡镢镣镤镥镦镧镨镩镪镫镬镭镮镯镰镱镲镳镴镶长门闩闪闫闬闭问闯闰闱闲闳间闵闶闷闸闹闺闻闼闽闾闿阀阁阂阃阄阅阆阇阈阉阊阋阌阍阎阏阐阑阒阓阔阕阖阗阘阙阚阛队阳阴阵阶际陆陇陈陉陕陧陨险随隐隶隽难雏雠雳雾霁霉霭靓静靥鞑鞒鞯鞴韦韧韨韩韪韫韬韵页顶顷顸项顺须顼顽顾顿颀颁颂颃预颅领颇颈颉颊颋颌颍颎颏颐频颒颓颔颕颖颗题颙颚颛颜额颞颟颠颡颢颣颤颥颦颧风飏飐飑飒飓飔飕飖飗飘飙飚飞飨餍饤饥饦饧饨饩饪饫饬饭饮饯饰饱饲饳饴饵饶饷饸饹饺饻饼饽饾饿馀馁馂馃馄馅馆馇馈馉馊馋馌馍馎馏馐馑馒馓馔馕马驭驮驯驰驱驲驳驴驵驶驷驸驹驺驻驼驽驾驿骀骁骂骃骄骅骆骇骈骉骊骋验骍骎骏骐骑骒骓骔骕骖骗骘骙骚骛骜骝骞骟骠骡骢骣骤骥骦骧髅髋髌鬓魇魉鱼鱽鱾鱿鲀鲁鲂鲄鲅鲆鲇鲈鲉鲊鲋鲌鲍鲎鲏鲐鲑鲒鲓鲔鲕鲖鲗鲘鲙鲚鲛鲜鲝鲞鲟鲠鲡鲢鲣鲤鲥鲦鲧鲨鲩鲪鲫鲬鲭鲮鲯鲰鲱鲲鲳鲴鲵鲶鲷鲸鲹鲺鲻鲼鲽鲾鲿鳀鳁鳂鳃鳄鳅鳆鳇鳈鳉鳊鳋鳌鳍鳎鳏鳐鳑鳒鳓鳔鳕鳖鳗鳘鳙鳛鳜鳝鳞鳟鳠鳡鳢鳣鸟鸠鸡鸢鸣鸤鸥鸦鸧鸨鸩鸪鸫鸬鸭鸮鸯鸰鸱鸲鸳鸴鸵鸶鸷鸸鸹鸺鸻鸼鸽鸾鸿鹀鹁鹂鹃鹄鹅鹆鹇鹈鹉鹊鹋鹌鹍鹎鹏鹐鹑鹒鹓鹔鹕鹖鹗鹘鹚鹛鹜鹝鹞鹟鹠鹡鹢鹣鹤鹥鹦鹧鹨鹩鹪鹫鹬鹭鹯鹰鹱鹲鹳鹴鹾麦麸黄黉黡黩黪黾鼋鼌鼍鼗鼹齄齐齑齿龀龁龂龃龄龅龆龇龈龉龊龋龌龙龚龛龟志制咨只里范松没闹面准钟别闲乾尽脏拼';
-            this.t_chars = '繫為嘗鐘萬與醜專業叢東絲丟兩嚴喪個丬豐臨爲麗舉麼義烏樂喬習鄉書買亂爭於虧雲亙亞產畝親褻嚲億僅從侖倉儀們價衆優夥會傴傘偉傳傷倀倫傖僞佇體餘傭僉俠侶僥偵側僑儈儕儂俁儔儼倆儷儉債傾傯僂僨償儻儐儲儺兒兌兗黨蘭關興茲養獸囅內岡冊寫軍農冢馮沖決況凍淨淒涼凌減湊凜幾鳳鳧憑凱擊凼鑿芻劃劉則剛創刪別剗剄劊劌剴劑剮劍剝劇勸辦務勱動勵勁勞勢勳勐勩勻匭匱區醫華協單賣盧滷臥衛卻巹廠廳歷厲壓厭厙廁廂厴廈廚廄廝縣參靉靆雙發變敘疊葉號嘆嘰籲後嚇呂嗎唚噸聽啓吳嘸囈嘔嚦唄員咼嗆嗚詠咔嚨嚀噝吒咴鹹哌響啞噠嘵嗶噦譁噲嚌噥喲嘜嗊嘮啢嗩唣喚唿嘖嗇囀齧囉嘽嘯噴嘍嚳囁呵噯噓嚶囑嚕噼囂嚯團園囪圍圇國圖圓聖壙場阪壞塊堅壇壢壩塢墳墜壟壠壚壘墾垧堊墊埡墶壋塏堖塒壎堝埝垵塹墮壪牆壯聲殼壺壼處備復夠頭誇夾奪奩奐奮獎奧妝婦媽嫵嫗嬀姍姜婁婭嬈嬌孌娛媧嫺嫿嬰嬋嬸媼嬡嬪嬙嬤孫學孿寧寶實寵審憲宮寬賓寢對尋導壽將爾塵堯尷屍盡層屓屜屆屬屢屨嶼歲豈嶇崗峴嶴嵐島嶺嶽崬巋嶨嶧峽嶢嶠崢巒嶗崍嶮嶄嶸嶔嵛嶁嵴巔鞏巰幣帥師幃帳簾幟帶幀幫幬幘幗冪襆幹並廣莊慶廬廡庫應廟龐廢廎廩開異棄張彌弳彎彈強歸當錄彠彥徹徑徠御憶懺憂愾懷態慫憮慪悵愴憐總懟懌戀懇惡慟懨愷惻惱惲悅愨懸慳憫驚懼慘懲憊愜慚憚慣愍慍憤憒願懾憖憷懣懶懍戇戔戲戧戰戩戶扎撲扦執擴捫掃揚擾撫拋摶摳掄搶護報擔擬攏揀擁攔擰撥擇掛摯攣掗撾撻挾撓擋撟掙擠揮撏撈損撿換搗據捻擄摑擲撣摻摜揸攬撳攙擱摟攪攜攝攄擺搖擯攤攖撐攆擷擼攛擻攢敵斂數齋斕鬥斬斷無舊時曠暘曇晝曨顯晉曬曉曄暈暉暫曖札術樸機殺雜權條來楊榪傑極構樅樞棗櫪梘棖槍楓梟櫃檸檉梔柵標棧櫛櫳棟櫨櫟欄樹棲樣欒桊椏橈楨檔榿橋樺檜槳樁夢檮棶檢櫺槨櫝槧欏橢樓欖櫬櫚櫸檟檻檳櫧橫檣櫻櫫櫥櫓櫞檐檁歡歟歐殲歿殤殘殞殮殫殯毆毀轂畢斃氈毿氌氣氫氬氳匯漢污湯洶沓溝沒灃漚瀝淪滄渢潙滬沵濘淚澩瀧瀘濼瀉潑澤涇潔灑窪浹淺漿澆湞溮濁測澮濟瀏滻渾滸濃潯濜塗涌濤澇淶漣潿渦溳渙滌潤澗漲澀澱淵淥漬瀆漸澠漁瀋滲溫遊灣溼潰濺漵漊潷滾滯灩灄滿瀅濾濫灤濱灘澦漤瀠瀟瀲濰潛瀦瀾瀨瀕灝滅燈靈災燦煬爐燉煒熗點煉熾爍爛烴燭煙煩燒燁燴燙燼熱煥燜燾煅煳熘愛爺牘犛牽犧犢犟狀獷獁猶狽狍獮獰獨狹獅獪猙獄猻獫獵獼玀豬貓蝟獻獺璣璵瑒瑪瑋環現瑲璽珉珏琺瓏璫琿璡璉瑣瓊瑤璦璇瓔瓚甕甌電畫暢畲疇癤療瘧癘瘍癧瘡瘋皰痾癰痙癢瘂癆瘓癇癡癉瘮瘞瘻癟癱癮癭癩癬癲癯皚皺皸盞鹽監蓋盜盤瞘眥矓着睜睞瞼瞞矚矯磯礬礦碭碼磚硨硯碸礪礱礫礎硜硅碩硤磽磑礄確礆礙磧磣鹼碹磙禮禕禰禎禱禍稟祿禪離禿稈種積稱穢穠穭稅穌穩穡窮竊竅窯竄窩窺竇窶豎競篤筍筆筧箋籠籩築篳篩簹箏籌籤簡籙簀篋籜籮簞簫簣簍籃籬籪籟糴類秈糶糲粵糞糧糝餱緊縶糹糾紆紅紂纖紇約級紈纊紀紉緯紜紘純紕紗綱納紝縱綸紛紙紋紡紵紖紐紓線紺紲紱練組紳細織終縐絆紼絀紹繹經紿綁絨結絝繞絰絎繪給絢絳絡絕絞統綆綃絹繡綌綏絛繼綈績緒綾緓續綺緋綽鞝緄繩維綿綬繃綢綯綹綣綜綻綰綠綴緇緙緗緘緬纜緹緲緝縕繢緦綞緞緶線緱縋緩締縷編緡緣縉縛縟縝縫縗縞纏縭縊縑繽縹縵縲纓縮繆繅纈繚繕繒繮繾繰繯繳纘罌網羅罰罷羆羈羥羨翹翽翬耮耬聳恥聶聾職聹聯聵聰肅腸膚肷腎腫脹脅膽勝朧腖臚脛膠脈膾髒臍腦膿臠腳脫腡臉臘醃膕齶膩靦膃騰臏臢輿艤艦艙艫艱豔艹藝節羋薌蕪蘆蓯葦藶莧萇蒼苧蘇檾蘋莖蘢蔦塋煢繭荊薦薘莢蕘蓽蕎薈薺蕩榮葷滎犖熒蕁藎蓀蔭蕒葒葤藥蒞莜萊蓮蒔萵薟獲蕕瑩鶯蓴蘀蘿螢營縈蕭薩蔥蕆蕢蔣蔞藍薊蘺蕷鎣驀薔蘞藺藹蘄蘊藪藁蘚虜慮虛蟲虯蟣雖蝦蠆蝕蟻螞蠶蠔蜆蠱蠣蟶蠻蟄蛺蟯螄蠐蛻蝸蠟蠅蟈蟬蠍螻蠑螿蟎蠨釁銜補襯袞襖嫋褘襪襲襏裝襠褌褳襝褲襉褸襤襁襴見觀覎規覓視覘覽覺覬覡覿覥覦覯覲覷觴觸觶讋譽謄訁計訂訃認譏訐訌討讓訕訖訓議訊記訒講諱謳詎訝訥許訛論訩訟諷設訪訣證詁訶評詛識詗詐訴診詆謅詞詘詔詖譯詒誆誄試詿詩詰詼誠誅詵話誕詬詮詭詢詣諍該詳詫諢詡譸誡誣語誚誤誥誘誨誑說誦誒請諸諏諾讀諑誹課諉諛誰諗調諂諒諄誶談誼謀諶諜謊諫諧謔謁謂諤諭諼讒諮諳諺諦謎諞諝謨讜謖謝謠謗諡謙謐謹謾謫譾謬譚譖譙讕譜譎讞譴譫讖谷豶貝貞負貟貢財責賢敗賬貨質販貪貧貶購貯貫貳賤賁貰貼貴貺貸貿費賀貽賊贄賈賄貲賃賂贓資賅贐賕賑賚賒賦賭齎贖賞賜贔賙賡賠賧賴賵贅賻賺賽賾贗贊贇贈贍贏贛赬趙趕趨趲躉躍蹌跖躒踐躂蹺蹕躚躋踊躊蹤躓躑躡蹣躕躥躪躦軀車軋軌軒軑軔轉軛輪軟轟軲軻轤軸軹軼軤軫轢軺輕軾載輊轎輈輇輅較輒輔輛輦輩輝輥輞輬輟輜輳輻輯轀輸轡轅轄輾轆轍轔辭辯辮邊遼達遷過邁運還這進遠違連遲邇逕跡適選遜遞邐邏遺遙鄧鄺鄔郵鄒鄴鄰鬱郄郟鄶鄭鄆酈鄖鄲醞醱醬釅釃釀釋裏鉅鑑鑾鏨釓釔針釘釗釙釕釷釺釧釤鈒釩釣鍆釹鍚釵鈃鈣鈈鈦鈍鈔鍾鈉鋇鋼鈑鈐鑰欽鈞鎢鉤鈧鈁鈥鈄鈕鈀鈺錢鉦鉗鈷鉢鈳鉕鈽鈸鉞鑽鉬鉭鉀鈿鈾鐵鉑鈴鑠鉛鉚鈰鉉鉈鉍鈹鐸鉶銬銠鉺銪鋏鋣鐃銍鐺銅鋁銱銦鎧鍘銖銑鋌銩銛鏵銓鉿銚鉻銘錚銫鉸銥鏟銃鐋銨銀銣鑄鐒鋪鋙錸鋱鏈鏗銷鎖鋰鋥鋤鍋鋯鋨鏽銼鋝鋒鋅鋶鐦鐗銳銻鋃鋟鋦錒錆鍺錯錨錡錁錕錩錫錮鑼錘錐錦杴錈錇錟錠鍵鋸錳錙鍥鍈鍇鏘鍶鍔鍤鍬鍾鍛鎪鍠鍰鎄鍍鎂鏤鎡鏌鎮鎛鎘鑷鐫鎳鎿鎦鎬鎊鎰鎔鏢鏜鏍鏰鏞鏡鏑鏃鏇鏐鐔钁鐐鏷鑥鐓鑭鐠鑹鏹鐙鑊鐳鐶鐲鐮鐿鑔鑣鑞鑲長門閂閃閆閈閉問闖閏闈閒閎間閔閌悶閘鬧閨聞闥閩閭闓閥閣閡閫鬮閱閬闍閾閹閶鬩閿閽閻閼闡闌闃闠闊闋闔闐闒闕闞闤隊陽陰陣階際陸隴陳陘陝隉隕險隨隱隸雋難雛讎靂霧霽黴靄靚靜靨韃鞽韉鞴韋韌韍韓韙韞韜韻頁頂頃頇項順須頊頑顧頓頎頒頌頏預顱領頗頸頡頰頲頜潁熲頦頤頻頮頹頷頴穎顆題顒顎顓顏額顳顢顛顙顥纇顫顬顰顴風颺颭颮颯颶颸颼颻飀飄飆飈飛饗饜飣飢飥餳飩餼飪飫飭飯飲餞飾飽飼飿飴餌饒餉餄餎餃餏餅餑餖餓餘餒餕餜餛餡館餷饋餶餿饞饁饃餺餾饈饉饅饊饌饢馬馭馱馴馳驅馹駁驢駔駛駟駙駒騶駐駝駑駕驛駘驍罵駰驕驊駱駭駢驫驪騁驗騂駸駿騏騎騍騅騌驌驂騙騭騤騷騖驁騮騫騸驃騾驄驏驟驥驦驤髏髖髕鬢魘魎魚魛魢魷魨魯魴魺鮁鮃鮎鱸鮋鮓鮒鮊鮑鱟鮍鮐鮭鮚鮳鮪鮞鮦鰂鮜鱠鱭鮫鮮鮺鯗鱘鯁鱺鰱鰹鯉鰣鰷鯀鯊鯇鮶鯽鯒鯖鯪鯕鯫鯡鯤鯧鯝鯢鮎鯛鯨鰺鯴鯔鱝鰈鰏鱨鯷鰮鰃鰓鱷鰍鰒鰉鰁鱂鯿鰠鰲鰭鰨鰥鰩鰟鰜鰳鰾鱈鱉鰻鰵鱅鰼鱖鱔鱗鱒鱯鱤鱧鱣鳥鳩雞鳶鳴鳲鷗鴉鶬鴇鴆鴣鶇鸕鴨鴞鴦鴒鴟鴝鴛鷽鴕鷥鷙鴯鴰鵂鴴鵃鴿鸞鴻鵐鵓鸝鵑鵠鵝鵒鷳鵜鵡鵲鶓鵪鵾鵯鵬鵮鶉鶊鵷鷫鶘鶡鶚鶻鶿鶥鶩鷊鷂鶲鶹鶺鷁鶼鶴鷖鸚鷓鷚鷯鷦鷲鷸鷺鸇鷹鸌鸏鸛鸘鹺麥麩黃黌黶黷黲黽黿鼂鼉鞀鼴齇齊齏齒齔齕齗齟齡齙齠齜齦齬齪齲齷龍龔龕龜志制諮只裏範鬆沒鬧面準鍾別閒乾盡髒拼';
 
-            this.s2t_map = null;
-            this.t2s_map = null;
+        _ensureInit: function() {
+            if (this.isInitialized) return;
+
+            const data = this._getData();
+            this.s2t_map = {};
+            this.t2s_map = {};
+
+            for (let i = 0; i < data.s.length; i++) {
+                this.s2t_map[data.s[i]] = data.t[i];
+                this.t2s_map[data.t[i]] = data.s[i];
+            }
+
+            this.isInitialized = true;
+            Log.info('Converter', '繁簡轉換字典已構建完成 (初始化成功)。');
         },
 
         getS2TMap: function() {
-            if (!this.s2t_map) {
-                this.s2t_map = {};
-                for (let i = 0; i < this.s_chars.length; i++) {
-                    this.s2t_map[this.s_chars[i]] = this.t_chars[i];
-                }
-            }
+            this._ensureInit();
             return this.s2t_map;
         },
 
         getT2SMap: function() {
-            if (!this.t2s_map) {
-                this.t2s_map = {};
-                for (let i = 0; i < this.t_chars.length; i++) {
-                    this.t2s_map[this.t_chars[i]] = this.s_chars[i];
-                }
-            }
+            this._ensureInit();
             return this.t2s_map;
         },
 
@@ -1844,19 +1970,34 @@ V53 > V54
             }
 
             return result;
+        },
+
+
+        schedulePreload: function() {
+            setTimeout(() => {
+                if (isScriptPaused || this.isInitialized) return;
+
+                // 如果當前分頁可見，立即初始化
+                if (!document.hidden) {
+                    this._ensureInit();
+                } else {
+                    // 如果當前分頁不可見，掛起監聽器，等待切換到前台的那一瞬間初始化
+                    const initOnVisible = () => {
+                        if (document.hidden) return;
+                        this._ensureInit();
+                        document.removeEventListener('visibilitychange', initOnVisible);
+                    };
+                    document.addEventListener('visibilitychange', initOnVisible);
+                }
+            }, 15000); // 15秒延遲
         }
     };
 
-    // 初始化轉換引擎
-    ChineseConverter.init();
+    // 啟動 15 秒智能預載調度
+    ChineseConverter.schedulePreload();
 
-    /**
-    * @description 使用 MutationObserver 等待一個元素出現，比輪詢更高效。
-    * @param {Node} rootNode - 觀察的根節點。
-    * @param {string} selector - CSS選擇器。
-    * @param {number} timeout - 超時時間（毫秒）。
-    * @returns {Promise<HTMLElement>} 解析為找到的元素。
-    */
+
+    // [DOM 觀察 / 定時/防抖 / 元素定位] 功能：`waitForElementWithObserver`。
     function waitForElementWithObserver(rootNode, selector, timeout) {
         return new Promise((resolve, reject) => {
             const existingElement = findElementInShadows(rootNode, selector);
@@ -1884,11 +2025,8 @@ V53 > V54
         });
     }
 
-    /**
-    * @description 模擬用戶在輸入框中輸入內容，觸發相關的 DOM 事件。
-    * @param {HTMLInputElement|HTMLTextAreaElement} element - 目標輸入框元素。
-    * @param {string} value - 要輸入的值。
-    */
+
+    // [DOM 觀察 / 定時/防抖] 功能：`simulateTyping`。
     function simulateTyping(element, value) {
         element.value = value;
         element.dispatchEvent(new Event('input', {
@@ -1899,13 +2037,10 @@ V53 > V54
         }));
     }
 
-    /**
-    * @description 模擬鍵盤按鍵事件。
-    * @param {HTMLElement} element - 觸發事件的目標元素。
-    * @param {string} key - 按鍵的名稱 (e.g., 'Enter')。
-    * @param {number} keyCode - 按鍵的 keyCode。
-    */
+
+    // [DOM 觀察 / 定時/防抖] 功能：`simulateKeyEvent`。
     function simulateKeyEvent(element, key, keyCode) {
+        // [DOM 觀察 / 定時/防抖] 功能：`eventOptions`。
         const eventOptions = {
             key: key,
             code: key,
@@ -1918,14 +2053,8 @@ V53 > V54
         element.dispatchEvent(new KeyboardEvent('keyup', eventOptions));
     }
 
-    /**
-    * @description 等待元素的特定屬性變為目標值。
-    * @param {HTMLElement} element - 要觀察的元素。
-    * @param {string} attributeName - 屬性名。
-    * @param {string} targetValue - 目標值。
-    * @param {number} timeout - 超時時間（毫秒）。
-    * @returns {Promise<void>} 當屬性匹配時解析。
-    */
+
+    // [DOM 觀察 / 定時/防抖] 功能：`waitForAttributeChange`。
     function waitForAttributeChange(element, attributeName, targetValue, timeout) {
         return new Promise((resolve, reject) => {
             if (element.getAttribute(attributeName) === targetValue) {
@@ -1951,23 +2080,14 @@ V53 > V54
         });
     }
 
-    /**
-    * @description 等待一個按鈕變為可點擊狀態（通常是 aria-disabled="false"）。
-    * @param {string} selector - 按鈕的CSS選擇器。
-    * @returns {Promise<HTMLElement>} 解析為可點擊的按鈕元素。
-    */
+
     async function waitForButtonToBeEnabled(selector) {
         const button = await waitForElementWithObserver(document.body, selector, 5000); // 5000ms: 等待按鈕出現的超時。
         await waitForAttributeChange(button, 'aria-disabled', 'false', 5000); // 5000ms: 等待按鈕變為可用的超時。
         return button;
     }
 
-    /**
-    * @description 自動化選擇下拉框（Combobox）中的選項。
-    * @param {HTMLElement} container - 包含下拉框的父容器。
-    * @param {string} buttonSelector - 下拉框觸發按鈕的選擇器。
-    * @param {string} optionValue - 要選擇的選項的 data-value 值。
-    */
+
     async function selectComboboxOption(container, buttonSelector, optionValue) {
         const comboboxButton = await waitForElementWithObserver(container, buttonSelector, 5000); // 5000ms: 等待下拉框按鈕出現的超時。
         comboboxButton.click();
@@ -1976,11 +2096,8 @@ V53 > V54
         optionElement.click();
     }
 
-    /**
-    * @description 從 Lightning Combobox 的觸發按鈕中穩定讀取當前選中值（主 + 兩級備援）。
-    * @param {HTMLElement} buttonEl - Combobox 的觸發按鈕元素。
-    * @returns {string|null} 當前選中值，若讀取失敗返回 null。
-    */
+
+    // [元素定位] 功能：`getSelectedValue`。
     function getSelectedValue(buttonEl) {
         if (!buttonEl) return null;
 
@@ -2009,11 +2126,8 @@ V53 > V54
     }
 
 
-    /**
-    * @description 在指定的組件上顯示一個短暫的完成提示（Toast）。
-    * @param {HTMLElement} componentElement - 顯示提示的目標組件。
-    * @param {string} message - 提示消息。
-    */
+
+    // [定時/防抖] 功能：`showCompletionToast`。
     function showCompletionToast(componentElement, message) {
         if (getComputedStyle(componentElement).position === 'static') {
             componentElement.style.position = 'relative';
@@ -2048,11 +2162,8 @@ V53 > V54
         }, 2500); // 2500ms: 提示顯示的總時長。
     }
 
-    /**
-    * @description 在頁面中央顯示一個全局的提示消息。
-    * @param {string} message - 提示消息。
-    * @param {string} iconName - SLDS utility icon 的名稱 (e.g., 'check', 'pause')。
-    */
+
+    // [定時/防抖] 功能：`showGlobalToast`。
     function showGlobalToast(message, iconName) {
         const existingToast = document.getElementById('cec-global-toast');
         if (existingToast) {
@@ -2085,11 +2196,8 @@ V53 > V54
         }, 2500); // 2500ms: 提示顯示的總時長。
     }
 
-    /**
-    * @description 將時間戳格式化為 "X 小時 Y 分鐘前" 的詳細字符串。
-    * @param {number} timestamp - 過去的某個時間點的時間戳 (毫秒)。
-    * @returns {string} 格式化後的時間差字符串。
-    */
+
+    // 功能：`formatTimeAgo`。
     function formatTimeAgo(timestamp) {
         const diffMs = Date.now() - timestamp;
         const diffMinutes = Math.round(diffMs / (1000 * 60));
@@ -2107,11 +2215,8 @@ V53 > V54
         return `你 在 ${hours} 小 時 ${minutes} 分 鐘 前 已 回 覆 過 此 Case`;
     }
 
-    /**
-    * @description 將時間戳格式化為 "（X 分鐘前）" 的簡潔字符串，用於列表頁。
-    * @param {number} timestamp - 過去的某個時間點的時間戳 (毫秒)。
-    * @returns {string} 格式化後的時間差字符串。
-    */
+
+    // [設定/狀態持久化] 功能：`formatTimeAgoSimple`。
     function formatTimeAgoSimple(timestamp) {
         const diffMs = Date.now() - timestamp;
         const diffMinutes = Math.round(diffMs / (1000 * 60));
@@ -2132,11 +2237,8 @@ V53 > V54
         return `（${hours}小時${minutes}分鐘）`;
     }
 
-    /**
-    * @description 將時間戳格式化為 "X天X時X分"，用於 A/B 類型列表提示。
-    * @param {number} timestamp - 過去的某個時間點的時間戳（毫秒）。
-    * @returns {string} 格式化後的時間差字符串。
-    */
+
+    // [設定/狀態持久化] 功能：`formatTimeAgoDaysHoursMinutes`。
     function formatTimeAgoDaysHoursMinutes(timestamp) {
         const diffMs = Date.now() - timestamp;
         const diffMinutes = Math.max(0, Math.round(diffMs / (1000 * 60)));
@@ -2147,10 +2249,8 @@ V53 > V54
     }
 
 
-    /**
-    * @description 檢查當前 Case 是否在近期被回覆過，如果啟用該功能，則觸發大型通知。
-    * @param {string} caseUrl - 當前 Case 的 URL。
-    */
+
+    // [設定/狀態持久化] 功能：`checkAndNotifyForRecentSend`。
     function checkAndNotifyForRecentSend(caseUrl) {
         if (!GM_getValue('notifyOnRepliedCaseEnabled', DEFAULTS.notifyOnRepliedCaseEnabled)) {
             return;
@@ -2185,12 +2285,8 @@ V53 > V54
         }
     }
 
-    /**
-    * @description 在頁面中央顯示一個可自定義尺寸的全局通知。
-    *              [修正版] 重構了關閉邏輯，確保點擊遮罩層可提前關閉通知的功能正常生效。
-    * @param {string} message - 要顯示的通知消息。
-    * @param {object} [options={}] - 一個包含自定義選項的對象。
-    */
+
+    // [事件監聽 / 定時/防抖] 功能：`showGlobalCompletionNotification`。
     function showGlobalCompletionNotification(message, options = {}) {
         const {
             theme = 'success',
@@ -2253,10 +2349,7 @@ V53 > V54
     // SECTION: 樣式注入與UI創建 (Styles & UI)
     // =================================================================================
 
-    /**
-    * @description 向頁面注入腳本所需的全局自定義CSS樣式。
-    *              [修正版] 移除了 .cec-global-completion-overlay 的 pointer-events: none 樣式，以允許點擊關閉。
-    */
+
     function injectGlobalCustomStyles() {
         const styleId = 'cec-global-custom-styles';
         if (document.getElementById(styleId)) return;
@@ -2437,9 +2530,8 @@ V53 > V54
         document.head.appendChild(style);
     }
 
-    /**
-    * @description 根據用戶設置注入CSS以調整 "Related Cases" 列表的高度。
-    */
+
+    // [設定/狀態持久化 / 樣式注入] 功能：`injectStyleOverrides`。
     function injectStyleOverrides() {
         const styleId = 'pro-style-overrides';
         if (document.getElementById(styleId)) {
@@ -2457,10 +2549,8 @@ V53 > V54
         document.head.appendChild(style);
     }
 
-    /**
-    * @description 根據用戶配置啟用或禁用組件屏蔽（Clean Mode）的CSS樣式。
-    *              [升級版] 支持 customRule 屬性，可實現"修改樣式"而非單純"隱藏"。
-    */
+
+    // [設定/狀態持久化] 功能：`toggleCleanModeStyles`。
     function toggleCleanModeStyles() {
         const STYLE_ID = 'clean-mode-styles';
         const isEnabled = GM_getValue('cleanModeEnabled', DEFAULTS.cleanModeEnabled);
@@ -2515,18 +2605,25 @@ V53 > V54
         document.head.appendChild(styleElement);
     }
 
-    /**
-    * @description 創建並向頁面注入腳本的設置菜單UI（HTML和CSS）。
-    */
+
+    // 功能：`createSettingsUI`。
     function createSettingsUI() {
         if (document.getElementById('cec-settings-modal')) return;
 
         const modalHTML = `
             <div id="cec-settings-modal" class="cec-settings-backdrop">
                 <div class="cec-settings-content">
+                    <div id="cec-refresh-banner" class="cec-settings-refresh-banner">
+                        <span class="slds-icon_container slds-icon-utility-warning slds-m-right_x-small">
+                            <svg class="slds-icon slds-icon_x-small slds-icon-text-default" aria-hidden="true" style="fill: #744210;">
+                                <use xlink:href="/_slds/icons/utility-sprite/svg/symbols.svg#warning"></use>
+                            </svg>
+                        </span>
+                        <span>部分設置已更改，請 <a href="javascript:void(0);" id="cec-refresh-link">刷新頁面</a> 以生效。</span>
+                    </div>
                     <div class="cec-settings-header">
                         <h2>腳本設定</h2>
-                        <button id="cec-settings-close" title="關閉">&times;</button>
+                        <button id="cec-settings-close" title="關閉 (Esc)">&times;</button>
                     </div>
                     <div class="cec-settings-body">
                         <div class="cec-settings-tabs">
@@ -2536,24 +2633,26 @@ V53 > V54
                             <button class="cec-settings-tab-button" data-tab="buttons">快捷按鈕</button>
                             <button class="cec-settings-tab-button" data-tab="pca">PCA</button>
                         </div>
+
+                        <!-- 核心配置 Tab -->
                         <div id="tab-general" class="cec-settings-tab-content active">
                            <div class="cec-settings-section">
                                 <h3 class="cec-settings-section-title">核心配置</h3>
                                 <div class="cec-settings-option">
-                                    <label for="autoAssignUserInput" class="cec-settings-label">操作者用戶名 (Case Owner)</label>
+                                    <label for="autoAssignUserInput" class="cec-settings-label">操作者用戶名 (Case Owner) <span class="cec-badge-instant">無需刷新</span></label>
                                     <input type="text" id="autoAssignUserInput" class="cec-settings-input" placeholder="輸入完整用戶名">
                                 </div>
                                 <p class="cec-settings-description">用於自動指派功能，請確保姓名與系統完全匹配。</p>
                             </div>
                         </div>
 
-
+                        <!-- 界面 Tab -->
                         <div id="tab-interface" class="cec-settings-tab-content">
                             <div class="cec-settings-section">
                                 <h3 class="cec-settings-section-title">跟進面板</h3>
                                 <div class="cec-settings-option">
                                     <div class="cec-settings-option-main">
-                                        <label for="followUpPanelToggle" class="cec-settings-label">啟用跟進面板（設置后需刷新頁面）</label>
+                                        <label for="followUpPanelToggle" class="cec-settings-label">啟用跟進面板 <span class="cec-badge-refresh">需刷新</span></label>
                                         <label class="cec-settings-switch">
                                             <input type="checkbox" id="followUpPanelToggle">
                                             <span class="cec-settings-slider"></span>
@@ -2567,24 +2666,25 @@ V53 > V54
                                 <h3 class="cec-settings-section-title">通知與提示</h3>
                                 <div class="cec-settings-option">
                                     <div class="cec-settings-option-main">
-                                        <label for="notifyOnRepliedCaseToggle" class="cec-settings-label">提示已回覆過的 Case （設置后需刷新頁面）</label>
+                                        <label for="notifyOnRepliedCaseToggle" class="cec-settings-label">提示已回覆過的 Case <span class="cec-badge-refresh">需刷新</span></label>
                                         <label class="cec-settings-switch"><input type="checkbox" id="notifyOnRepliedCaseToggle"><span class="cec-settings-slider"></span></label>
                                     </div>
                                     <p class="cec-settings-description">在 Case 詳情頁和列表頁，對近期已回覆的 Case 進行醒目提示。</p>
                                 </div>
-                            <div class="cec-settings-option">
+                                <div class="cec-settings-option">
                                     <div class="cec-settings-option-main">
-                                        <label for="highlightExpiringCasesToggle" class="cec-settings-label">快過期 Case 紅色高亮提示</label>
+                                        <label for="highlightExpiringCasesToggle" class="cec-settings-label">快過期 Case 紅色高亮提示 <span class="cec-badge-refresh">需刷新</span></label>
                                         <label class="cec-settings-switch"><input type="checkbox" id="highlightExpiringCasesToggle"><span class="cec-settings-slider"></span></label>
                                     </div>
                                     <p class="cec-settings-description">在列表頁檢測 Importance 列，若非 "Priority" 狀態或空白，將該單元格標紅。</p>
                                 </div>
                             </div>
+
                             <div class="cec-settings-section">
                                 <h3 class="cec-settings-section-title">組件屏蔽</h3>
                                 <div class="cec-settings-option">
                                     <div class="cec-settings-option-main">
-                                        <label for="cleanModeToggle" class="cec-settings-label">啟用組件屏蔽</label>
+                                        <label for="cleanModeToggle" class="cec-settings-label">啟用組件屏蔽 (Clean Mode) <span class="cec-badge-instant">無需刷新</span></label>
                                         <label class="cec-settings-switch"><input type="checkbox" id="cleanModeToggle"><span class="cec-settings-slider"></span></label>
                                     </div>
                                     <p class="cec-settings-description">隱藏頁面上的特定元素，提供更簡潔的視野。</p>
@@ -2601,52 +2701,59 @@ V53 > V54
                                     </div>
                                 </div>
                             </div>
+
                             <hr class="cec-settings-divider">
                             <div class="cec-settings-section">
                                 <h3 class="cec-settings-section-title">賬戶高亮模式</h3>
                                 <div class="cec-settings-radio-group" id="accountHighlightModeGroup">
-                                    <label><input type="radio" name="highlightMode" value="off"> 關閉</label>
+                                    <label><input type="radio" name="highlightMode" value="off"> 關閉 <span class="cec-badge-instant">無需刷新</span></label>
                                     <p class="cec-settings-description">不對任何賬戶進行高亮。</p>
-                                    <label><input type="radio" name="highlightMode" value="pca"> 識別Non PCA A/C</label>
+                                    <label><input type="radio" name="highlightMode" value="pca"> 識別Non PCA A/C <span class="cec-badge-instant">無需刷新</span></label>
                                     <p class="cec-settings-description">當 Case 聯繫人 "Preferred" 為 "No" 時，將其背景高亮。</p>
-                                    <label><input type="radio" name="highlightMode" value="dispatch"> 識別PCA A/C</label>
+                                    <label><input type="radio" name="highlightMode" value="dispatch"> 識別PCA A/C <span class="cec-badge-instant">無需刷新</span></label>
                                     <p class="cec-settings-description">當 Case 聯繫人 "Preferred" 為 "Yes" 時，將其背景高亮。</p>
                                 </div>
                             </div>
+
                             <hr class="cec-settings-divider">
                             <div class="cec-settings-section">
-                                <h3 class="cec-settings-section-title">界面元素高度</h3>
+                                <h3 class="cec-settings-section-title">界面元素高度 (單位: px)</h3>
                                 <div class="cec-settings-option-grid">
-                                    <label for="caseHistoryHeightInput">Related Cases 列表高度 (默認：208)</label>
-                                    <div class="cec-settings-input-group"><input type="number" id="caseHistoryHeightInput" class="cec-settings-input"><span>px</span></div>
-                                    <label for="caseDescriptionHeightInput">Case 描述框高度 (默認：80)</label>
-                                    <div class="cec-settings-input-group"><input type="number" id="caseDescriptionHeightInput" class="cec-settings-input"><span>px</span></div>
-                                    <label for="richTextEditorHeightInput">覆 case 編輯器高度 (默認：500)</label>
-                                    <div class="cec-settings-input-group"><input type="number" id="richTextEditorHeightInput" class="cec-settings-input"><span>px</span></div>
+                                    <label for="caseHistoryHeightInput">Related Cases 列表高度 (默認：208) <span class="cec-badge-instant">無需刷新</span></label>
+                                    <div class="cec-settings-input-group"><input type="number" min="0" id="caseHistoryHeightInput" class="cec-settings-input"></div>
+
+                                    <label for="caseDescriptionHeightInput">Case 描述框高度 (默認：80) <span class="cec-badge-refresh">需刷新</span></label>
+                                    <div class="cec-settings-input-group"><input type="number" min="0" id="caseDescriptionHeightInput" class="cec-settings-input"></div>
+
+                                    <label for="richTextEditorHeightInput">覆 case 編輯器高度 (默認：500) <span class="cec-badge-refresh">需刷新</span></label>
+                                    <div class="cec-settings-input-group"><input type="number" min="0" id="richTextEditorHeightInput" class="cec-settings-input"></div>
                                 </div>
                             </div>
+
                             <hr class="cec-settings-divider">
                             <div class="cec-settings-section">
                                 <h3 class="cec-settings-section-title">窗口與流程</h3>
                                 <div class="cec-settings-option">
-                                    <div class="cec-settings-option-main"><label for="sentinelCloseToggle" class="cec-settings-label">關聯聯繫人後快速關閉窗口</label><label class="cec-settings-switch"><input type="checkbox" id="sentinelCloseToggle"><span class="cec-settings-slider"></span></label></div>
+                                    <div class="cec-settings-option-main"><label for="sentinelCloseToggle" class="cec-settings-label">關聯聯繫人後快速關閉窗口 <span class="cec-badge-instant">無需刷新</span></label><label class="cec-settings-switch"><input type="checkbox" id="sentinelCloseToggle"><span class="cec-settings-slider"></span></label></div>
                                 </div>
                             </div>
                         </div>
+
+                        <!-- 自動化 Tab -->
                         <div id="tab-automation" class="cec-settings-tab-content">
                             <div class="cec-settings-section">
                                 <h3 class="cec-settings-section-title">IVP 查詢優化</h3>
                                 <div class="cec-settings-option">
-                                    <div class="cec-settings-option-main"><label for="autoWebQueryToggle" class="cec-settings-label">進入Case頁面自動查詢Web</label><label class="cec-settings-switch"><input type="checkbox" id="autoWebQueryToggle"><span class="cec-settings-slider"></span></label></div>
+                                    <div class="cec-settings-option-main"><label for="autoWebQueryToggle" class="cec-settings-label">進入Case頁面自動查詢Web <span class="cec-badge-refresh">需刷新</span></label><label class="cec-settings-switch"><input type="checkbox" id="autoWebQueryToggle"><span class="cec-settings-slider"></span></label></div>
                                 </div>
                                 <div class="cec-settings-option">
-                                    <div class="cec-settings-option-main"><label for="autoIVPQueryToggle" class="cec-settings-label">進入Case頁面自動查詢IVP</label><label class="cec-settings-switch"><input type="checkbox" id="autoIVPQueryToggle"><span class="cec-settings-slider"></span></label></div>
+                                    <div class="cec-settings-option-main"><label for="autoIVPQueryToggle" class="cec-settings-label">進入Case頁面自動查詢IVP <span class="cec-badge-refresh">需刷新</span></label><label class="cec-settings-switch"><input type="checkbox" id="autoIVPQueryToggle"><span class="cec-settings-slider"></span></label></div>
                                 </div>
                                 <div class="cec-settings-option">
-                                    <div class="cec-settings-option-main"><label for="autoSwitchToggle" class="cec-settings-label">檢測到追蹤號自動切換至IVP窗口</label><label class="cec-settings-switch"><input type="checkbox" id="autoSwitchToggle"><span class="cec-settings-slider"></span></label></div>
+                                    <div class="cec-settings-option-main"><label for="autoSwitchToggle" class="cec-settings-label">檢測到追蹤號自動切換至IVP窗口 <span class="cec-badge-instant">無需刷新</span></label><label class="cec-settings-switch"><input type="checkbox" id="autoSwitchToggle"><span class="cec-settings-slider"></span></label></div>
                                 </div>
                                 <div class="cec-settings-option">
-                                    <div class="cec-settings-option-main"><label for="blockIVPToggle" class="cec-settings-label">屏蔽原生IVP卡片自動加載</label><label class="cec-settings-switch"><input type="checkbox" id="blockIVPToggle"><span class="cec-settings-slider"></span></label></div>
+                                    <div class="cec-settings-option-main"><label for="blockIVPToggle" class="cec-settings-label">屏蔽原生IVP卡片自動加載 <span class="cec-badge-refresh">需刷新</span></label><label class="cec-settings-switch"><input type="checkbox" id="blockIVPToggle"><span class="cec-settings-slider"></span></label></div>
                                 </div>
                             </div>
 
@@ -2654,13 +2761,13 @@ V53 > V54
                                 <h3 class="cec-settings-section-title">模板插入優化</h3>
                                 <div class="cec-settings-option">
                                     <div class="cec-settings-option-main">
-                                        <label for="postInsertionEnhancementsToggle" class="cec-settings-label">啟用模板插入後增強處理</label>
+                                        <label for="postInsertionEnhancementsToggle" class="cec-settings-label">啟用模板插入後增強處理 <span class="cec-badge-instant">無需刷新</span></label>
                                         <label class="cec-settings-switch"><input type="checkbox" id="postInsertionEnhancementsToggle"><span class="cec-settings-slider"></span></label>
                                     </div>
                                     <p class="cec-settings-description">啟用後，將自動附加智能粘貼、精準定位光標並應用視覺偏移。</p>
                                 </div>
                                 <div class="cec-settings-option">
-                                    <label class="cec-settings-label" style="margin-bottom: 8px;">模板插入位置策略</label>
+                                    <label class="cec-settings-label" style="margin-bottom: 8px;">模板插入位置策略 <span class="cec-badge-instant">無需刷新</span></label>
                                     <div class="cec-settings-radio-group" id="templateInsertionModeGroup">
                                         <label><input type="radio" name="insertionMode" value="logo"> UPS Logo 圖標下方插入</label>
                                         <p class="cec-settings-description">自動將模板插入到簽名檔下方，確保位置統一（推薦）。</p>
@@ -2669,14 +2776,43 @@ V53 > V54
                                     </div>
                                 </div>
                                 <div class="cec-settings-option">
-                                    <label for="cursorPositionInput" class="cec-settings-label">光標定位於第 N 個換行符前</label>
-                                    <input type="number" id="cursorPositionInput" class="cec-settings-input" style="width: 80px; margin-top: 4px;">
-                                    <p class="cec-settings-description">默認為 4。此設置僅在“增強處理”啟用時生效。</p>
+                                    <label for="cursorPositionInput" class="cec-settings-label">光標定位於第 N 個換行符前 <span class="cec-badge-instant">無需刷新</span></label>
+                                    <input type="number" min="1" id="cursorPositionInput" class="cec-settings-input" style="width: 80px; margin-top: 4px;">
+                                    <p class="cec-settings-description">默認為 5。此設置僅在“增強處理”啟用時生效。</p>
                                 </div>
                             </div>
+
+                            <!-- [位置調整] 其他輔助移至上方 -->
                             <hr class="cec-settings-divider">
                             <div class="cec-settings-section">
-                                <h3 class="cec-settings-section-title">自動化評論文本</h3>
+                                <h3 class="cec-settings-section-title">其他輔助</h3>
+                                <div class="cec-settings-option">
+                                    <div class="cec-settings-option-main">
+                                        <label for="autoScrollActionButtonsToggle" class="cec-settings-label">快捷按鈕注入後自動下移網頁 <span class="cec-badge-instant">無需刷新</span></label>
+                                        <label class="cec-settings-switch">
+                                            <input type="checkbox" id="autoScrollActionButtonsToggle">
+                                            <span class="cec-settings-slider"></span>
+                                        </label>
+                                    </div>
+                                    <p class="cec-settings-description">在注入快捷按鈕後，自動將網頁下移 111px，以便查看被遮擋的內容。</p>
+                                </div>
+                                <hr class="cec-settings-divider">
+                                <div class="cec-settings-option">
+                                    <div class="cec-settings-option-main">
+                                        <label for="autoLoadAllUpdatesToggle" class="cec-settings-label">自動加載 Updates 全部內容 (背景無感) <span class="cec-badge-refresh">需刷新</span></label>
+                                        <label class="cec-settings-switch">
+                                            <input type="checkbox" id="autoLoadAllUpdatesToggle">
+                                            <span class="cec-settings-slider"></span>
+                                        </label>
+                                    </div>
+                                    <p class="cec-settings-description">進入 Case 頁面 2 秒後，自動背景觸發 Updates 歷史內容加載（最多 5 次）。</p>
+                                </div>
+                            </div>
+
+                            <!-- [位置調整] 自動化評論文本移至下方 (因為需刷新頁面生效) -->
+                            <hr class="cec-settings-divider">
+                            <div class="cec-settings-section">
+                                <h3 class="cec-settings-section-title">自動化評論文本 <span class="cec-badge-refresh">需刷新</span></h3>
                                 <p class="cec-settings-description" style="margin-top:-12px; margin-bottom:12px;">為 "I Want To..." 自動化按鈕設置多個評論選項。</p>
                                 <div class="cec-settings-comment-group">
                                     <label class="cec-settings-label">Re-Open Case</label>
@@ -2694,27 +2830,13 @@ V53 > V54
                                     <button class="cec-settings-add-comment-button" data-key="documentContact">+ 添加選項</button>
                                 </div>
                             </div>
-
-                            <hr class="cec-settings-divider">
-                            <div class="cec-settings-section">
-                                <h3 class="cec-settings-section-title">彈窗輔助</h3>
-                                <div class="cec-settings-option">
-                                    <div class="cec-settings-option-main">
-                                        <label for="autoScrollActionButtonsToggle" class="cec-settings-label">快捷按鈕注入後自動下移網頁</label>
-                                        <label class="cec-settings-switch">
-                                            <input type="checkbox" id="autoScrollActionButtonsToggle">
-                                            <span class="cec-settings-slider"></span>
-                                        </label>
-                                    </div>
-                                    <p class="cec-settings-description">在注入快捷按鈕後，自動將網頁下移 111px，以便查看被遮擋的內容。</p>
-                                </div>
-                            </div>
                         </div>
 
+                        <!-- 快捷按鈕 Tab -->
                         <div id="tab-buttons" class="cec-settings-tab-content">
                             <div class="cec-settings-section">
-                                <h3 class="cec-settings-section-title">按鈕列表 <span class="cec-settings-refresh-hint">(需刷新生效)</span></h3>
-                                <p class="cec-settings-description" style="margin-top:-12px; margin-bottom:12px;">拖拽 &#9776; 可排序</p>
+                                <h3 class="cec-settings-section-title">按鈕列表 <span class="cec-badge-refresh">需刷新</span></h3>
+                                <p class="cec-settings-description" style="margin-top:-12px; margin-bottom:12px;">拖拽 &#9776; 可排序。所有修改需刷新頁面後生效。</p>
                                 <ul id="button-config-list" class="cec-settings-button-list"></ul>
                                 <div class="cec-settings-button-bar">
                                     <button id="add-new-button" class="cec-settings-action-button">+ 添加新按鈕</button>
@@ -2723,13 +2845,14 @@ V53 > V54
                             </div>
                         </div>
 
+                        <!-- PCA Tab -->
                         <div id="tab-pca" class="cec-settings-tab-content">
                             <div class="cec-settings-section">
                                 <h3 class="cec-settings-section-title">預付 / 開查 case</h3>
 
                                 <div class="cec-settings-option">
                                     <div class="cec-settings-option-main">
-                                        <label for="pcaDoNotClosePromptToggle" class="cec-settings-label">Do Not Close提醒</label>
+                                        <label for="pcaDoNotClosePromptToggle" class="cec-settings-label">Do Not Close提醒 <span class="cec-badge-instant">無需刷新</span></label>
                                         <label class="cec-settings-switch"><input type="checkbox" id="pcaDoNotClosePromptToggle"><span class="cec-settings-slider"></span></label>
                                     </div>
                                     <p class="cec-settings-description">命中【預付/開查】時彈窗提示是否勾選 “Send and Do Not Close”。</p>
@@ -2737,23 +2860,83 @@ V53 > V54
 
                                 <div class="cec-settings-option">
                                     <div class="cec-settings-option-main">
-                                        <label for="pcaCaseListHintToggle" class="cec-settings-label">Case列表提示</label>
+                                        <label for="pcaCaseListHintToggle" class="cec-settings-label">Case列表提示 <span class="cec-badge-refresh">需刷新</span></label>
                                         <label class="cec-settings-switch"><input type="checkbox" id="pcaCaseListHintToggle"><span class="cec-settings-slider"></span></label>
                                     </div>
                                     <p class="cec-settings-description">在 Case 列表頁，優先顯示「開查/預付 + X天X時X分」。</p>
                                 </div>
                             </div>
                         </div>
+                    </div>
+                    <!-- Toast Container -->
+                    <div id="cec-settings-toast" class="cec-settings-toast"></div>
+                </div>
+            </div>
         `;
 
         const modalCSS = `
+            .cec-badge-refresh {
+                display: inline-block;
+                background: #fff03f;
+                color: #555;
+                font-size: 10px;
+                padding: 1px 4px;
+                border-radius: 4px;
+                vertical-align: middle;
+                margin-left: 6px;
+                font-weight: bold;
+                border: 1px solid #e6d306;
+            }
+            .cec-badge-instant {
+                display: inline-block;
+                background: #e6fffa;
+                color: #047481;
+                font-size: 10px;
+                padding: 1px 4px;
+                border-radius: 4px;
+                vertical-align: middle;
+                margin-left: 6px;
+                font-weight: bold;
+                border: 1px solid #b2f5ea;
+            }
+            .cec-settings-refresh-banner {
+                background-color: #fef3c7;
+                color: #744210;
+                padding: 10px 16px;
+                font-size: 0.9rem;
+                border-radius: 8px 8px 0 0;
+                display: none; /* 默認隱藏 */
+                align-items: center;
+                border-bottom: 1px solid #fcd34d;
+                animation: slideDown 0.3s ease;
+            }
+            .cec-settings-refresh-banner.show {
+                display: flex;
+            }
+            .cec-settings-refresh-banner a {
+                color: #0070d2;
+                font-weight: bold;
+                text-decoration: underline;
+                cursor: pointer;
+            }
+            @keyframes slideDown {
+                from { opacity: 0; transform: translateY(-10px); }
+                to { opacity: 1; transform: translateY(0); }
+            }
+
             .cec-settings-comment-group {
                 margin-bottom: 20px;
+                padding: 12px;
+                background: #f8f9fa;
+                border-radius: 6px;
+                border: 1px solid #eee;
             }
             .cec-settings-comment-group .cec-settings-label {
-                font-weight: 600;
+                font-weight: 700;
                 margin-bottom: 8px;
                 display: block;
+                color: #333;
+                font-size: 0.95rem;
             }
             .cec-settings-comment-list {
                 list-style: none;
@@ -2764,27 +2947,44 @@ V53 > V54
                 display: flex;
                 align-items: center;
                 margin-bottom: 8px;
+                transition: background 0.2s;
             }
             .cec-settings-comment-item input {
                 flex-grow: 1;
                 margin-right: 8px;
             }
             .cec-settings-delete-comment-button {
-                background: none;
-                border: none;
+                background: white;
+                border: 1px solid #ddd;
                 cursor: pointer;
                 color: #c23934;
-                font-size: 1.2rem;
-                padding: 0 4px;
+                width: 30px;
+                height: 30px;
+                border-radius: 4px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                transition: all 0.2s;
+            }
+            .cec-settings-delete-comment-button:hover {
+                background: #c23934;
+                color: white;
+                border-color: #c23934;
             }
             .cec-settings-add-comment-button {
-                background: none;
+                background: white;
                 border: 1px dashed #0070d2;
                 color: #0070d2;
-                padding: 4px 12px;
+                padding: 6px 12px;
                 border-radius: 4px;
                 cursor: pointer;
-                margin-top: 4px;
+                margin-top: 6px;
+                width: 100%;
+                text-align: center;
+                transition: background 0.2s;
+            }
+            .cec-settings-add-comment-button:hover {
+                background: #f0f8ff;
             }
             .cec-settings-backdrop {
                 position: fixed;
@@ -2804,14 +3004,16 @@ V53 > V54
             .cec-settings-content {
                 background: #f3f3f3;
                 border-radius: 8px;
-                box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+                box-shadow: 0 5px 25px rgba(0, 0, 0, 0.2);
                 width: 90%;
-                max-width: 600px;
+                max-width: 620px;
                 font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
                 transform: scale(.95);
                 transition: transform .3s ease;
                 display: flex;
                 flex-direction: column;
+                max-height: 85vh;
+                position: relative;
             }
             .cec-settings-header {
                 display: flex;
@@ -2820,12 +3022,19 @@ V53 > V54
                 padding: 16px 24px;
                 border-bottom: 1px solid #e0e0e0;
                 background: #fff;
-                border-radius: 8px 8px 0 0;
             }
+            .cec-settings-refresh-banner + .cec-settings-header {
+                 border-radius: 0;
+            }
+            .cec-settings-header:first-child {
+                 border-radius: 8px 8px 0 0;
+            }
+
             .cec-settings-header h2 {
                 margin: 0;
-                font-size: 1.15rem;
+                font-size: 1.25rem;
                 color: #333;
+                font-weight: 600;
             }
             #cec-settings-close {
                 background: 0 0;
@@ -2834,72 +3043,80 @@ V53 > V54
                 color: #888;
                 cursor: pointer;
                 line-height: 1;
-                padding: 0;
+                padding: 0 0 4px 0;
+                transition: color 0.2s;
+            }
+            #cec-settings-close:hover {
+                color: #333;
             }
             .cec-settings-body {
                 padding: 16px 24px 24px;
-                max-height: 75vh;
                 overflow-y: auto;
+                flex-grow: 1;
             }
             .cec-settings-tabs {
                 display: flex;
                 border-bottom: 2px solid #e0e0e0;
                 margin-bottom: 20px;
+                gap: 5px;
             }
             .cec-settings-tab-button {
                 background: none;
                 border: none;
-                padding: 10px 16px;
+                padding: 10px 14px;
                 cursor: pointer;
-                font-size: 1rem;
-                color: #555;
+                font-size: 0.95rem;
+                color: #666;
                 border-bottom: 3px solid transparent;
                 margin-bottom: -2px;
+                transition: all 0.2s;
+                font-weight: 500;
+                border-radius: 4px 4px 0 0;
+            }
+            .cec-settings-tab-button:hover {
+                background-color: rgba(0,0,0,0.03);
+                color: #0070d2;
             }
             .cec-settings-tab-button.active {
                 color: #0070d2;
                 border-bottom-color: #0070d2;
-                font-weight: 600;
+                font-weight: 700;
+                background-color: #fff;
             }
             .cec-settings-tab-content {
                 display: none;
             }
             .cec-settings-tab-content.active {
                 display: block;
-                animation: fadeIn .3s ease;
+                animation: fadeIn .25s ease;
             }
             @keyframes fadeIn {
-                from { opacity: 0; }
-                to { opacity: 1; }
+                from { opacity: 0; transform: translateY(5px); }
+                to { opacity: 1; transform: translateY(0); }
             }
             .cec-settings-section {
                 background: #fff;
                 padding: 20px;
-                border-radius: 6px;
-                box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+                border-radius: 8px;
+                box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
                 margin-bottom: 20px;
+                border: 1px solid #e5e5e5;
             }
             .cec-settings-section-title {
                 font-size: 1rem;
-                font-weight: 600;
-                color: #333;
+                font-weight: 700;
+                color: #2c3e50;
                 margin: 0 0 16px;
-                padding-bottom: 8px;
-                border-bottom: 1px solid #eee;
+                padding-bottom: 10px;
+                border-bottom: 1px solid #f0f0f0;
             }
             .cec-settings-divider {
                 border: 0;
                 border-top: 1px solid #e0e0e0;
                 margin: 20px 0;
             }
-            .cec-settings-refresh-hint {
-                color: #999;
-                font-size: 0.8rem;
-                font-weight: normal;
-                margin-left: 8px;
-            }
             .cec-settings-option {
-                padding: 8px 0;
+                padding: 10px 0;
             }
             .cec-settings-option-main {
                 display: flex;
@@ -2909,11 +3126,13 @@ V53 > V54
             .cec-settings-label {
                 color: #333;
                 flex-grow: 1;
+                font-weight: 500;
             }
             .cec-settings-description {
-                color: #777;
+                color: #666;
                 font-size: 0.85rem;
-                margin-top: 4px;
+                margin-top: 6px;
+                line-height: 1.4;
             }
             .cec-settings-input {
                 width: 100%;
@@ -2922,25 +3141,41 @@ V53 > V54
                 border-radius: 4px;
                 font-size: .95rem;
                 box-sizing: border-box;
+                transition: border 0.2s, box-shadow 0.2s;
+            }
+            .cec-settings-input:focus {
+                border-color: #0070d2;
+                outline: none;
+                box-shadow: 0 0 0 1px #0070d2;
+            }
+            .cec-settings-input.cec-input-success {
+                border-color: #2e844a;
+                background-color: #f0fff4;
+                animation: flashGreen 1s;
+            }
+            .cec-settings-input.cec-input-error {
+                border-color: #c23934;
+                background-color: #fff0f0;
+            }
+            @keyframes flashGreen {
+                0% { box-shadow: 0 0 5px #2e844a; }
+                100% { box-shadow: none; }
             }
             .cec-settings-input-group {
                 display: flex;
                 align-items: center;
             }
             .cec-settings-input-group input {
-                width: 80px;
+                width: 90px;
                 text-align: right;
-            }
-            .cec-settings-input-group span {
-                margin-left: 8px;
-                color: #777;
             }
             .cec-settings-option-grid {
                 display: grid;
                 grid-template-columns: 1fr auto;
-                gap: 12px;
+                gap: 15px;
                 align-items: center;
             }
+            /* Switch Styles */
             .cec-settings-switch {
                 position: relative;
                 display: inline-block;
@@ -2962,7 +3197,7 @@ V53 > V54
                 bottom: 0;
                 background-color: #ccc;
                 border-radius: 24px;
-                transition: .4s;
+                transition: .3s cubic-bezier(0.4, 0.0, 0.2, 1);
             }
             .cec-settings-slider:before {
                 position: absolute;
@@ -2973,7 +3208,8 @@ V53 > V54
                 bottom: 3px;
                 background-color: #fff;
                 border-radius: 50%;
-                transition: .4s;
+                transition: .3s cubic-bezier(0.4, 0.0, 0.2, 1);
+                box-shadow: 0 1px 3px rgba(0,0,0,0.3);
             }
             input:checked + .cec-settings-slider {
                 background-color: #0070d2;
@@ -2981,42 +3217,58 @@ V53 > V54
             input:checked + .cec-settings-slider:before {
                 transform: translateX(20px);
             }
+            /* Radio Group */
             .cec-settings-radio-group label {
                 display: block;
-                margin-bottom: 4px;
+                margin-bottom: 6px;
+                font-weight: 500;
+                cursor: pointer;
             }
             .cec-settings-radio-group input {
                 margin-right: 8px;
+                vertical-align: middle;
             }
             .cec-settings-radio-group .cec-settings-description {
-                margin-left: 23px;
-                margin-bottom: 12px;
+                margin-left: 24px;
+                margin-bottom: 14px;
             }
+            /* Links & Buttons */
             .cec-settings-link-button {
                 background: none;
                 border: none;
                 color: #0070d2;
                 cursor: pointer;
-                text-decoration: underline;
+                text-decoration: none;
                 padding: 0;
                 font-size: 14px;
+                border-bottom: 1px dashed #0070d2;
+            }
+            .cec-settings-link-button:hover {
+                color: #005fb2;
+                border-bottom-style: solid;
             }
             .cec-settings-link-button.danger {
                 color: #c23934;
+                border-bottom-color: #c23934;
+            }
+            .cec-settings-link-button.danger:hover {
+                color: #8b0000;
             }
             .cec-settings-button-bar-inline {
                 display: flex;
                 align-items: center;
                 gap: 20px;
+                margin-top: 8px;
             }
+            /* Custom Clean Mode List */
             .cec-settings-custom-container {
                 max-height: 0;
                 overflow: hidden;
                 transition: max-height 0.3s ease-out;
             }
             .cec-settings-custom-container.expanded {
-                max-height: 300px;
-                margin-top: 10px;
+                max-height: 400px;
+                margin-top: 15px;
             }
             .cec-settings-custom-content {
                 background-color: #f9f9f9;
@@ -3027,116 +3279,162 @@ V53 > V54
                 padding: 15px;
                 display: grid;
                 grid-template-columns: 1fr 1fr;
-                gap: 10px;
+                gap: 12px;
             }
+            .cec-settings-custom-item {
+                display: flex;
+                align-items: center;
+                font-size: 13px;
+                cursor: pointer;
+            }
+            .cec-settings-custom-item input {
+                margin-right: 8px;
+            }
+            /* Button List & Drag */
             .cec-settings-button-list {
                 list-style: none;
                 padding: 0;
                 margin: 0;
-                min-height: 200px;
-                max-height: 600px;
+                min-height: 100px;
+                max-height: 500px;
                 overflow-y: auto;
-                border: 1px solid #eee;
-                border-radius: 4px;
-                padding: 5px;
+                border: 1px solid #e0e0e0;
+                border-radius: 6px;
+                padding: 8px;
+                background: #fafafa;
             }
             .cec-settings-button-item {
                 display: flex;
                 align-items: center;
-                padding: 8px 10px;
+                padding: 10px 12px;
                 border: 1px solid #ddd;
-                border-radius: 4px;
-                margin-bottom: 5px;
-                background: #fafafa;
-                transition: background-color 0.2s;
+                border-radius: 6px;
+                margin-bottom: 8px;
+                background: #fff;
+                transition: transform 0.2s, box-shadow 0.2s;
+            }
+            .cec-settings-button-item:last-child {
+                margin-bottom: 0;
             }
             .cec-settings-button-item.dragging {
                 opacity: 0.5;
                 background: #e0f0ff;
+                border: 1px dashed #0070d2;
             }
-            .cec-settings-drop-indicator {
-                border-top: 2px solid #0070d2 !important;
+            .cec-settings-drop-placeholder {
+                height: 44px;
+                background: #f0f8ff;
+                border: 2px dashed #0070d2;
+                border-radius: 6px;
+                margin-bottom: 8px;
             }
             .cec-settings-button-drag-handle {
                 cursor: grab;
-                color: #888;
-                margin-right: 10px;
+                color: #bbb;
+                margin-right: 12px;
+                font-size: 18px;
                 user-select: none;
             }
+            .cec-settings-button-drag-handle:hover {
+                color: #666;
+            }
             .cec-settings-button-name {
-                font-weight: bold;
+                font-weight: 600;
                 flex-grow: 1;
+                color: #333;
             }
             .cec-settings-button-actions button {
                 background: none;
                 border: none;
                 cursor: pointer;
                 margin-left: 8px;
-                padding: 4px;
+                padding: 6px;
+                border-radius: 4px;
+                transition: background 0.2s;
             }
-            .cec-settings-button-edit {
-                color: #0070d2;
+            .cec-settings-button-actions button:hover {
+                background: #f0f0f0;
             }
-            .cec-settings-button-delete {
-                color: #c23934;
-            }
+            .cec-settings-button-edit { color: #0070d2; }
+            .cec-settings-button-delete { color: #c23934; }
             .cec-settings-button-bar {
                 display: flex;
-                gap: 10px;
+                gap: 12px;
                 margin-top: 16px;
             }
             .cec-settings-action-button {
                 flex-grow: 1;
                 padding: 10px;
                 font-size: 1rem;
-                border-radius: 4px;
+                border-radius: 6px;
                 cursor: pointer;
                 background-color: #0070d2;
                 color: white;
                 border: 1px solid #0070d2;
+                font-weight: 600;
+                transition: background 0.2s;
+            }
+            .cec-settings-action-button:hover {
+                background-color: #005fb2;
             }
             .cec-settings-action-button.secondary {
-                background-color: #f3f3f3;
-                color: #333;
+                background-color: #fff;
+                color: #555;
                 border: 1px solid #ccc;
             }
+            .cec-settings-action-button.secondary:hover {
+                background-color: #f8f8f8;
+                color: #333;
+            }
+
+            /* Edit Modal (Nested) */
             .cec-edit-modal-backdrop {
                 position: absolute;
                 top: 0;
                 left: 0;
                 width: 100%;
                 height: 100%;
-                background: rgba(0, 0, 0, 0.3);
+                background: rgba(0, 0, 0, 0.4);
                 z-index: 10000;
                 display: flex;
                 justify-content: center;
                 align-items: center;
+                border-radius: 8px; /* Match parent content */
+                animation: fadeIn 0.2s ease;
             }
             .cec-edit-modal-content {
                 background: #fff;
-                padding: 20px;
-                border-radius: 6px;
+                padding: 24px;
+                border-radius: 8px;
                 width: 90%;
-                max-width: 450px;
-                box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+                max-width: 480px;
+                box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
             }
             .cec-edit-modal-content h3 {
-                margin: 0 0 16px;
+                margin: 0 0 20px;
+                font-size: 1.2rem;
+                color: #333;
             }
             .cec-edit-form {
                 display: grid;
                 grid-template-columns: 100px 1fr;
-                gap: 12px;
-                align-items: center;
+                gap: 15px;
+                align-items: start;
+            }
+            .cec-edit-form label {
+                padding-top: 8px;
+                font-weight: 600;
+                color: #555;
             }
             .cec-edit-form .input-wrapper {
                 display: flex;
                 flex-direction: column;
-                gap: 5px;
+                gap: 8px;
             }
             .cec-edit-form .input-row {
                 display: flex;
                 align-items: center;
+                gap: 5px;
             }
             .cec-edit-form .input-row input {
                 flex-grow: 1;
@@ -3146,36 +3444,51 @@ V53 > V54
                 display: flex;
                 justify-content: flex-end;
                 gap: 10px;
-                margin-top: 16px;
+                margin-top: 24px;
             }
+            /* Toast */
             .cec-settings-toast {
                 position: absolute;
-                bottom: 20px;
+                bottom: 30px;
                 left: 50%;
-                transform: translateX(-50%);
+                transform: translateX(-50%) translateY(20px);
                 background-color: #333;
                 color: #fff;
-                padding: 10px 20px;
-                border-radius: 20px;
-                font-size: 0.9rem;
+                padding: 12px 24px;
+                border-radius: 30px;
+                font-size: 0.95rem;
                 opacity: 0;
                 visibility: hidden;
-                transition: opacity 0.3s, visibility 0.3s;
+                transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+                box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+                z-index: 20000;
+                display: flex;
+                align-items: center;
+                gap: 8px;
             }
             .cec-settings-toast.show {
                 opacity: 1;
                 visibility: visible;
+                transform: translateX(-50%) translateY(0);
+            }
+            .cec-settings-toast.warning {
+                background-color: #ffb75d;
+                color: #333;
+                font-weight: bold;
+            }
+            .cec-settings-toast.success {
+                background-color: #2e844a;
             }
         `;
+
         document.body.insertAdjacentHTML('beforeend', modalHTML);
         const styleSheet = document.createElement("style");
         styleSheet.textContent = modalCSS;
         document.head.appendChild(styleSheet);
     }
 
-    /**
-    * @description 打開設置菜單，並初始化所有UI元素的事件監聽器和數據綁定。
-    */
+
+    // [定時/防抖 / 元素定位] 功能：`openSettingsModal`。
     function openSettingsModal() {
         if (!document.getElementById('cec-settings-modal')) {
             createSettingsUI();
@@ -3184,23 +3497,68 @@ V53 > V54
         const modal = document.getElementById('cec-settings-modal');
         const content = modal.querySelector('.cec-settings-content');
         const toast = document.getElementById('cec-settings-toast');
+        const refreshBanner = document.getElementById('cec-refresh-banner');
+        const refreshLink = document.getElementById('cec-refresh-link');
 
         // ---------------------------------------------------------
-        // [核心優化] 避免重複綁定事件：只在首次打開時綁定一次，之後僅刷新UI數據
+        // 核心邏輯：綁定事件與數據刷新
         // ---------------------------------------------------------
         if (!modal.dataset.cecSettingsBound) {
             modal.dataset.cecSettingsBound = 'true';
 
+            // --- 狀態管理 ---
+            let isRefreshNeeded = false;
             let toastTimer;
-            const showToast = (message = '設置已保存') => {
+
+            // --- 輔助函數：Toast 提示 ---
+            const showToast = (message = '設置已保存', type = 'success') => {
                 clearTimeout(toastTimer);
                 toast.textContent = message;
+                toast.className = 'cec-settings-toast'; // Reset classes
+                if (type === 'warning') toast.classList.add('warning');
+                else toast.classList.add('success');
+
+                // 添加圖標
+                const iconMap = {
+                    'success': '✓',
+                    'warning': '!'
+                };
+                toast.innerHTML = `<span style="font-weight:bold; font-size:1.2em;">${iconMap[type] || ''}</span> ${message}`;
+
                 toast.classList.add('show');
-                toastTimer = setTimeout(() => toast.classList.remove('show'), 2000); // 2000ms: toast 顯示時長。
+                toastTimer = setTimeout(() => toast.classList.remove('show'), 2500);
             };
 
+            // --- 輔助函數：標記需要刷新 ---
+            const markAsRefreshNeeded = () => {
+                if (!isRefreshNeeded) {
+                    isRefreshNeeded = true;
+                    refreshBanner.classList.add('show');
+                }
+            };
+
+            // --- 刷新頁面鏈接 ---
+            if (refreshLink) {
+                refreshLink.addEventListener('click', () => location.reload());
+            }
+
+            // --- 輔助函數：處理通用設置變更 ---
+            const handleSettingChange = (key, value, needsRefresh = false) => {
+                GM_setValue(key, value);
+                // 同步更新運行時配置
+                RUNTIME_CONFIG[key] = value;
+
+                if (needsRefresh) {
+                    markAsRefreshNeeded();
+                    showToast('設置已保存 (需刷新頁面生效)', 'warning');
+                } else {
+                    showToast('設置已保存', 'success');
+                }
+                Log.info('UI.Settings', `設置已保存: ${key} = ${value} (Refresh: ${needsRefresh})`);
+            };
+
+            // [事件監聽 / 元素定位] 功能：`settings`。
             const settings = {
-                showToast,
                 // ---- 標籤頁 ----
                 initTabs: () => {
                     const tabs = modal.querySelectorAll('.cec-settings-tab-button');
@@ -3235,31 +3593,38 @@ V53 > V54
                 renderButtonList: null,
                 saveButtons: null,
                 draggedItem: null,
-                lastIndicatorElement: null,
+                placeholderElement: null, // 用於拖拽占位
                 getDragAfterElement: null,
 
                 refresh: null
             };
 
-            // 標籤頁初始化
+            // 初始化標籤頁
             settings.initTabs();
 
-            // 關閉事件 (避免重複綁定)
-            document.getElementById('cec-settings-close').addEventListener('click', closeSettingsModal);
+            // 關閉事件
+            const closeBtn = document.getElementById('cec-settings-close');
+            closeBtn.addEventListener('click', closeSettingsModal);
 
+            // 點擊遮罩關閉
             let mouseDownTarget = null;
             modal.addEventListener('mousedown', (e) => {
-                if (e.target === modal) {
-                    mouseDownTarget = e.target;
-                } else {
-                    mouseDownTarget = null;
-                }
+                if (e.target === modal) mouseDownTarget = e.target;
+                else mouseDownTarget = null;
             });
             modal.addEventListener('mouseup', (e) => {
-                if (e.target === mouseDownTarget && e.target === modal) {
-                    closeSettingsModal();
-                }
+                if (e.target === mouseDownTarget && e.target === modal) closeSettingsModal();
                 mouseDownTarget = null;
+            });
+
+            // ESC 鍵關閉
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape' && modal.style.display === 'flex') {
+                    // 確保沒有打開編輯子窗口時才關閉主窗口
+                    if (!document.querySelector('.cec-edit-modal-backdrop')) {
+                        closeSettingsModal();
+                    }
+                }
             });
 
             // -----------------------
@@ -3281,11 +3646,8 @@ V53 > V54
             };
 
             cleanModeToggle.onchange = () => {
-                const value = cleanModeToggle.checked;
-                GM_setValue('cleanModeEnabled', value);
+                handleSettingChange('cleanModeEnabled', cleanModeToggle.checked, true); // 需要刷新才能完全清除/應用某些樣式
                 toggleCleanModeStyles();
-                Log.info('UI.Settings', `設置已保存: cleanModeEnabled = ${value}`);
-                showToast();
             };
 
             cleanModeCustomToggle.addEventListener('click', () => {
@@ -3298,24 +3660,23 @@ V53 > V54
                     settings.currentUserConfig[e.target.dataset.id] = e.target.checked;
                     GM_setValue('cleanModeUserConfig', settings.currentUserConfig);
                     toggleCleanModeStyles();
-                    Log.info('UI.Settings', `設置已保存: cleanModeUserConfig updated for ${e.target.dataset.id}`);
-                    showToast();
+                    showToast('自定義屏蔽項已更新', 'success');
                 }
             });
 
+            // [優化] 使用自定義確認
             resetCleanModeButton.addEventListener('click', () => {
-                if (confirm('您確定要將組件屏蔽列表恢復為默認設置嗎？')) {
+                if (confirm('確定要將組件屏蔽列表恢復為默認嗎？此操作不可撤銷。')) {
                     settings.currentUserConfig = { ...settings.defaultCleanModeConfig };
                     GM_setValue('cleanModeUserConfig', settings.currentUserConfig);
                     settings.renderCleanModeList();
                     toggleCleanModeStyles();
-                    Log.info('UI.Settings', `"組件屏蔽" 配置已恢復為默認值。`);
-                    showToast('組件屏蔽列表已恢復默認');
+                    showToast('組件屏蔽已恢復默認', 'success');
                 }
             });
 
             // -----------------------
-            // 自動填充文本處理器
+            // 自動填充文本處理器 (優化交互)
             // -----------------------
             settings.migrateAutoFillTexts = () => {
                 let current = GM_getValue('iwtAutoFillTexts', DEFAULTS.iwtAutoFillTexts);
@@ -3326,10 +3687,7 @@ V53 > V54
                         changed = true;
                     }
                 }
-                if (changed) {
-                    GM_setValue('iwtAutoFillTexts', current);
-                    Log.info('UI.Settings', '自動化評論文本設置已成功遷移到新格式。');
-                }
+                if (changed) GM_setValue('iwtAutoFillTexts', current);
                 return current;
             };
 
@@ -3339,9 +3697,13 @@ V53 > V54
                 items.forEach((text, index) => {
                     const li = document.createElement('li');
                     li.className = 'cec-settings-comment-item';
+                    // [優化] 添加動畫類
+                    li.style.animation = 'fadeIn 0.3s ease';
                     li.innerHTML = `
-                        <input type="text" class="cec-settings-input" data-index="${index}" value="${text}">
-                        <button class="cec-settings-delete-comment-button" data-index="${index}" title="刪除">×</button>
+                        <input type="text" class="cec-settings-input" data-index="${index}" value="${text}" placeholder="輸入評論文本...">
+                        <button class="cec-settings-delete-comment-button" data-index="${index}" title="刪除">
+                           <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+                        </button>
                     `;
                     listElement.appendChild(li);
                 });
@@ -3349,46 +3711,63 @@ V53 > V54
 
             settings.setupCommentListHandlers = (key, listElement, addButton) => {
                 settings.renderCommentList(key, listElement);
+
                 addButton.addEventListener('click', () => {
                     settings.autoFillTexts[key].push('');
                     GM_setValue('iwtAutoFillTexts', settings.autoFillTexts);
                     settings.renderCommentList(key, listElement);
-                    showToast();
+                    // [優化] 自動聚焦最後一個輸入框
+                    const inputs = listElement.querySelectorAll('input');
+                    if(inputs.length > 0) inputs[inputs.length - 1].focus();
+                    showToast('已添加新選項', 'success');
                 });
+
                 listElement.addEventListener('change', (e) => {
                     if (e.target.tagName === 'INPUT') {
                         const index = parseInt(e.target.dataset.index, 10);
                         settings.autoFillTexts[key][index] = e.target.value;
                         GM_setValue('iwtAutoFillTexts', settings.autoFillTexts);
-                        showToast();
+                        e.target.classList.add('cec-input-success');
+                        setTimeout(() => e.target.classList.remove('cec-input-success'), 1000);
+                        showToast('選項已保存', 'success');
                     }
                 });
+
                 listElement.addEventListener('click', (e) => {
-                    if (e.target.classList.contains('cec-settings-delete-comment-button')) {
-                        const index = parseInt(e.target.dataset.index, 10);
-                        settings.autoFillTexts[key].splice(index, 1);
-                        GM_setValue('iwtAutoFillTexts', settings.autoFillTexts);
-                        settings.renderCommentList(key, listElement);
-                        showToast();
+                    const btn = e.target.closest('.cec-settings-delete-comment-button');
+                    if (btn) {
+                        // [優化] 刪除確認
+                        if (confirm('確定要刪除這條評論選項嗎？')) {
+                            const index = parseInt(btn.dataset.index, 10);
+                            const li = btn.closest('li');
+                            // 簡單的刪除動畫
+                            li.style.opacity = '0';
+                            li.style.transform = 'translateX(20px)';
+                            setTimeout(() => {
+                                settings.autoFillTexts[key].splice(index, 1);
+                                GM_setValue('iwtAutoFillTexts', settings.autoFillTexts);
+                                settings.renderCommentList(key, listElement);
+                                showToast('選項已刪除', 'success');
+                            }, 200);
+                        }
                     }
                 });
             };
 
-            // 初始化評論列表事件（僅綁定一次），後續打開僅刷新列表內容
             settings.autoFillTexts = settings.migrateAutoFillTexts();
             settings.setupCommentListHandlers('reOpen', document.getElementById('reOpen-list'), document.querySelector('[data-key=\"reOpen\"]'));
             settings.setupCommentListHandlers('closeCase', document.getElementById('closeCase-list'), document.querySelector('[data-key=\"closeCase\"]'));
             settings.setupCommentListHandlers('documentContact', document.getElementById('docContact-list'), document.querySelector('[data-key=\"documentContact\"]'));
 
             // -----------------------
-            // 按鈕配置處理器
+            // 按鈕配置處理器 (拖拽與視覺優化)
             // -----------------------
             const buttonList = document.getElementById('button-config-list');
 
             settings.saveButtons = () => {
                 GM_setValue('actionButtons', settings.currentButtons);
-                Log.info('UI.Settings', '設置已保存: actionButtons updated');
-                showToast();
+                markAsRefreshNeeded();
+                showToast('按鈕配置已保存 (需刷新)', 'warning');
             };
 
             settings.renderButtonList = () => {
@@ -3396,9 +3775,10 @@ V53 > V54
                 settings.currentButtons.forEach((button) => {
                     const listItem = document.createElement('li');
                     listItem.className = 'cec-settings-button-item';
+                    listItem.draggable = true;
                     listItem.dataset.id = button.id;
                     listItem.innerHTML = `
-                        <span class="cec-settings-button-drag-handle" draggable="true">&#9776;</span>
+                        <span class="cec-settings-button-drag-handle">&#9776;</span>
                         <span class="cec-settings-button-name">${button.name}</span>
                         <div class="cec-settings-button-actions">
                             <button class="cec-settings-button-edit" title="編輯">✏️</button>
@@ -3430,10 +3810,16 @@ V53 > V54
                 }, { offset: Number.NEGATIVE_INFINITY }).element;
             };
 
+            // 拖拽邏輯優化
             buttonList.addEventListener('dragstart', (e) => {
-                if (e.target.classList.contains('cec-settings-button-drag-handle')) {
-                    settings.draggedItem = e.target.closest('.cec-settings-button-item');
-                    setTimeout(() => settings.draggedItem.classList.add('dragging'), 0);
+                if (e.target.classList.contains('cec-settings-button-item')) {
+                    settings.draggedItem = e.target;
+                    setTimeout(() => e.target.classList.add('dragging'), 0);
+                    // 創建佔位符
+                    settings.placeholderElement = document.createElement('div');
+                    settings.placeholderElement.className = 'cec-settings-drop-placeholder';
+                } else {
+                    e.preventDefault();
                 }
             });
 
@@ -3441,40 +3827,35 @@ V53 > V54
                 e.preventDefault();
                 if (!settings.draggedItem) return;
                 const afterElement = settings.getDragAfterElement(buttonList, e.clientY);
-                if (settings.lastIndicatorElement) settings.lastIndicatorElement.classList.remove('cec-settings-drop-indicator');
                 if (afterElement) {
-                    afterElement.classList.add('cec-settings-drop-indicator');
-                    settings.lastIndicatorElement = afterElement;
+                    buttonList.insertBefore(settings.placeholderElement, afterElement);
                 } else {
-                    settings.lastIndicatorElement = null;
+                    buttonList.appendChild(settings.placeholderElement);
                 }
             });
 
             buttonList.addEventListener('dragend', () => {
-                if (settings.draggedItem) settings.draggedItem.classList.remove('dragging');
-                if (settings.lastIndicatorElement) settings.lastIndicatorElement.classList.remove('cec-settings-drop-indicator');
-                settings.draggedItem = null;
-                settings.lastIndicatorElement = null;
-            });
+                if (settings.draggedItem) {
+                    settings.draggedItem.classList.remove('dragging');
+                    if (settings.placeholderElement && settings.placeholderElement.parentNode) {
+                        settings.placeholderElement.parentNode.insertBefore(settings.draggedItem, settings.placeholderElement);
+                        settings.placeholderElement.remove();
+                    }
+                    settings.draggedItem = null;
+                    settings.placeholderElement = null;
 
-            buttonList.addEventListener('drop', (e) => {
-                e.preventDefault();
-                if (!settings.draggedItem) return;
-                const afterElement = settings.getDragAfterElement(buttonList, e.clientY);
-                if (afterElement) {
-                    buttonList.insertBefore(settings.draggedItem, afterElement);
-                } else {
-                    buttonList.appendChild(settings.draggedItem);
+                    // 排序並保存
+                    const newOrder = Array.from(buttonList.children).map(item => item.dataset.id);
+                    settings.currentButtons.sort((a, b) => newOrder.indexOf(a.id) - newOrder.indexOf(b.id));
+                    settings.saveButtons();
                 }
-                const newOrder = Array.from(buttonList.children).map(item => item.dataset.id);
-                settings.currentButtons.sort((a, b) => newOrder.indexOf(a.id) - newOrder.indexOf(b.id));
-                settings.saveButtons();
             });
 
             document.getElementById('add-new-button').addEventListener('click', () => {
+                // [設定/狀態持久化 / 事件監聽 / 定時/防抖] 功能：`newButton`。
                 const newButton = {
                     id: `btn-${Date.now()}`,
-                    name: 'NEW',
+                    name: 'NEW BUTTON',
                     category: [''],
                     subCategory: [''],
                     role: ['']
@@ -3482,15 +3863,16 @@ V53 > V54
                 settings.currentButtons.push(newButton);
                 settings.saveButtons();
                 settings.renderButtonList();
+                // 立即打開編輯
                 openButtonEditModal(newButton, settings.renderButtonList, settings.saveButtons);
             });
 
             document.getElementById('reset-buttons').addEventListener('click', () => {
-                if (confirm('確定要恢復為默認的快捷按鈕配置嗎？')) {
+                if (confirm('確定要恢復為默認的快捷按鈕配置嗎？自定義按鈕將丟失。')) {
                     settings.currentButtons = JSON.parse(JSON.stringify(DEFAULTS.actionButtons));
                     settings.saveButtons();
                     settings.renderButtonList();
-                    Log.info('UI.Settings', '"快捷按鈕" 配置已恢復為默認值。');
+                    showToast('按鈕已恢復默認', 'success');
                 }
             });
 
@@ -3498,231 +3880,121 @@ V53 > V54
             // 刷新函數 (每次打開時執行)
             // -----------------------
             settings.refresh = () => {
-                // 核心切換開關 / 輸入框
+                // 如果有未刷新的更改，保持 banner 顯示
+                if (isRefreshNeeded) refreshBanner.classList.add('show');
 
-                // 跟進面板切換開關 (默認：關閉)
-                const followUpPanelToggle = document.getElementById('followUpPanelToggle');
-                if (followUpPanelToggle) {
-                    followUpPanelToggle.checked = GM_getValue('followUpPanelEnabled', DEFAULTS.followUpPanelEnabled);
-                    followUpPanelToggle.onchange = () => {
-                        const value = followUpPanelToggle.checked;
-                        GM_setValue('followUpPanelEnabled', value);
-                        Log.info('UI.Settings', `設置已保存: followUpPanelEnabled = ${value}`);
-                        showToast();
-                    };
-                }
+                // 綁定輸入框通用邏輯 (數字校驗與樣式)
+                const bindInput = (id, key, minVal, allowText = false) => {
+                    const el = document.getElementById(id);
+                    if (!el) return;
+                    el.value = GM_getValue(key, DEFAULTS[key] || '');
 
-                const notifyOnRepliedCaseToggle = document.getElementById('notifyOnRepliedCaseToggle');
-                notifyOnRepliedCaseToggle.checked = GM_getValue('notifyOnRepliedCaseEnabled', DEFAULTS.notifyOnRepliedCaseEnabled);
-                notifyOnRepliedCaseToggle.onchange = () => {
-                    const value = notifyOnRepliedCaseToggle.checked;
-                    GM_setValue('notifyOnRepliedCaseEnabled', value);
-                    Log.info('UI.Settings', `設置已保存: notifyOnRepliedCaseEnabled = ${value}`);
-                    showToast();
-                };
-
-
-                const highlightExpiringCasesToggle = document.getElementById('highlightExpiringCasesToggle');
-                highlightExpiringCasesToggle.checked = GM_getValue('highlightExpiringCasesEnabled', false);
-                highlightExpiringCasesToggle.onchange = () => {
-                    const value = highlightExpiringCasesToggle.checked;
-                    GM_setValue('highlightExpiringCasesEnabled', value);
-                    Log.info('UI.Settings', `設置已保存: highlightExpiringCasesEnabled = ${value}`);
-                    showToast();
-                };
-
-                const pcaDoNotClosePromptToggle = document.getElementById('pcaDoNotClosePromptToggle');
-                pcaDoNotClosePromptToggle.checked = GM_getValue('pcaDoNotClosePromptEnabled', DEFAULTS.pcaDoNotClosePromptEnabled);
-                pcaDoNotClosePromptToggle.onchange = () => {
-                    const value = pcaDoNotClosePromptToggle.checked;
-                    GM_setValue('pcaDoNotClosePromptEnabled', value);
-                    Log.info('UI.Settings', `設置已保存: pcaDoNotClosePromptEnabled = ${value}`);
-                    showToast();
-                };
-
-                const pcaCaseListHintToggle = document.getElementById('pcaCaseListHintToggle');
-                pcaCaseListHintToggle.checked = GM_getValue('pcaCaseListHintEnabled', DEFAULTS.pcaCaseListHintEnabled);
-                pcaCaseListHintToggle.onchange = () => {
-                    const value = pcaCaseListHintToggle.checked;
-                    GM_setValue('pcaCaseListHintEnabled', value);
-                    try {
-                        const dataTable = findElementInShadows(document.body, 'lightning-datatable');
-                        const tbody = dataTable ? findElementInShadows(dataTable, 'tbody') : null;
-                        if (tbody) {
-                            injectPcaCaseListSortButtons(tbody);
+                    el.onchange = () => {
+                        let val = el.value;
+                        if (!allowText) {
+                            val = parseInt(val, 10);
+                            // 校驗：如果小於最小值，還原並報錯
+                            if (isNaN(val) || val < minVal) {
+                                el.classList.add('cec-input-error');
+                                setTimeout(() => el.classList.remove('cec-input-error'), 1000);
+                                el.value = GM_getValue(key, DEFAULTS[key]); // 還原
+                                showToast('輸入值無效', 'warning');
+                                return;
+                            }
                         } else {
-                            injectPcaCaseListSortButtons(null);
+                            val = val.trim();
                         }
-                    } catch (e) {
-                        // 忽略
-                    }
-                    Log.info('UI.Settings', `設置已保存: pcaCaseListHintEnabled = ${value}`);
-                    showToast();
+
+                        el.classList.add('cec-input-success');
+                        setTimeout(() => el.classList.remove('cec-input-success'), 1000);
+                        handleSettingChange(key, val, false); // 大部分輸入框不需要刷新，或即時生效
+
+                        // 特殊處理：高度改變後觸發重繪
+                        if (id === 'caseHistoryHeightInput') injectStyleOverrides();
+                    };
                 };
 
-                const autoAssignUserInput = document.getElementById('autoAssignUserInput');
-                autoAssignUserInput.value = GM_getValue('autoAssignUser', DEFAULTS.autoAssignUser);
-                autoAssignUserInput.onchange = () => {
-                    const value = autoAssignUserInput.value.trim();
-                    GM_setValue('autoAssignUser', value);
-                    Log.info('UI.Settings', `設置已保存: autoAssignUser = ${value}`);
-                    showToast();
+                // [設定/狀態持久化 / 元素定位] 功能：`bindToggle`。
+                const bindToggle = (id, key, needsRefresh) => {
+                    const el = document.getElementById(id);
+                    if (!el) return;
+                    el.checked = GM_getValue(key, DEFAULTS[key]);
+                    el.onchange = () => handleSettingChange(key, el.checked, needsRefresh);
                 };
 
+                // [設定/狀態持久化 / 元素定位] 功能：`bindRadio`。
+                const bindRadio = (groupName, key) => {
+                    const group = document.getElementById(groupName); // 其實是用 container 監聽
+                    if (!group) return;
+                    const currentVal = GM_getValue(key, 'pca');
+                    const radio = group.querySelector(`input[value="${currentVal}"]`);
+                    if (radio) radio.checked = true;
 
-                const autoWebQueryToggle = document.getElementById('autoWebQueryToggle');
-                autoWebQueryToggle.checked = GM_getValue('autoWebQueryEnabled', DEFAULTS.autoWebQueryEnabled);
-                autoWebQueryToggle.onchange = () => {
-                    const value = autoWebQueryToggle.checked;
-                    GM_setValue('autoWebQueryEnabled', value);
-                    Log.info('UI.Settings', `設置已保存: autoWebQueryEnabled = ${value}`);
-                    showToast();
+                    group.onchange = (e) => {
+                        if (e.target.name === 'highlightMode' || e.target.name === 'insertionMode') { // 根據 name 屬性判斷
+                             handleSettingChange(key, e.target.value, false);
+                        }
+                    };
                 };
 
-                const autoIVPQueryToggle = document.getElementById('autoIVPQueryToggle');
-                autoIVPQueryToggle.checked = GM_getValue('autoIVPQueryEnabled', DEFAULTS.autoIVPQueryEnabled);
-                autoIVPQueryToggle.onchange = () => {
-                    const value = autoIVPQueryToggle.checked;
-                    GM_setValue('autoIVPQueryEnabled', value);
-                    Log.info('UI.Settings', `設置已保存: autoIVPQueryEnabled = ${value}`);
-                    showToast();
-                };
+                // --- 綁定核心配置 ---
+                bindInput('autoAssignUserInput', 'autoAssignUser', 0, true);
 
-                const autoSwitchToggle = document.getElementById('autoSwitchToggle');
-                autoSwitchToggle.checked = GM_getValue('autoSwitchEnabled', DEFAULTS.autoSwitchEnabled);
-                autoSwitchToggle.onchange = () => {
-                    const value = autoSwitchToggle.checked;
-                    GM_setValue('autoSwitchEnabled', value);
-                    Log.info('UI.Settings', `設置已保存: autoSwitchEnabled = ${value}`);
-                    showToast();
-                };
+                // --- 綁定界面開關 ---
+                bindToggle('followUpPanelToggle', 'followUpPanelEnabled', true); // Panel 需要刷新重建
+                bindToggle('notifyOnRepliedCaseToggle', 'notifyOnRepliedCaseEnabled', true); // Cache 依賴刷新
+                bindToggle('highlightExpiringCasesEnabled', 'highlightExpiringCasesEnabled', true); // Observer 依賴
+                bindToggle('cleanModeToggle', 'cleanModeEnabled', false); // CSS 即時生效
 
-                const blockIVPToggle = document.getElementById('blockIVPToggle');
-                blockIVPToggle.checked = GM_getValue('blockIVPCard', DEFAULTS.blockIVPCard);
-                blockIVPToggle.onchange = () => {
-                    const value = blockIVPToggle.checked;
-                    GM_setValue('blockIVPCard', value);
-                    Log.info('UI.Settings', `設置已保存: blockIVPCard = ${value}`);
-                    showToast();
-                    if (value) handleIVPCardBlocking();
-                };
+                // --- 綁定界面高度 ---
+                bindInput('caseHistoryHeightInput', 'caseHistoryHeight', 0);
+                bindInput('caseDescriptionHeightInput', 'caseDescriptionHeight', 0);
+                bindInput('richTextEditorHeightInput', 'richTextEditorHeight', 0);
 
-                const sentinelCloseToggle = document.getElementById('sentinelCloseToggle');
-                sentinelCloseToggle.checked = GM_getValue('sentinelCloseEnabled', DEFAULTS.sentinelCloseEnabled);
-                sentinelCloseToggle.onchange = () => {
-                    const value = sentinelCloseToggle.checked;
-                    GM_setValue('sentinelCloseEnabled', value);
-                    Log.info('UI.Settings', `設置已保存: sentinelCloseEnabled = ${value}`);
-                    showToast();
-                };
+                // --- 綁定其他開關 ---
+                bindToggle('sentinelCloseToggle', 'sentinelCloseEnabled', false);
+                bindToggle('autoWebQueryToggle', 'autoWebQueryEnabled', false);
+                bindToggle('autoIVPQueryToggle', 'autoIVPQueryEnabled', false);
+                bindToggle('autoSwitchToggle', 'autoSwitchEnabled', false);
+                bindToggle('blockIVPToggle', 'blockIVPCard', true); // Observer 依賴，最好刷新
+                bindToggle('postInsertionEnhancementsToggle', 'postInsertionEnhancementsEnabled', false);
 
-                const postInsertionEnhancementsToggle = document.getElementById('postInsertionEnhancementsToggle');
-                postInsertionEnhancementsToggle.checked = GM_getValue('postInsertionEnhancementsEnabled', DEFAULTS.postInsertionEnhancementsEnabled);
-                postInsertionEnhancementsToggle.onchange = () => {
-                    const value = postInsertionEnhancementsToggle.checked;
-                    GM_setValue('postInsertionEnhancementsEnabled', value);
-                    Log.info('UI.Settings', `設置已保存: postInsertionEnhancementsEnabled = ${value}`);
-                    showToast();
-                };
+                // --- 綁定單選 ---
+                bindRadio('accountHighlightModeGroup', 'accountHighlightMode');
 
-                const insertionModeGroup = document.getElementById('templateInsertionModeGroup');
-                const currentInsertionMode = GM_getValue('templateInsertionMode', DEFAULTS.templateInsertionMode);
-                const modeRadio = insertionModeGroup.querySelector(`input[value="${currentInsertionMode}"]`);
-                if (modeRadio) modeRadio.checked = true;
-                insertionModeGroup.onchange = (e) => {
-                    if (e.target.name === 'insertionMode') {
-                        const value = e.target.value;
-                        GM_setValue('templateInsertionMode', value);
-                        Log.info('UI.Settings', `設置已保存: templateInsertionMode = ${value}`);
-                        showToast();
-                    }
-                };
+                // Template Insertion Mode Group logic
+                const tplGroup = document.getElementById('templateInsertionModeGroup');
+                const tplCurrent = GM_getValue('templateInsertionMode', DEFAULTS.templateInsertionMode);
+                const tplRadio = tplGroup.querySelector(`input[value="${tplCurrent}"]`);
+                if(tplRadio) tplRadio.checked = true;
+                tplGroup.onchange = (e) => handleSettingChange('templateInsertionMode', e.target.value, false);
 
-                const cursorPositionInput = document.getElementById('cursorPositionInput');
-                cursorPositionInput.value = GM_getValue('cursorPositionBrIndex', DEFAULTS.cursorPositionBrIndex);
-                cursorPositionInput.onchange = () => {
-                    const value = parseInt(cursorPositionInput.value, 10);
-                    const finalValue = (value && value > 0) ? value : DEFAULTS.cursorPositionBrIndex;
-                    cursorPositionInput.value = finalValue;
-                    GM_setValue('cursorPositionBrIndex', finalValue);
-                    Log.info('UI.Settings', `設置已保存: cursorPositionBrIndex = ${finalValue}`);
-                    showToast();
-                };
+                bindInput('cursorPositionInput', 'cursorPositionBrIndex', 1);
 
-                // 組件屏蔽
-                cleanModeToggle.checked = GM_getValue('cleanModeEnabled', DEFAULTS.cleanModeEnabled);
+                // --- 綁定輔助開關 ---
+                bindToggle('autoScrollActionButtonsToggle', 'autoScrollAfterActionButtons', false);
+                bindToggle('autoLoadAllUpdatesToggle', 'autoLoadAllUpdates', false);
+
+                // --- 綁定 PCA ---
+                bindToggle('pcaDoNotClosePromptToggle', 'pcaDoNotClosePromptEnabled', false);
+                bindToggle('pcaCaseListHintToggle', 'pcaCaseListHintEnabled', true); // Observer 依賴
+
+                // --- 刷新列表 ---
                 settings.renderCleanModeList();
-
-                // 賬戶高亮
-                const highlightModeGroup = document.getElementById('accountHighlightModeGroup');
-                const currentHighlightMode = GM_getValue('accountHighlightMode', 'pca');
-                const highlightRadio = highlightModeGroup.querySelector(`input[value="${currentHighlightMode}"]`);
-                if (highlightRadio) highlightRadio.checked = true;
-                highlightModeGroup.onchange = (e) => {
-                    if (e.target.name === 'highlightMode') {
-                        const value = e.target.value;
-                        GM_setValue('accountHighlightMode', value);
-                        Log.info('UI.Settings', `設置已保存: accountHighlightMode = ${value}`);
-                        showToast();
-                    }
-                };
-
-                // 高度設置
-                const caseHistoryInput = document.getElementById('caseHistoryHeightInput');
-                caseHistoryInput.value = GM_getValue('caseHistoryHeight', DEFAULTS.caseHistoryHeight);
-                caseHistoryInput.onchange = () => {
-                    const value = parseInt(caseHistoryInput.value) || DEFAULTS.caseHistoryHeight;
-                    GM_setValue('caseHistoryHeight', value);
-                    injectStyleOverrides();
-                    Log.info('UI.Settings', `設置已保存: caseHistoryHeight = ${value}`);
-                    showToast();
-                };
-
-                const caseDescInput = document.getElementById('caseDescriptionHeightInput');
-                caseDescInput.value = GM_getValue('caseDescriptionHeight', DEFAULTS.caseDescriptionHeight);
-                caseDescInput.onchange = () => {
-                    const value = parseInt(caseDescInput.value) || DEFAULTS.caseDescriptionHeight;
-                    GM_setValue('caseDescriptionHeight', value);
-                    Log.info('UI.Settings', `設置已保存: caseDescriptionHeight = ${value}`);
-                    showToast();
-                };
-
-                const richTextInput = document.getElementById('richTextEditorHeightInput');
-                richTextInput.value = GM_getValue('richTextEditorHeight', DEFAULTS.richTextEditorHeight);
-                richTextInput.onchange = () => {
-                    const value = parseInt(richTextInput.value) || DEFAULTS.richTextEditorHeight;
-                    GM_setValue('richTextEditorHeight', value);
-                    Log.info('UI.Settings', `設置已保存: richTextEditorHeight = ${value}`);
-                    showToast();
-                };
-
-                // 自動填充文本 (渲染)
                 settings.autoFillTexts = settings.migrateAutoFillTexts();
                 settings.renderCommentList('reOpen', document.getElementById('reOpen-list'));
                 settings.renderCommentList('closeCase', document.getElementById('closeCase-list'));
                 settings.renderCommentList('documentContact', document.getElementById('docContact-list'));
 
-                // 按鈕配置 (渲染)
                 settings.currentButtons = GM_getValue('actionButtons', JSON.parse(JSON.stringify(DEFAULTS.actionButtons)));
                 settings.renderButtonList();
             };
 
-            // 綁定自動下移開關
-            const autoScrollActionButtonsToggle = document.getElementById('autoScrollActionButtonsToggle');
-            if (autoScrollActionButtonsToggle) {
-                autoScrollActionButtonsToggle.checked = GM_getValue('autoScrollAfterActionButtons', DEFAULTS.autoScrollAfterActionButtons);
-                autoScrollActionButtonsToggle.onchange = () => {
-                    const value = autoScrollActionButtonsToggle.checked;
-                    GM_setValue('autoScrollAfterActionButtons', value);
-                    Log.info('UI.Settings', `設置已保存: autoScrollAfterActionButtons = ${value}`);
-                    showToast();
-                };
-            }
-            // 存儲設置對象
+            // 存儲設置對象以便再次調用刷新
             modal._cecSettings = settings;
         }
 
-        // 每次打開都刷新一次UI
+        // 每次打開都刷新一次UI數據
         if (modal._cecSettings && typeof modal._cecSettings.refresh === 'function') {
             modal._cecSettings.refresh();
         }
@@ -3735,17 +4007,14 @@ V53 > V54
         });
     }
 
-    /**
-    * @description 打開用於編輯單個快捷按鈕配置的彈窗。
 
-    * @param {object} button - 要編輯的按鈕配置對象。
-    * @param {Function} onSaveCallback - 保存後的回調函數（用於刷新列表）。
-    * @param {Function} saveFn - 執行保存操作的函數。
-    */
+
+    // [事件監聽] 功能：`openButtonEditModal`。
     function openButtonEditModal(button, onSaveCallback, saveFn) {
         const modalContainer = document.getElementById('cec-settings-modal');
         const editModal = document.createElement('div');
         editModal.className = 'cec-edit-modal-backdrop';
+        // [事件監聽] 功能：`fields`。
         const fields = {
             name: '按鈕名稱',
             category: 'Category',
@@ -3843,9 +4112,8 @@ V53 > V54
         });
     }
 
-    /**
-    * @description 關閉設置菜單。
-    */
+
+    // [設定/狀態持久化 / 定時/防抖 / 元素定位] 功能：`closeSettingsModal`。
     function closeSettingsModal() {
         const modal = document.getElementById('cec-settings-modal');
         const content = modal.querySelector('.cec-settings-content');
@@ -3861,11 +4129,7 @@ V53 > V54
     // SECTION: 核心功能邏輯 (Feature Logic)
     // =================================================================================
 
-    /**
-    * @description 在 Case 列表頁的 Search 輸入框左側注入「PCA提示排序 / 還原排序」按鈕（手動觸發）。
-    *              [折中方案] 排序依據來自 processCaseListRows 寫入的 row.dataset（不解析文字、不重讀緩存）。
-    * @param {HTMLTableSectionElement} tableBody - 要處理的表格 tbody 元素。
-    */
+
     function injectPcaCaseListSortButtons(tableBody) {
         try {
             const listHintEnabled = GM_getValue('pcaCaseListHintEnabled', DEFAULTS.pcaCaseListHintEnabled);
@@ -3914,6 +4178,7 @@ V53 > V54
             bar.style.marginRight = '8px';
             bar.style.zIndex = '1';
 
+            // [事件監聽 / 元素定位] 功能：`createLiButton`。
             const createLiButton = (id, label, title, handler) => {
                 const li = document.createElement('li');
                 li.className = 'slds-button slds-button--neutral slds-button_neutral';
@@ -3955,10 +4220,8 @@ V53 > V54
     }
 
 
-    /**
-    * @description 保存當前 tbody 的原始行順序（僅保存一次）。
-    * @param {HTMLTableSectionElement} tableBody - 表格 tbody。
-    */
+
+    // [元素定位] 功能：`snapshotPcaCaseListOriginalOrder`。
     function snapshotPcaCaseListOriginalOrder(tableBody) {
         if (pcaCaseListOriginalRowKeys && pcaCaseListOriginalRowKeys.length > 0) {
             return;
@@ -3967,11 +4230,8 @@ V53 > V54
         pcaCaseListOriginalRowKeys = rows.map(r => r.getAttribute('data-row-key-value')).filter(Boolean);
     }
 
-    /**
-    * @description 依據 row.dataset.cecPcaType/cecPcaTimestamp 對當前已渲染行進行排序。
-    *              排序規則：先按「預付/開查」分類，再按時間倒序（越久越前）。
-    * @param {HTMLTableSectionElement} tableBody - 表格 tbody。
-    */
+
+    // [元素定位] 功能：`sortPcaHintRowsInCaseList`。
     function sortPcaHintRowsInCaseList(tableBody) {
         if (!tableBody) return;
 
@@ -3980,6 +4240,7 @@ V53 > V54
         const rows = Array.from(tableBody.querySelectorAll('tr[data-row-key-value]'));
         if (rows.length === 0) return;
 
+        // 功能：`typeRank`。
         const typeRank = (t) => {
             if (t === 'billing') return 0;
             if (t === 'claims') return 1;
@@ -4021,17 +4282,14 @@ V53 > V54
         Log.info('Feature.CaseList.Sort', 'PCA提示排序已執行完成（僅當前已渲染行）。');
     }
 
-/**
-    * @description 處理 Case 列表頁的行數據。
-    *              [V87 動態色譜版]
-    *              1. 顏色分配：使用 12 色高對比度色譜，對當前視圖中的跟進 Case 進行動態着色。
-    *              2. 面板聯動：將 {CaseNo: Color} 映射表發送給跟進面板，實現同步變色。
-    */
+
+    // [設定/狀態持久化 / 元素定位] 功能：`processCaseListRows`。
     function processCaseListRows(tableBody) {
-        const repliedEnabled = GM_getValue('notifyOnRepliedCaseEnabled', DEFAULTS.notifyOnRepliedCaseEnabled);
-        const listHintEnabled = GM_getValue('pcaCaseListHintEnabled', DEFAULTS.pcaCaseListHintEnabled);
-        const expiringHighlightEnabled = GM_getValue('highlightExpiringCasesEnabled', false);
-        const followUpPanelEnabled = GM_getValue('followUpPanelEnabled', DEFAULTS.followUpPanelEnabled);
+        // [優化] 使用內存配置
+        const repliedEnabled = RUNTIME_CONFIG.notifyOnRepliedCaseEnabled;
+        const listHintEnabled = RUNTIME_CONFIG.pcaCaseListHintEnabled;
+        const expiringHighlightEnabled = RUNTIME_CONFIG.highlightExpiringCasesEnabled;
+        const followUpPanelEnabled = RUNTIME_CONFIG.followUpPanelEnabled;
 
         if (!repliedEnabled && !listHintEnabled && !expiringHighlightEnabled && !followUpPanelEnabled) return;
 
@@ -4049,6 +4307,7 @@ V53 > V54
         const FU_ITEMS_KEY = 'FU_PANEL_ITEMS_V1';
         const ANNOTATION_CLASS = 'cec-replied-annotation';
 
+        // 緩存讀取仍需使用 GM_getValue，因為這些數據是動態寫入的，不適合放入靜態 RUNTIME_CONFIG
         const repliedCache = repliedEnabled ? GM_getValue(SEND_BUTTON_CACHE_KEY, {}) : {};
         if (repliedEnabled) purgeExpiredCacheEntries(repliedCache, CACHE_TTL_MS);
         const claimsCache = listHintEnabled ? GM_getValue(CLAIMS_CACHE_KEY, {}) : {};
@@ -4097,8 +4356,6 @@ V53 > V54
                 // [新增] 動態顏色分配邏輯
                 let assignedColor = null;
                 if (isFollowUp) {
-                    // 如果這個號碼之前已經分配過顏色(例如分頁場景)，沿用舊色
-                    // 但這裡是單頁處理，所以簡單起見，我們按順序分配
                     if (!currentViewMap.has(caseNumberText)) {
                         assignedColor = COLOR_PALETTE[colorIndex % COLOR_PALETTE.length];
                         currentViewMap.set(caseNumberText, assignedColor);
@@ -4171,7 +4428,6 @@ V53 > V54
                             annotationSpan.style.display = 'inline-block';
 
                             if (annotationMeta.type === 'followup') {
-                                // [修改] 使用動態分配的顏色
                                 annotationSpan.style.backgroundColor = annotationMeta.color;
                                 annotationSpan.style.color = '#ffffff';
                                 annotationSpan.style.fontWeight = 'bold';
@@ -4197,14 +4453,11 @@ V53 > V54
                     }
                 }
             } else {
-                // 如果行已處理，但仍需更新 currentViewMap 以確保面板同步
                 const caseNumberLink = findElementInShadows(row, `a[href*="${caseId}"]`);
                 if (caseNumberLink) {
                     const text = caseNumberLink.textContent.replace(/[^0-9]/g, '');
                     if (followUpPanelEnabled && text && followUpSet.has(text)) {
                          if (!currentViewMap.has(text)) {
-                             // 分配新顏色或沿用 (這裡簡單分配，因為已處理過的行顏色已定，不應變)
-                             // 但為了 Map 完整性，我們再次計算
                              const color = COLOR_PALETTE[colorIndex % COLOR_PALETTE.length];
                              currentViewMap.set(text, color);
                              colorIndex++;
@@ -4230,7 +4483,6 @@ V53 > V54
             }
         });
 
-        // [關鍵] 通知跟進面板更新顏色
         if (followUpPanelEnabled) {
             FollowUpPanel.highlightListMatches(currentViewMap);
         }
@@ -4260,10 +4512,7 @@ V53 > V54
         }
     }
 
-    /**
-    * @description 初始化對 Case 列表頁的監控，以便在列表更新時處理新的行。
-    *              [強化版] 增加了狀態重置機制，確保每次進入頁面都進行一次完整的重新掃描。
-    */
+
     async function initCaseListMonitor() {
         const repliedEnabled = GM_getValue('notifyOnRepliedCaseEnabled', DEFAULTS.notifyOnRepliedCaseEnabled);
         const listHintEnabled = GM_getValue('pcaCaseListHintEnabled', DEFAULTS.pcaCaseListHintEnabled);
@@ -4329,10 +4578,7 @@ V53 > V54
         }
     }
 
-    /**
-    * @description 異步獲取並記錄富文本編輯器中的所有可用模板選項。
-    * @returns {Promise<string[]|null>} 解析為包含模板標題的數組，或在失敗時返回 null。
-    */
+
     async function getAndLogTemplateOptions() {
         const BUTTON_ICON_SELECTOR = 'lightning-icon[icon-name="utility:insert_template"]';
         const MENU_ITEM_SELECTOR = 'li.uiMenuItem a[role="menuitem"]';
@@ -4367,10 +4613,7 @@ V53 > V54
         }
     }
 
-    /**
-    * @description 處理編輯器加載完畢後的模板快捷按鈕注入流程。
-    *              [修改版] 強制每次獲取最新排序，並使用 Observer 確保按鈕在 DOM 重繪後依然存在。
-    */
+
     async function handleEditorReadyForTemplateButtons() {
         try {
             // 1. 等待編輯器核心加載
@@ -4383,14 +4626,24 @@ V53 > V54
                 editor.style.height = desiredHeight;
             }
 
+            // --- [新增] 同步等待 Send 按鈕並綁定攔截器 ---
+            // 因為編輯器出來時，Send 按鈕通常也出來了，這裡做一個快速查找
+            // 我們使用一個輕量級的 Promise Race 或並行等待，確保不會因為找不到 Send 按鈕而阻塞模版加載
+            waitForElementWithObserver(document.body, 'button.slds-button--brand.cuf-publisherShareButton', 5000)
+                .then(sendButton => {
+                    setupSendButtonListener(sendButton);
+                })
+                .catch(() => {
+                    Log.warn('UI.Enhancement', '模版加載完成，但未找到 Send 按鈕 (可能非 Compose 模式)。');
+                });
+            // ----------------------------------------------
+
             // 2. [核心步驟] 獲取最新模板列表 (實時抓取，不緩存)
-            // 注意：這裡會觸發一次菜單的打開與關閉，為了獲取最新排序，這是必須的代價
             const templates = await getAndLogTemplateOptions();
 
             if (templates && templates.length > 1) {
                 const anchorIconSelector = 'lightning-icon[icon-name="utility:new_window"]';
                 const anchorIcon = await waitForElementWithObserver(document.body, anchorIconSelector, 5000);
-                // 找到工具欄的容器 (ul.cuf-attachmentsList)
                 const anchorLi = anchorIcon.closest('li.cuf-attachmentsItem');
                 const toolbarContainer = anchorLi ? anchorLi.parentElement : null;
 
@@ -4398,19 +4651,14 @@ V53 > V54
                     // 3. [第一次注入]
                     injectTemplateShortcutButtons(anchorLi, templates);
 
-                    // 4. [關鍵修改] 啟動 Observer 守護按鈕
-                    // 防止 Salesforce 在數據加載後重繪工具欄導致按鈕消失
+                    // 4. 啟動 Observer 守護按鈕
                     if (!toolbarContainer.dataset.cecObserverAttached) {
                         const observer = new MutationObserver((mutations) => {
-                            // 檢查我們的按鈕是否還在
                             const myButtons = toolbarContainer.querySelector('.cec-template-shortcut-button');
                             if (!myButtons) {
-                                // 如果按鈕丟失，使用剛剛獲取的 templates 列表重新注入
-                                // 必須重新獲取最新的錨點，因為舊的錨點可能已被銷毀
                                 const currentAnchorIcon = toolbarContainer.querySelector(anchorIconSelector);
                                 const currentAnchorLi = currentAnchorIcon ? currentAnchorIcon.closest('li.cuf-attachmentsItem') : null;
                                 if (currentAnchorLi) {
-                                    // 重置注入標記，強制重新注入
                                     toolbarContainer.dataset.shortcutsInjected = 'false';
                                     Log.info('UI.Enhancement', '檢測到按鈕丟失，正在重新注入...');
                                     injectTemplateShortcutButtons(currentAnchorLi, templates);
@@ -4419,35 +4667,39 @@ V53 > V54
                         });
 
                         PageResourceRegistry.addObserver(observer);
-
                         observer.observe(toolbarContainer, { childList: true, subtree: true });
                         toolbarContainer.dataset.cecObserverAttached = 'true';
-                        // 將 observer 存儲在元素上以便後續清理（如果需要）
                         toolbarContainer._cecObserver = observer;
                     }
                 } else {
                     Log.warn('UI.Enhancement', `未能找到用於注入快捷按鈕的錨點元素。`);
                 }
             }
-
-            setupSendButtonListener();
         } catch (error) {
             Log.warn('UI.Enhancement', `初始化模板快捷按鈕時出錯: ${error.message}`);
         }
     }
 
-    /**
-    * @description 部署一個一次性的監聽器，用於捕獲郵件發送事件並記錄緩存。
-    */
-    async function setupSendButtonListener() {
+
+    async function setupSendButtonListener(sendButton) {
         const doNotCloseEnabled = GM_getValue('pcaDoNotClosePromptEnabled', DEFAULTS.pcaDoNotClosePromptEnabled);
         const listHintEnabled = GM_getValue('pcaCaseListHintEnabled', DEFAULTS.pcaCaseListHintEnabled);
         const repliedEnabled = GM_getValue('notifyOnRepliedCaseEnabled', DEFAULTS.notifyOnRepliedCaseEnabled);
+        const followUpEnabled = GM_getValue('followUpPanelEnabled', DEFAULTS.followUpPanelEnabled);
 
-        // 三個都關才不需要部署
-        if (!doNotCloseEnabled && !listHintEnabled && !repliedEnabled) {
+        // 如果所有相關功能都關閉，則不部署
+        if (!doNotCloseEnabled && !listHintEnabled && !repliedEnabled && !followUpEnabled) {
             return;
         }
+
+        // 安全檢查：確保傳入的是正確的按鈕
+        if (!sendButton) return;
+        const buttonLabel = findElementInShadows(sendButton, 'span.label');
+        if (!buttonLabel || buttonLabel.textContent.trim() !== 'Send') return;
+
+        // 防止重複綁定
+        if (sendButton.dataset.cecSendInterceptBound === 'true') return;
+        sendButton.dataset.cecSendInterceptBound = 'true';
 
         const SEND_BUTTON_CACHE_KEY = CACHE_POLICY.REPLIED.KEY;
         const REPLIED_PURGE_MS = CACHE_POLICY.REPLIED.PURGE_MS;
@@ -4456,7 +4708,10 @@ V53 > V54
         const BILLING_CACHE_KEY = CACHE_POLICY.BILLING_REBILL.KEY;
         const BILLING_TTL_MS = CACHE_POLICY.BILLING_REBILL.TTL_MS;
 
-        // --- 緩存寫入：已回覆（保持原邏輯：可覆寫 timestamp）---
+        // [狀態柵欄標記] 用於跳過跟進面板檢查
+        let sendButtonBypassFollowUp = false;
+
+        // --- 緩存寫入：已回覆 ---
         const updateRepliedCache = (caseId) => {
             if (!caseId) return;
             const cache = GM_getValue(SEND_BUTTON_CACHE_KEY, {});
@@ -4468,100 +4723,72 @@ V53 > V54
             GM_setValue(SEND_BUTTON_CACHE_KEY, cache);
         };
 
-        // --- 緩存寫入：A/B（不可複寫 + 跨類型替換）---
+        // --- 緩存寫入：A/B ---
         const updateSpecialCache = (caseId, type) => {
             if (!caseId || !type) return;
             const now = Date.now();
-
             const claimsCache = GM_getValue(CLAIMS_CACHE_KEY, {});
             const billingCache = GM_getValue(BILLING_CACHE_KEY, {});
-
             const claimsPurgeResult = purgeExpiredCacheEntries(claimsCache, CLAIMS_TTL_MS);
             const billingPurgeResult = purgeExpiredCacheEntries(billingCache, BILLING_TTL_MS);
-
             let changed = false;
 
             if (type === 'A') {
                 const entry = claimsCache[caseId];
-                if (entry && (now - entry.timestamp < CLAIMS_TTL_MS)) {
-                    // 不覆寫
-                } else {
+                if (entry && (now - entry.timestamp < CLAIMS_TTL_MS)) { } else {
                     if (billingCache[caseId]) { delete billingCache[caseId]; changed = true; }
                     claimsCache[caseId] = { timestamp: now };
                     changed = true;
                 }
             } else if (type === 'B') {
                 const entry = billingCache[caseId];
-                if (entry && (now - entry.timestamp < BILLING_TTL_MS)) {
-                    // 不覆寫
-                } else {
+                if (entry && (now - entry.timestamp < BILLING_TTL_MS)) { } else {
                     if (claimsCache[caseId]) { delete claimsCache[caseId]; changed = true; }
                     billingCache[caseId] = { timestamp: now };
                     changed = true;
                 }
             }
-
-            if (claimsPurgeResult.changed || changed) {
-                GM_setValue(CLAIMS_CACHE_KEY, claimsCache);
-            }
-            if (billingPurgeResult.changed || changed) {
-                GM_setValue(BILLING_CACHE_KEY, billingCache);
-            }
+            if (claimsPurgeResult.changed || changed) GM_setValue(CLAIMS_CACHE_KEY, claimsCache);
+            if (billingPurgeResult.changed || changed) GM_setValue(BILLING_CACHE_KEY, billingCache);
         };
 
         // --- UI 讀取：Case Category / Case Sub Category ---
         const detectSpecialType = () => {
-            const categoryButton = findFirstElementInShadows(document.body, [
-                'button[aria-label*="Case Category"]',
-                'button[title*="Case Category"]'
-            ]);
-            const subCategoryButton = findFirstElementInShadows(document.body, [
-                'button[aria-label*="Case Sub Category"]',
-                'button[title*="Case Sub Category"]'
-            ]);
-
+            const categoryButton = findFirstElementInShadows(document.body, ['button[aria-label*="Case Category"]', 'button[title*="Case Category"]']);
+            const subCategoryButton = findFirstElementInShadows(document.body, ['button[aria-label*="Case Sub Category"]', 'button[title*="Case Sub Category"]']);
             const category = getSelectedValue(categoryButton);
             const subCategory = getSelectedValue(subCategoryButton);
-
             const c = (category || '').toLowerCase();
             const s = (subCategory || '').toLowerCase();
-
-            // A: Claims / Claim
-            if (c.includes('claims') || s.includes('claim')) {
-                return { type: 'A', category, subCategory };
-            }
-
-            // B: Billing / Rebill
-            if (c.includes('bill') || s.includes('bill') || s.includes('rebill')) {
-                return { type: 'B', category, subCategory };
-            }
-
+            if (c.includes('claims') || s.includes('claim')) return { type: 'A', category, subCategory };
+            if (c.includes('bill') || s.includes('bill') || s.includes('rebill')) return { type: 'B', category, subCategory };
             return null;
         };
 
-        // --- 勾選 “Send and Do Not Close” checkbox（你已提供穩定定位）---
+        // --- 勾選/取消勾選 “Send and Do Not Close” ---
         const ensureSendAndDoNotCloseChecked = () => {
             try {
                 const container = findElementInShadows(document.body, '[data-target-selection-name="sfdc:RecordField.EmailMessage.CEC_Send_and_Do_Not_Close__c"]');
                 const checkbox = container ? container.querySelector('input[type="checkbox"]') : null;
-                if (!checkbox) {
-                    Log.warn('Feature.SendIntercept', '未找到 "Send and Do Not Close" checkbox，將不阻塞送出。');
-                    return;
-                }
-                if (!checkbox.checked) {
-                    checkbox.click();
-                    checkbox.dispatchEvent(new Event('change', { bubbles: true }));
-                    Log.info('Feature.SendIntercept', '已自動勾選 "Send and Do Not Close" checkbox。');
-                }
-            } catch (e) {
-                Log.warn('Feature.SendIntercept', `勾選 checkbox 時發生異常：${e.message}，將不阻塞送出。`);
-            }
+                if (!checkbox) return;
+                if (!checkbox.checked) { checkbox.click(); checkbox.dispatchEvent(new Event('change', { bubbles: true })); }
+            } catch (e) { }
         };
 
-        // --- 彈窗（兩行居中，按鈕居中；只在 doNotCloseEnabled 啟用時彈出）---
-        const showSendInterceptDialog = (typeLabel) => {
+        // [元素定位] 功能：`ensureSendAndDoNotCloseUnchecked`。
+        const ensureSendAndDoNotCloseUnchecked = () => {
+            try {
+                const container = findElementInShadows(document.body, '[data-target-selection-name="sfdc:RecordField.EmailMessage.CEC_Send_and_Do_Not_Close__c"]');
+                const checkbox = container ? container.querySelector('input[type="checkbox"]') : null;
+                if (!checkbox) return;
+                if (checkbox.checked) { checkbox.click(); checkbox.dispatchEvent(new Event('change', { bubbles: true })); }
+            } catch (e) { }
+        };
+
+        // --- 通用攔截彈窗生成器 ---
+        const showGenericInterceptDialog = (options) => {
             return new Promise((resolve) => {
-                const accentColor = (typeLabel === '開查') ? '#2e844a' : '#0070d2';
+                const { accentColor, iconText, title, subtitle, btnNoText, btnYesText } = options;
 
                 const overlay = document.createElement('div');
                 overlay.className = 'cec-global-completion-overlay show';
@@ -4569,262 +4796,255 @@ V53 > V54
 
                 const box = document.createElement('div');
                 box.className = 'cec-send-intercept-modal';
-                box.style.width = 'min(860px, calc(100vw - 140px))';
-                box.style.boxSizing = 'border-box';
-                box.style.padding = '20px 24px 18px';
-                box.style.borderRadius = '20px';
-                box.style.backgroundColor = '#ffffff';
-                box.style.border = '3px solid rgba(206, 230, 248, 1)';
-                box.style.position = 'relative';
-                box.style.display = 'flex';
-                box.style.flexDirection = 'column';
-                box.style.fontFamily = 'Segoe UI, Microsoft YaHei, PingFang TC, sans-serif';
+                Object.assign(box.style, {
+                    width: 'min(860px, calc(100vw - 140px))',
+                    boxSizing: 'border-box',
+                    padding: '20px 24px 18px',
+                    borderRadius: '20px',
+                    backgroundColor: '#ffffff',
+                    border: '3px solid rgba(206, 230, 248, 1)',
+                    position: 'relative',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    fontFamily: 'Segoe UI, Microsoft YaHei, PingFang TC, sans-serif'
+                });
 
                 const accentBar = document.createElement('div');
-                accentBar.style.position = 'absolute';
-                accentBar.style.left = '0';
-                accentBar.style.top = '0';
-                accentBar.style.bottom = '0';
-                accentBar.style.width = '10px';
-                accentBar.style.borderTopLeftRadius = '18px';
-                accentBar.style.borderBottomLeftRadius = '18px';
-                accentBar.style.backgroundColor = accentColor;
+                Object.assign(accentBar.style, {
+                    position: 'absolute', left: '0', top: '0', bottom: '0', width: '10px',
+                    borderTopLeftRadius: '18px', borderBottomLeftRadius: '18px',
+                    backgroundColor: accentColor
+                });
                 box.appendChild(accentBar);
 
                 const closeBtn = document.createElement('div');
                 closeBtn.textContent = '×';
-                closeBtn.style.position = 'absolute';
-                closeBtn.style.right = '14px';
-                closeBtn.style.top = '10px';
-                closeBtn.style.cursor = 'pointer';
-                closeBtn.style.fontSize = '30px';
-                closeBtn.style.lineHeight = '1';
-                closeBtn.style.color = '#62666a';
-                closeBtn.style.padding = '6px';
+                Object.assign(closeBtn.style, {
+                    position: 'absolute', right: '14px', top: '10px', cursor: 'pointer',
+                    fontSize: '30px', lineHeight: '1', color: '#62666a', padding: '6px'
+                });
                 box.appendChild(closeBtn);
 
                 const iconCircle = document.createElement('div');
-                iconCircle.style.position = 'absolute';
-                iconCircle.style.left = '24px';
-                iconCircle.style.top = '14px';
-                iconCircle.style.width = '34px';
-                iconCircle.style.height = '34px';
-                iconCircle.style.borderRadius = '50%';
-                iconCircle.style.backgroundColor = accentColor;
-                iconCircle.style.display = 'flex';
-                iconCircle.style.alignItems = 'center';
-                iconCircle.style.justifyContent = 'center';
-                iconCircle.style.color = '#ffffff';
-                iconCircle.style.fontSize = '18px';
-                iconCircle.style.fontWeight = '800';
-                iconCircle.textContent = '!';
+                Object.assign(iconCircle.style, {
+                    position: 'absolute', left: '24px', top: '14px', width: '34px', height: '34px',
+                    borderRadius: '50%', backgroundColor: accentColor, display: 'flex',
+                    alignItems: 'center', justifyContent: 'center', color: '#ffffff',
+                    fontSize: '18px', fontWeight: '800'
+                });
+                iconCircle.textContent = iconText || '!';
                 box.appendChild(iconCircle);
 
                 const messageWrapper = document.createElement('div');
-                messageWrapper.style.flex = '1 1 auto';
-                messageWrapper.style.display = 'flex';
-                messageWrapper.style.flexDirection = 'column';
-                messageWrapper.style.alignItems = 'center';
-                messageWrapper.style.justifyContent = 'center';
-                messageWrapper.style.textAlign = 'center';
-                messageWrapper.style.padding = '32px 16px 20px';
+                Object.assign(messageWrapper.style, {
+                    flex: '1 1 auto', display: 'flex', flexDirection: 'column',
+                    alignItems: 'center', justifyContent: 'center', textAlign: 'center',
+                    padding: '32px 16px 20px'
+                });
 
                 const line1 = document.createElement('div');
-                line1.style.fontSize = '28px';
-                line1.style.fontWeight = '800';
-                line1.style.color = '#1a1a1a';
-                line1.style.lineHeight = '1.25';
-                line1.textContent = `這是【${typeLabel}】Case`;
+                Object.assign(line1.style, { fontSize: '28px', fontWeight: '800', color: '#1a1a1a', lineHeight: '1.25' });
+                line1.textContent = title;
 
                 const line2 = document.createElement('div');
-                line2.style.fontSize = '28px';
-                line2.style.fontWeight = '800';
-                line2.style.color = '#1a1a1a';
-                line2.style.lineHeight = '1.25';
-                line2.style.marginTop = '10px';
-                line2.style.whiteSpace = 'nowrap';
-                line2.textContent = '是否需要勾選“Send and Do Not Close”';
+                Object.assign(line2.style, {
+                    fontSize: '24px', fontWeight: '800', color: '#1a1a1a', lineHeight: '1.25',
+                    marginTop: '10px', whiteSpace: 'nowrap'
+                });
+                line2.textContent = subtitle;
 
                 messageWrapper.appendChild(line1);
                 messageWrapper.appendChild(line2);
                 box.appendChild(messageWrapper);
 
                 const btnBar = document.createElement('div');
-                btnBar.style.display = 'flex';
-                btnBar.style.justifyContent = 'center';
-                btnBar.style.gap = '14px';
-                btnBar.style.marginTop = '6px';
-                btnBar.style.paddingBottom = '6px';
+                Object.assign(btnBar.style, {
+                    display: 'flex', justifyContent: 'center', gap: '14px', marginTop: '6px', paddingBottom: '6px'
+                });
 
-                const btnNo = document.createElement('button');
-                btnNo.className = 'slds-button slds-button_neutral';
-                btnNo.textContent = '否（直接發送）';
-                btnNo.style.minWidth = '190px';
-                btnNo.style.height = '54px';
-                btnNo.style.borderRadius = '12px';
-                btnNo.style.fontFamily = 'Segoe UI, Microsoft YaHei, PingFang TC, sans-serif';
-                btnNo.style.fontWeight = '700';
-
-                const btnYes = document.createElement('button');
-                btnYes.className = 'slds-button slds-button_brand';
-                btnYes.textContent = '是（勾選後發送）';
-                btnYes.style.minWidth = '210px';
-                btnYes.style.height = '54px';
-                btnYes.style.borderRadius = '12px';
-                btnYes.style.backgroundColor = accentColor;
-                btnYes.style.borderColor = accentColor;
-                btnYes.style.fontFamily = 'Segoe UI, Microsoft YaHei, PingFang TC, sans-serif';
-                btnYes.style.fontWeight = '700';
-
-                const onKeyDown = (e) => {
-                    if (e.key === 'Escape') {
-                        cleanup();
-                        resolve(null);
+                // [事件監聽] 功能：`createBtn`。
+                const createBtn = (text, isPrimary) => {
+                    const btn = document.createElement('button');
+                    btn.className = isPrimary ? 'slds-button slds-button_brand' : 'slds-button slds-button_neutral';
+                    btn.textContent = text;
+                    Object.assign(btn.style, {
+                        minWidth: '200px', height: '54px', borderRadius: '12px',
+                        fontFamily: 'Segoe UI, Microsoft YaHei, PingFang TC, sans-serif', fontWeight: '700'
+                    });
+                    if (isPrimary) {
+                        btn.style.backgroundColor = accentColor;
+                        btn.style.borderColor = accentColor;
+                        if (accentColor.toLowerCase() === '#00ff11') {
+                            btn.style.color = '#000000';
+                        }
                     }
+                    return btn;
                 };
 
+                const btnNo = createBtn(btnNoText, false);
+                const btnYes = createBtn(btnYesText, true);
+
+                // [事件監聽] 功能：`onKeyDown`。
+                const onKeyDown = (e) => { if (e.key === 'Escape') { cleanup(); resolve(null); } };
+                // [事件監聽] 功能：`cleanup`。
                 const cleanup = () => {
                     try { document.removeEventListener('keydown', onKeyDown); } catch (e) {}
                     try { overlay.remove(); } catch (e) {}
                 };
 
-                btnNo.addEventListener('click', () => {
-                    cleanup();
-                    resolve('NO');
-                });
-
-                btnYes.addEventListener('click', () => {
-                    cleanup();
-                    resolve('YES');
-                });
-
-                closeBtn.addEventListener('click', () => {
-                    cleanup();
-                    resolve(null);
-                });
-
-                overlay.addEventListener('click', (e) => {
-                    if (e.target === overlay) {
-                        cleanup();
-                        resolve(null);
-                    }
-                });
-
+                btnNo.addEventListener('click', () => { cleanup(); resolve('NO'); });
+                btnYes.addEventListener('click', () => { cleanup(); resolve('YES'); });
+                closeBtn.addEventListener('click', () => { cleanup(); resolve(null); });
+                overlay.addEventListener('click', (e) => { if (e.target === overlay) { cleanup(); resolve(null); } });
                 document.addEventListener('keydown', onKeyDown);
 
                 btnBar.appendChild(btnNo);
                 btnBar.appendChild(btnYes);
                 box.appendChild(btnBar);
-
                 overlay.appendChild(box);
                 document.body.appendChild(overlay);
             });
         };
 
-        try {
-            const sendButtonSelector = 'button.slds-button--brand.cuf-publisherShareButton';
-            const sendButton = await waitForElementWithObserver(document.body, sendButtonSelector, 15000);
+        sendButton.addEventListener('click', async (event) => {
+            // =========================================================
+            // 第一優先級：全局放行邏輯 (Global Bypass)
+            // =========================================================
+            // 這是由【攔截器2：開查/預付】觸發的最終點擊，必須擁有最高優先級。
+            // 只要此標誌為 true，直接無視所有其他攔截器，執行發送並記錄緩存。
+            if (sendButtonBypassNextClick) {
+                sendButtonBypassNextClick = false;
+                sendButtonBypassFollowUp = false; // 徹底重置狀態，防止污染下一次手動點擊
 
-            const buttonLabel = findElementInShadows(sendButton, 'span.label');
-            if (!buttonLabel || buttonLabel.textContent.trim() !== 'Send') {
-                throw new Error('找到的按鈕不是預期的 "Send" 按鈕。');
+                const caseId = getCaseIdFromUrl(location.href);
+                if (caseId) {
+                    const shouldSkipRepliedCache = (listHintEnabled && !!sendButtonPendingSpecialType);
+                    if (repliedEnabled && !shouldSkipRepliedCache) updateRepliedCache(caseId);
+                    if (listHintEnabled && sendButtonPendingSpecialType) updateSpecialCache(caseId, sendButtonPendingSpecialType);
+                }
+                sendButtonPendingSpecialType = null;
+                return; // 允許原生點擊事件繼續傳播 -> 發送郵件
             }
 
-            if (sendButton.dataset.cecSendInterceptBound === 'true') {
-                return;
-            }
-            sendButton.dataset.cecSendInterceptBound = 'true';
-
-            sendButton.addEventListener('click', async (event) => {
-                // bypass：我們自己放行的下一次 click（避免死循環）
-                if (sendButtonBypassNextClick) {
-                    sendButtonBypassNextClick = false;
-
-                    const caseId = getCaseIdFromUrl(location.href);
-                    if (caseId) {
-                        const shouldSkipRepliedCache = (listHintEnabled && !!sendButtonPendingSpecialType);
-                        if (repliedEnabled && !shouldSkipRepliedCache) updateRepliedCache(caseId);
-                        if (listHintEnabled && sendButtonPendingSpecialType) {
-                            updateSpecialCache(caseId, sendButtonPendingSpecialType);
-                        }
-                        Log.info('Feature.NotifyReplied', `\"Send\" 已放行並按設定寫入緩存（Case ID: ${caseId}）。`);
-                    }
-
-                    sendButtonPendingSpecialType = null;
-                    return;
-                }
-
-                const special = detectSpecialType();
-
-                // 非 A/B：不攔截，按需寫入 replied
-                if (!special) {
-                    const caseId = getCaseIdFromUrl(location.href);
-                    if (caseId && repliedEnabled) {
-                        updateRepliedCache(caseId);
-                        Log.info('Feature.NotifyReplied', `"Send" 按鈕被點擊，為 Case ID: ${caseId} 記錄緩存。`);
-                    }
-                    return;
-                }
-
-                // 命中 A/B：若 doNotCloseEnabled 或 listHintEnabled 任一啟用...
-                if (doNotCloseEnabled || listHintEnabled) {
+            // =========================================================
+            // 第二優先級：跟進面板攔截器 (Follow-Up Panel Intercept)
+            // =========================================================
+            // 只有在【沒有】被本攔截器放行過的情況下才執行檢查
+            if (!sendButtonBypassFollowUp && followUpEnabled && FollowUpPanel && FollowUpPanel.getMatchState) {
+                const matchState = FollowUpPanel.getMatchState();
+                if (matchState.isMatched) {
                     event.preventDefault();
                     event.stopImmediatePropagation();
 
-                    const typeLabel = (special.type === 'A') ? '開查' : '預付';
+                    let dialogAccentColor = '#0070d2';
+                    let dialogTitle = '這是【跟進中】的 Case';
 
-                    if (doNotCloseEnabled) {
-                        const userChoice = await showSendInterceptDialog(typeLabel);
-
-                        // 用戶點擊了右上角關閉或按了 ESC，取消發送
-                        if (!userChoice) {
-                            Log.info('Feature.SendIntercept', '用戶取消送出。');
-                            return;
-                        }
-
-                        // [核心修改] 根據用戶選擇，強制設定 Checkbox 狀態
-                        if (userChoice === 'YES') {
-                            // 選擇"是" -> 強制勾選
-                            setSendAndDoNotCloseState(true);
-                        } else if (userChoice === 'NO') {
-                            // 選擇"否" -> 強制取消勾選
-                            setSendAndDoNotCloseState(false);
-                        }
+                    if (matchState.matchType === 'case') {
+                        dialogAccentColor = '#00ff11';
+                        dialogTitle = '這 Case# 在跟進列表中';
+                    } else if (matchState.matchType === 'tracking') {
+                        dialogAccentColor = '#ff9900';
+                        dialogTitle = '這 追蹤號 在跟進列表中';
                     }
 
-                    sendButtonPendingSpecialType = special.type;
-                    sendButtonBypassNextClick = true;
+                    const userChoice = await showGenericInterceptDialog({
+                        accentColor: dialogAccentColor,
+                        iconText: '!',
+                        title: dialogTitle,
+                        subtitle: '是否需要刪除跟進列表中記錄？',
+                        btnNoText: '保留記錄',
+                        btnYesText: '刪除記錄'
+                    });
 
-                    // 給一點點緩衝時間讓 Checkbox 的 DOM 事件傳播完成
-                    setTimeout(() => {
-                        try { sendButton.click(); } catch (e) {}
-                    }, 50);
+                    if (!userChoice) {
+                         return; // 用戶關閉了窗口，終止操作
+                    }
+
+                    if (userChoice === 'YES') {
+                        if (matchState.matchedRecordId) {
+                            FollowUpPanel.deleteItem(matchState.matchedRecordId);
+                            Log.info('Feature.SendIntercept', `用戶選擇刪除跟進記錄 (ID: ${matchState.matchedRecordId})`);
+                        }
+                    } else {
+                        Log.info('Feature.SendIntercept', `用戶選擇保留跟進記錄`);
+                    }
+
+                    // 設置放行標誌，觸發第二次點擊（程序點擊）
+                    sendButtonBypassFollowUp = true;
+                    setTimeout(() => { try { sendButton.click(); } catch (e) {} }, 0);
                     return;
                 }
+            }
 
-                // A/B 但兩個功能都關：不攔截、不寫入 A/B
+            // =========================================================
+            // 狀態過渡清理 (State Transition)
+            // =========================================================
+            // 如果程序運行到這裡，說明：
+            // 1. 要麼是第一次點擊且沒有命中跟進面板。
+            // 2. 要麼是第二次點擊（已經過了跟進面板的攔截）。
+            // 無論哪種情況，我們都已經「消費」了跟進面板的放行資格，
+            // 必須立即重置該標誌，確保下一次手動點擊時（如果本次流程被取消）能重新觸發檢查。
+            if (sendButtonBypassFollowUp) {
+                sendButtonBypassFollowUp = false;
+            }
+
+            // =========================================================
+            // 第三優先級：開查/預付攔截器 (Claims/Billing Intercept)
+            // =========================================================
+            const special = detectSpecialType();
+
+            // 如果不是特殊類型，說明沒有攔截需求，記錄普通回覆緩存後直接放行
+            if (!special) {
+                const caseId = getCaseIdFromUrl(location.href);
+                if (caseId && repliedEnabled) updateRepliedCache(caseId);
                 return;
+            }
 
-            }, true);
+            // 如果命中特殊類型，且功能開啟
+            if (doNotCloseEnabled || listHintEnabled) {
+                event.preventDefault();
+                event.stopImmediatePropagation();
 
-            Log.info('Feature.NotifyReplied', `"Send" 按鈕監聽器已成功部署。`);
+                const typeLabel = (special.type === 'A') ? '開查' : '預付';
+                if (doNotCloseEnabled) {
+                    const userChoice = await showGenericInterceptDialog({
+                        accentColor: (special.type === 'A') ? '#2e844a' : '#0070d2',
+                        iconText: '!',
+                        title: `這是【${typeLabel}】Case`,
+                        subtitle: '是否需要勾選“Send and Do Not Close”',
+                        btnNoText: '否（直接發送）',
+                        btnYesText: '是（勾選後發送）'
+                    });
 
-        } catch (error) {
-            Log.warn('Feature.NotifyReplied', `部署 "Send" 按鈕監聽器失敗: ${error.message}`);
-        }
+                    if (!userChoice) return; // 用戶關閉窗口
+                    if (userChoice === 'YES') ensureSendAndDoNotCloseChecked();
+                    else if (userChoice === 'NO') ensureSendAndDoNotCloseUnchecked();
+                }
+
+                // 設置最終放行標誌，觸發第三次點擊（程序點擊）
+                sendButtonPendingSpecialType = special.type;
+                sendButtonBypassNextClick = true;
+                setTimeout(() => { try { sendButton.click(); } catch (e) {} }, 0);
+                return;
+            }
+
+        }, true);
+
+        Log.info('Feature.NotifyReplied', `"Send" 按鈕監聽器已成功部署 (集成跟進面板攔截)。`);
     }
 
-        /**
-         * @description 根據模板標題自動點擊對應的模板選項，並執行插入及後續增強。
-         */
+
         async function clickTemplateOptionByTitle(templateTitle, buttonText) {
+            // [DOM 觀察 / 定時/防抖 / 元素定位] 功能：`delay`。
             const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
             const logPrefix = 'UI.Enhancement';
 
+            // [設定/狀態持久化 / DOM 觀察 / 定時/防抖 / 元素定位] 功能：`safeQuery`。
             const safeQuery = (root, selector) => {
                 try { return root.querySelector(selector); } catch (e) { return null; }
             };
 
+            // [設定/狀態持久化 / DOM 觀察 / 定時/防抖] 功能：`waitForContentChange`。
             const waitForContentChange = (iframe, timeout) => {
                 return new Promise((resolve) => {
                     const observer = new MutationObserver((mutations) => {
@@ -4854,22 +5074,27 @@ V53 > V54
                     return;
                 }
 
-                // 1. 設置轉換模式標記
+                const iframeWindow = iframe.contentWindow;
+                const iframeDocument = iframe.contentDocument;
+                const editorBody = iframeDocument.body;
+
+                // 1. 設置轉換模式標記 (雙重存儲：DOM + Window)
                 let conversionMode = 'off';
                 if (buttonText) {
                     if (buttonText.includes('繁')) conversionMode = 's2t';
                     else if (buttonText.includes('簡') || buttonText.includes('简')) conversionMode = 't2s';
                 }
-                iframe.contentDocument.body.dataset.cecConversionMode = conversionMode;
+
+                editorBody.dataset.cecConversionMode = conversionMode;
+                // [關鍵] 將模式存入 Window 對象，使其在 Ctrl+Z 時倖存
+                iframeWindow.cecMode = conversionMode;
 
                 const insertionMode = GM_getValue('templateInsertionMode', DEFAULTS.templateInsertionMode);
 
-                // 2. 光標預定位 (V6 頂層遍歷鎖定)
+                // 2. 光標預定位 ( 頂層遍歷鎖定)
                 if (insertionMode === 'logo') {
-                    iframe.contentWindow.focus();
-                    const editorDoc = iframe.contentDocument;
-                    const editorBody = iframe.contentDocument.body;
-                    const range = editorDoc.createRange();
+                    iframeWindow.focus();
+                    const range = iframeDocument.createRange();
 
                     let logoTable = null;
                     const children = Array.from(editorBody.children);
@@ -4884,6 +5109,7 @@ V53 > V54
                     let targetContainer = null;
 
                     if (logoTable) {
+                        // [元素定位] 功能：`isOccupied`。
                         const isOccupied = (node) => {
                             if (!node || node.nodeType !== 1) return false;
                             if (node.textContent.trim() !== '') return true;
@@ -4894,7 +5120,7 @@ V53 > V54
 
                         let spacerDiv = logoTable.nextElementSibling;
                         if (!spacerDiv || spacerDiv.tagName !== 'DIV' || isOccupied(spacerDiv) || spacerDiv.querySelectorAll('br').length < 2) {
-                            const newSpacer = editorDoc.createElement('div');
+                            const newSpacer = iframeDocument.createElement('div');
                             newSpacer.innerHTML = '<br><br><br><br>';
                             if (spacerDiv) editorBody.insertBefore(newSpacer, spacerDiv);
                             else editorBody.appendChild(newSpacer);
@@ -4903,7 +5129,7 @@ V53 > V54
 
                         let bogus1 = spacerDiv.nextElementSibling;
                         if (!bogus1 || bogus1.tagName !== 'DIV' || isOccupied(bogus1)) {
-                            const newBogus1 = editorDoc.createElement('div');
+                            const newBogus1 = iframeDocument.createElement('div');
                             newBogus1.innerHTML = '<br data-mce-bogus="1">';
                             if (bogus1) editorBody.insertBefore(newBogus1, bogus1);
                             else editorBody.appendChild(newBogus1);
@@ -4912,7 +5138,7 @@ V53 > V54
 
                         let targetP = bogus1.nextElementSibling;
                         if (!targetP || targetP.tagName !== 'P' || isOccupied(targetP)) {
-                            const newP = editorDoc.createElement('p');
+                            const newP = iframeDocument.createElement('p');
                             newP.innerHTML = '<br>';
                             if (targetP) editorBody.insertBefore(newP, targetP);
                             else editorBody.appendChild(newP);
@@ -4926,7 +5152,7 @@ V53 > V54
 
                         targetContainer = targetP;
                     } else {
-                        const newP = editorDoc.createElement('p');
+                        const newP = iframeDocument.createElement('p');
                         newP.innerHTML = '<br>';
                         editorBody.prepend(newP);
                         targetContainer = newP;
@@ -4935,18 +5161,18 @@ V53 > V54
                     if (targetContainer) {
                         range.selectNodeContents(targetContainer);
                         range.collapse(true);
-                        const sel = iframe.contentWindow.getSelection();
+                        const sel = iframeWindow.getSelection();
                         sel.removeAllRanges();
                         sel.addRange(range);
                         targetContainer.scrollIntoView({ behavior: 'auto', block: 'center' });
 
                         try {
-                            const win = iframe.contentWindow;
+                            const win = iframeWindow;
                             targetContainer.dispatchEvent(new MouseEvent('mousedown', { view: win, bubbles: true, cancelable: true }));
                             targetContainer.dispatchEvent(new MouseEvent('mouseup', { view: win, bubbles: true, cancelable: true }));
                         } catch (e) {}
                     }
-                    iframe.contentWindow.focus();
+                    iframeWindow.focus();
                 }
 
 
@@ -4963,19 +5189,12 @@ V53 > V54
                 const targetOption = findElementInShadows(menuContainer, MENU_ITEM_SELECTOR);
 
                 if (targetOption) {
-                    const iframe = findElementInShadows(document.body, EDITOR_IFRAME_SELECTOR);
-                    if (!iframe || !iframe.contentDocument) throw new Error('無法找到編輯器');
-
                     const changePromise = waitForContentChange(iframe, 5000);
                     targetOption.click();
                     const addedNodes = await changePromise;
 
                     // 4. Post Insertion (僅處理新增節點)
                     if (GM_getValue('postInsertionEnhancementsEnabled', DEFAULTS.postInsertionEnhancementsEnabled) && addedNodes) {
-                        const iframeWindow = iframe.contentWindow;
-                        const iframeDocument = iframe.contentDocument;
-                        const editorBody = iframeDocument.body;
-
                         // [樣式同步 & 轉換]：只針對 addedNodes (新插入的模版) 進行
                         if (conversionMode !== 'off') {
                             try {
@@ -5040,17 +5259,19 @@ V53 > V54
                                 const range = iframeDocument.createRange();
                                 range.setStartBefore(targetPositionNode);
                                 range.collapse(true);
-                                iframe.contentWindow.getSelection().removeAllRanges();
-                                iframe.contentWindow.getSelection().addRange(range);
+                                iframeWindow.getSelection().removeAllRanges();
+                                iframeWindow.getSelection().addRange(range);
                                 targetPositionNode.scrollIntoView({ behavior: 'auto', block: 'center' });
                             }
                         }
 
-                        // 綁定全局事件
+                        // 綁定全局事件 (傳遞 iframeWindow 以便內部綁定狀態)
                         if (!editorBody.dataset.cecGlobalHandlersAttached) {
-                            setupGlobalEnhancements(iframe.contentWindow, iframeDocument, editorBody);
+                            setupGlobalEnhancements(iframeWindow, iframeDocument, editorBody);
                         }
                         editorBody.dataset.cecConversionMode = conversionMode;
+                        // [關鍵] 再次確認狀態同步
+                        iframeWindow.cecMode = conversionMode;
                     }
                     iframeWindow.focus();
                 } else {
@@ -5063,23 +5284,27 @@ V53 > V54
             }
         }
 
-        /**
-         * @description 設置全局編輯器增強功能
-         */
+
+        // [事件監聽] 功能：`setupGlobalEnhancements`。
         function setupGlobalEnhancements(iframeWindow, iframeDocument, editorBody) {
              if (editorBody.dataset.cecGlobalHandlersAttached) return;
 
+             // [事件監聽] 功能：`isCursorInTemplate`。
              const isCursorInTemplate = () => true;
 
-             // A. 粘貼攔截器
+             // 初始化真理之源 (Source of Truth)
+             // 如果 Window 上沒有記錄，嘗試從 DOM 讀取，默認為 off
+             if (!iframeWindow.cecMode) {
+                 iframeWindow.cecMode = editorBody.dataset.cecConversionMode || 'off';
+             }
+
+             // A. 粘貼攔截器 (Paste Interceptor)
              editorBody.addEventListener('paste', (event) => {
                 if (isCursorInTemplate()) {
                     const clipboardData = event.clipboardData || iframeWindow.clipboardData;
                     const items = clipboardData.items;
 
-                    // 1. [優先] 圖片保護 (回歸原始腳本邏輯)
-                    // 只要剪貼板里有圖片類型的項目，就認為是圖片粘貼，直接放行
-                    // 這能最大程度模擬原腳本的行為
+                    // 1. [優先] 圖片保護
                     let hasImage = false;
                     for (let i = 0; i < items.length; i++) {
                         if (items[i].type.indexOf("image") !== -1) {
@@ -5091,7 +5316,6 @@ V53 > V54
 
                     // 2. [嚴格] Excel/表格數據保護
                     const htmlData = clipboardData.getData('text/html');
-                    // 只檢查 <table 標籤，不檢查 tr/td，防止誤判富文本片段
                     if (htmlData && htmlData.indexOf('<table') !== -1) {
                         return;
                     }
@@ -5101,7 +5325,10 @@ V53 > V54
                     event.stopPropagation();
 
                     const textToPaste = clipboardData.getData('text/plain');
-                    const currentMode = editorBody.dataset.cecConversionMode;
+
+                    // [關鍵修復] 從 Window 對象讀取模式，無視 DOM 是否被撤銷
+                    const currentMode = iframeWindow.cecMode;
+
                     const finalPasteText = (currentMode && currentMode !== 'off')
                         ? ChineseConverter.convert(textToPaste, currentMode)
                         : textToPaste;
@@ -5145,12 +5372,14 @@ V53 > V54
                 }
             }, true);
 
-            // C. 實時轉換監聽器
+            // C. 實時轉換與狀態守護監聽器 (State Guardian)
             const processQueue = new Set();
             let isProcessing = false;
+
+            // [DOM 觀察] 功能：`processMutations`。
             const processMutations = () => {
                 isProcessing = false;
-                const mode = editorBody.dataset.cecConversionMode;
+                const mode = iframeWindow.cecMode; // 始終讀取真理之源
                 if (!mode || mode === 'off' || processQueue.size === 0) {
                     processQueue.clear();
                     return;
@@ -5177,17 +5406,32 @@ V53 > V54
                 });
                 processQueue.clear();
             };
+
+            // [DOM 觀察] 功能：`scheduleProcessing`。
             const scheduleProcessing = () => {
                 if (!isProcessing) {
                     isProcessing = true;
                     requestAnimationFrame(processMutations);
                 }
             };
+
             const globalObserver = new MutationObserver((mutations) => {
-                const mode = editorBody.dataset.cecConversionMode;
-                if (!mode || mode === 'off') return;
+                const mode = iframeWindow.cecMode;
+
                 let hasWork = false;
                 for (const mutation of mutations) {
+                    // [核心修復] 狀態守護：檢測 DOM 屬性是否與內部狀態不一致 (例如 Ctrl+Z 導致屬性丟失)
+                    if (mutation.type === 'attributes' && mutation.attributeName === 'data-cec-conversion-mode') {
+                        const currentDomMode = editorBody.dataset.cecConversionMode;
+                        // 如果 DOM 狀態與 JS 狀態不符 (且 JS 狀態不是 off)，強制恢復 DOM 狀態
+                        // 這確保了 CSS 樣式和 dataset 始終正確
+                        if (mode && mode !== 'off' && currentDomMode !== mode) {
+                            editorBody.dataset.cecConversionMode = mode;
+                        }
+                    }
+
+                    if (!mode || mode === 'off') continue;
+
                     if (mutation.type === 'characterData') {
                         const node = mutation.target;
                         if (node.nodeType === 3) {
@@ -5223,19 +5467,17 @@ V53 > V54
                 }
                 if (hasWork) scheduleProcessing();
             });
+
+            // 監聽屬性變化以守護狀態
             PageResourceRegistry.addObserver(globalObserver);
-            globalObserver.observe(editorBody, { childList: true, subtree: true, characterData: true });
+            globalObserver.observe(editorBody, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['data-cec-conversion-mode'] });
 
             editorBody.dataset.cecGlobalHandlersAttached = 'true';
         }
 
 
-    /**
-    * @description 根據模板列表，在指定位置注入快捷按鈕 (含 5 個模板按鈕 + 繁/簡 手動轉換按鈕)。
-    *              [修改版 V4]
-    *              1. 修復手動轉換後選區消失的問題 (增加選區恢復邏輯)。
-    *              2. 保持綠色樣式、最右側位置及全局模式更新。
-    */
+
+    // 功能：`injectTemplateShortcutButtons`。
     function injectTemplateShortcutButtons(anchorLiElement, templates) {
         const BOTTOM_OFFSET_PIXELS = 50;
 
@@ -5327,15 +5569,20 @@ V53 > V54
             const selection = win.getSelection();
             const hasSelection = selection.rangeCount > 0 && !selection.isCollapsed;
 
-            // 獲取當前的全局轉換模式
-            const currentGlobalMode = editorBody.dataset.cecConversionMode;
+            // 獲取當前的全局轉換模式 (從 DOM 或 Window)
+            const currentGlobalMode = win.cecMode || editorBody.dataset.cecConversionMode;
 
             if (hasSelection) {
+                // 如果當前有全局模式，且與目標模式不一致，則視為衝突，關閉全局模式
                 if (currentGlobalMode && currentGlobalMode !== 'off' && currentGlobalMode !== targetMode) {
                     editorBody.dataset.cecConversionMode = 'off';
+                    win.cecMode = 'off'; // 同步更新真理
                     Log.info('Converter', `手動模式(${targetMode})與全局模式(${currentGlobalMode})衝突，已關閉全局自動轉換。`);
                 } else {
-                    Log.info('Converter', `手動模式(${targetMode})與全局模式一致，保持全局自動轉換開啟。`);
+                    // 即使模式一致，也強制重新賦值，確保狀態被 DOM 正確記錄
+                    editorBody.dataset.cecConversionMode = targetMode;
+                    win.cecMode = targetMode; // 同步更新真理
+                    Log.info('Converter', `手動模式(${targetMode})與全局模式一致，全局自動轉換確認開啟。`);
                 }
 
                 const range = selection.getRangeAt(0);
@@ -5344,6 +5591,7 @@ V53 > V54
                 let firstNode = fragment.firstChild;
                 let lastNode = fragment.lastChild;
 
+                // [事件監聽 / 元素定位] 功能：`processNode`。
                 const processNode = (node) => {
                     if (node.nodeType === 3) {
                         node.nodeValue = ChineseConverter.convert(node.nodeValue, targetMode);
@@ -5365,10 +5613,12 @@ V53 > V54
             } else {
                 // 如果沒有選中文字，則直接切換全局模式
                 editorBody.dataset.cecConversionMode = targetMode;
+                win.cecMode = targetMode; // 同步更新真理
                 Log.info('Converter', `未選中文字，已切換全局轉換模式為 ${targetMode}。`);
             }
         };
 
+        // [事件監聽 / 定時/防抖 / 元素定位] 功能：`createConvertButton`。
         const createConvertButton = (text, mode) => {
             const li = anchorLiElement.cloneNode(true);
             li.style.borderRight = 'none';
@@ -5413,10 +5663,8 @@ V53 > V54
     }
 
 
-    /**
-    * @description 查找並將郵件編輯器組件滾動到視口底部，並應用一個額外的偏移量。
-    * @param {number} [offset=0] - 滾動完成後的額外垂直偏移量（像素）。
-    */
+
+    // [元素定位] 功能：`repositionComposerToBottom`。
     function repositionComposerToBottom(offset = 0) {
         const composerContainer = findElementInShadows(document.body, 'flexipage-component2[data-component-id="flexipage_tabset7"]');
 
@@ -5439,38 +5687,101 @@ V53 > V54
         }
     }
 
-    /**
-    * @description 從頁面中提取追踪號碼，並觸發自動IVP/Web查詢（如果已啟用）。
-    */
-    async function extractTrackingNumberAndTriggerIVP() {
-        const TRACKING_CACHE_KEY = CACHE_POLICY.TRACKING.KEY;
-        const CACHE_TTL_MS = CACHE_POLICY.TRACKING.TTL_MS; // 60分鐘: 追踪號緩存有效期。
+
+    // 功能：`extractCaseNumberFromHeader`。
+    function extractCaseNumberFromHeader() {
+        // 如果已經提取過，直接返回 true (任務完成)
+        if (foundCaseNumber) return true;
+
         const caseId = getCaseIdFromUrl(location.href);
-        if (!caseId) {
-            Log.warn('Feature.Query', `無法從當前 URL 提取 Case ID，追踪號緩存功能跳過。`);
-            return;
+        if (!caseId) return true; // 非 Case 頁面，視為完成
+
+        const selectors = [
+            'records-formula-output[slot="primaryField"] lightning-formatted-text',
+            'div.primaryFieldRow lightning-formatted-text',
+            'h1.slds-page-header__title lightning-formatted-text',
+            'slot[name="primaryField"] lightning-formatted-text'
+        ];
+
+        // 策略 A: 嘗試從 DOM 提取
+        const el = findFirstElementInShadows(document.body, selectors);
+
+        if (el && el.textContent) {
+            const match = el.textContent.match(/C-\d{10}/i);
+            if (match) {
+                foundCaseNumber = match[0].toUpperCase();
+                Log.info('Feature.Extractor', `從 DOM 成功提取 Case 號碼: ${foundCaseNumber}`);
+
+                // [寫入緩存]
+                const cachedData = CASE_DATA_CACHE.get(caseId) || {};
+                cachedData.caseNo = foundCaseNumber;
+                CASE_DATA_CACHE.set(caseId, cachedData);
+
+                if (typeof FollowUpPanel !== 'undefined' && FollowUpPanel.refresh) {
+                    FollowUpPanel.refresh();
+                }
+                return true;
+            }
         }
 
-        const cache = GM_getValue(TRACKING_CACHE_KEY, {});
+        // 策略 B: [新增保底] 嘗試從瀏覽器標題提取
+        if (document.title) {
+            const titleMatch = document.title.match(/C-\d{10}/i);
+            if (titleMatch) {
+                foundCaseNumber = titleMatch[0].toUpperCase();
+                Log.info('Feature.Extractor', `從 Document Title 提取 Case 號碼: ${foundCaseNumber}`);
 
+                // [寫入緩存]
+                const cachedData = CASE_DATA_CACHE.get(caseId) || {};
+                cachedData.caseNo = foundCaseNumber;
+                CASE_DATA_CACHE.set(caseId, cachedData);
+
+                if (typeof FollowUpPanel !== 'undefined' && FollowUpPanel.refresh) {
+                    FollowUpPanel.refresh();
+                }
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+
+    async function extractTrackingNumberAndTriggerIVP() {
+        const TRACKING_CACHE_KEY = CACHE_POLICY.TRACKING.KEY;
+        const CACHE_TTL_MS = CACHE_POLICY.TRACKING.TTL_MS;
+        const caseId = getCaseIdFromUrl(location.href);
+
+        if (!caseId) return true;
+
+        // 輔助函數：統一處理成功邏輯
+        const handleSuccess = (trackingNo) => {
+            foundTrackingNumber = trackingNo;
+
+            // [寫入內存緩存]
+            const cachedData = CASE_DATA_CACHE.get(caseId) || {};
+            cachedData.trackingNo = trackingNo;
+            CASE_DATA_CACHE.set(caseId, cachedData);
+
+            if (typeof FollowUpPanel !== 'undefined' && FollowUpPanel.refresh) {
+                FollowUpPanel.refresh();
+            }
+            triggerAutoQueries();
+        };
+
+        const cache = GM_getValue(TRACKING_CACHE_KEY, {});
         const purgeResult = purgeExpiredCacheEntries(cache, CACHE_TTL_MS);
         if (purgeResult.changed) {
             GM_setValue(TRACKING_CACHE_KEY, purgeResult.cache);
-            Log.info('Feature.Query', `已清理過期的追踪號緩存條目（removed: ${purgeResult.removed}）。`);
         }
+
         const entry = cache[caseId];
 
-        // 輔助函數：執行所有啟用的自動查詢
+        // [設定/狀態持久化 / 定時/防抖] 功能：`triggerAutoQueries`。
         const triggerAutoQueries = async () => {
-            // 1. 啟動 Web 查詢
             await autoQueryWebOnLoad();
-
-            // 2. 啟動 IVP 查詢
             await autoQueryIVPOnLoad();
 
-            // 3. [核心修復] 焦點強制鎖定機制
-            // 原因：Web 端在背景時容易被 Edge/Chromium 節流，短窗口下偶發無法完成自動查詢。
-            // 對策：不再 0/100/500ms 連續搶焦點；改成「只延後一次」搶回 IVP，給 Web 短暫前景窗口。
             if (GM_getValue('autoIVPQueryEnabled', DEFAULTS.autoIVPQueryEnabled) &&
                 GM_getValue('autoSwitchEnabled', DEFAULTS.autoSwitchEnabled) &&
                 GM_getValue('autoWebQueryEnabled', DEFAULTS.autoWebQueryEnabled) &&
@@ -5480,77 +5791,67 @@ V53 > V54
                     clearTimeout(ivpFocusTimeoutId);
                     ivpFocusTimeoutId = null;
                 }
-
                 ivpFocusTimeoutId = setTimeout(() => {
                     try {
-                        if (ivpWindowHandle && !ivpWindowHandle.closed) {
-                            ivpWindowHandle.focus();
-                        }
-                    } catch (e) {
-                        // ignore
-                    } finally {
-                        ivpFocusTimeoutId = null;
-                    }
+                        if (ivpWindowHandle && !ivpWindowHandle.closed) ivpWindowHandle.focus();
+                    } catch (e) {} finally { ivpFocusTimeoutId = null; }
                 }, 1200);
             }
         };
 
+        // 1. 檢查 GM 緩存
         if (entry && (Date.now() - entry.timestamp < CACHE_TTL_MS)) {
-            foundTrackingNumber = entry.trackingNumber;
-            Log.info('Feature.Query', `從緩存中成功讀取追踪號 (Case ID: ${caseId}): ${foundTrackingNumber}`);
-            triggerAutoQueries();
-            return;
+            handleSuccess(entry.trackingNumber);
+            return true;
         }
 
+        // 2. 檢查 DOM
         const trackingRegex = /(1Z[A-Z0-9]{16})/;
-        const selector = 'td[data-label="IDENTIFIER VALUE"] a, a[href*="/lightning/r/Shipment_Identifier"]';
-        try {
-            const element = await waitForElement(document.body, selector, 10000);
-            if (element && element.textContent) {
-                const match = element.textContent.trim().match(trackingRegex);
-                if (match) {
-                    const extractedNumber = match[0];
-                    Log.info('Feature.Query', `成功提取追踪號: ${extractedNumber}`);
-                    foundTrackingNumber = extractedNumber;
-                    cache[caseId] = {
-                        trackingNumber: extractedNumber,
-                        timestamp: Date.now()
-                    };
-                    GM_setValue(TRACKING_CACHE_KEY, cache);
-                    Log.info('Feature.Query', `追踪號已為 Case ID ${caseId} 寫入緩存，有效期60分鐘。`);
+        const candidates = [
+            'td[data-label="IDENTIFIER VALUE"] a',
+            'a[href*="/lightning/r/Shipment_Identifier"]',
+            'lightning-formatted-text[title^="1Z"]'
+        ];
 
-                    triggerAutoQueries();
-                }
+        const element = findFirstElementInShadows(document.body, candidates);
+
+        if (element && element.textContent) {
+            const match = element.textContent.trim().match(trackingRegex);
+            if (match) {
+                const extractedNumber = match[0];
+                Log.info('Feature.Query', `成功提取追踪號: ${extractedNumber}`);
+
+                cache[caseId] = {
+                    trackingNumber: extractedNumber,
+                    timestamp: Date.now()
+                };
+                GM_setValue(TRACKING_CACHE_KEY, cache);
+
+                handleSuccess(extractedNumber);
+                return true;
             }
-        } catch (error) {
-            Log.warn('Feature.Query', `在10秒內未找到追踪號元素，自動查詢將不會觸發。`);
         }
+
+        return false;
     }
 
-    /**
-    * @description 初始化對 "I Want To..." 組件的監控，以便在組件出現或刷新時注入自定義按鈕。
-    */
+
+    // [DOM 觀察 / 定時/防抖 / 元素定位] 功能：`initIWantToModuleWatcher`。
     function initIWantToModuleWatcher() {
         const ANCHOR_SELECTOR = 'c-cec-i-want-to-container lightning-layout.slds-var-p-bottom_small';
-        let initialInjectionDone = false;
-        waitForElementWithObserver(document.body, ANCHOR_SELECTOR, 20000) // 20000ms: 等待 "I Want To" 組件出現的超時。
-            .then(anchorElement => {
-            if (anchorElement.dataset.customButtonsInjected !== 'true') {
-                injectIWantToButtons(anchorElement);
-                initialInjectionDone = true;
-            }
-        })
-            .catch(() => {
-            Log.warn('Feature.IWT', `未找到 "I Want To..." 組件容器，自動化按鈕未注入。`);
-        });
+
+        // [DOM 觀察 / 定時/防抖 / 元素定位] 功能：`checkAndReInject`。
         const checkAndReInject = () => {
-            if (isScriptPaused || !initialInjectionDone) return;
+            if (isScriptPaused) return;
             const anchorElement = findElementInShadows(document.body, ANCHOR_SELECTOR);
-            if (anchorElement && anchorElement.dataset.customButtonsInjected !== 'true') {
+            // 這裡直接調用 injectIWantToButtons，因為該函數內部已經具備了「存在性檢查」
+            // 如果按鈕已存在，它會自動返回；如果按鈕丟失，它會重新注入
+            if (anchorElement) {
                 injectIWantToButtons(anchorElement);
             }
         };
-        iwtModuleObserver = new MutationObserver(debounce(checkAndReInject, 350)); // 350ms: 防抖延遲，處理組件快速刷新的情況。
+
+        iwtModuleObserver = new MutationObserver(debounce(checkAndReInject, 350)); // 350ms: 防抖延遲
         PageResourceRegistry.addObserver(iwtModuleObserver);
         iwtModuleObserver.observe(document.body, {
             childList: true,
@@ -5558,119 +5859,192 @@ V53 > V54
         });
     }
 
-    /**
-    * @description 處理 "Re-Open Case" 自動化流程的第二階段。
-    * @param {string} comment - 要填寫的評論。
-    */
+
     async function handleStageTwoReOpen(comment) {
-        const reOpenCaseComponent = await waitForElementWithObserver(document.body, 'c-cec-re-open-case', 5000); // 5000ms: 等待組件超時。
-        await new Promise(resolve => setTimeout(resolve, 500)); // 500ms: 等待組件內部元素渲染。
+        // 1. 等待並填寫
+        const reOpenCaseComponent = await waitForElementWithObserver(document.body, 'c-cec-re-open-case', 10000);
+
         if (comment) {
-            const commentBox = await waitForElementWithObserver(reOpenCaseComponent, 'textarea[name="commentField"]', 5000);
+            const commentBox = await waitForElementWithObserver(reOpenCaseComponent, 'textarea[name="commentField"]', 8000);
             simulateTyping(commentBox, comment);
+            await new Promise(resolve => setTimeout(resolve, 1000));
         }
-        await new Promise(resolve => setTimeout(resolve, 500)); // 500ms: 等待UI響應輸入。
-        const finalSubmitButton = await waitForElementWithObserver(reOpenCaseComponent, '.slds-card__footer button.slds-button_brand', 5000);
+
+        const finalSubmitButton = await waitForButtonToBeEnabled('c-cec-re-open-case .slds-card__footer button.slds-button_brand');
+
+        // 2. [核心優化] 定義一個臨時的「刺客」監聽器
+        // 它只會在提交後運行，找到 Footer 或超時後立即自我銷毀
+        const spawnTemporaryFooterWatcher = () => {
+            Log.info('Feature.IWT', 'Re-Open 提交，啟動臨時 Footer 監聽器 (10s)...');
+
+            const tempObserver = new MutationObserver((mutations, obs) => {
+                const footer = findElementInShadows(document.body, 'footer.slds-modal__footer');
+                if (footer) {
+                    // 找到目標，注入按鈕，然後立即停止監聽
+                    addModalActionButtons(footer);
+                    obs.disconnect();
+                    Log.info('Feature.IWT', '快捷按鈕注入成功，臨時監聽器已釋放。');
+                }
+            });
+
+            tempObserver.observe(document.body, { childList: true, subtree: true });
+
+            // 設置 10 秒超時自動銷毀，防止內存洩漏
+            setTimeout(() => {
+                tempObserver.disconnect();
+            }, 10000);
+        };
+
+        // 3. 先啟動監聽，再點擊 (防止點擊後頁面刷新太快錯過)
+        spawnTemporaryFooterWatcher();
         finalSubmitButton.click();
+
         showCompletionToast(reOpenCaseComponent, 'Re-Open Case: 操作成功！請等待網頁更新！');
     }
 
-    /**
-    * @description 處理 "Close this Case" 自動化流程的第二階段。
-    *              [重構版] 增加 mode 參數，支持 'normal' (500ms 延時) 和 'fast' (50ms 延時) 兩種執行速度。
-    * @param {string} comment - 要填寫的評論。
-    * @param {'normal'|'fast'} [mode='normal'] - 執行模式，決定了操作間的延時。
-    */
-    async function handleStageTwoCloseCase(comment, mode = 'normal') {
-        // 根據模式確定延時時間
-        const delay = mode === 'fast' ? 10 : 800;
-        Log.info('Feature.IWT.CloseCase', `以 "${mode}" 模式執行 Close Case，延時: ${delay}ms。`);
 
-        const closeCaseComponent = await waitForElementWithObserver(document.body, 'c-cec-close-case', 5000);
-        await new Promise(resolve => setTimeout(resolve, delay));
-        await selectComboboxOption(closeCaseComponent, 'button[aria-label="Case Sub Status"]', 'Request Completed');
+    async function handleStageTwoCloseCase(comment, mode = 'normal') {
+        // 根據模式確定提交前的基礎延時
+        const baseDelay = mode === 'fast' ? 50 : 300;
+
+        const closeCaseComponent = await waitForElementWithObserver(document.body, 'c-cec-close-case', 10000);
+
+        // 確保下拉框按鈕已渲染且可點擊
+        const comboBtnSelector = 'button[aria-label="Case Sub Status"]';
+        const comboBtn = await waitForElementWithObserver(closeCaseComponent, comboBtnSelector, 8000);
+
+        // 嘗試選擇，帶有自動重試機制
+        try {
+            await selectComboboxOption(closeCaseComponent, comboBtnSelector, 'Request Completed');
+        } catch (e) {
+            Log.warn('Feature.IWT', '首次選擇失敗，嘗試重試...');
+            await new Promise(r => setTimeout(r, 500));
+            await selectComboboxOption(closeCaseComponent, comboBtnSelector, 'Request Completed');
+        }
+
+        // [新增] 選擇 "Request Completed" 後強制等待 1 秒
+        // 確保 Salesforce 完成字段依賴檢查或狀態更新
+        await new Promise(resolve => setTimeout(resolve, 1000));
+
         if (comment) {
             const commentBox = await waitForElementWithObserver(closeCaseComponent, 'textarea.slds-textarea', 5000);
             simulateTyping(commentBox, comment);
         }
-        await new Promise(resolve => setTimeout(resolve, delay));
-        const finalSubmitButton = await waitForElementWithObserver(closeCaseComponent, '.slds-card__footer button.slds-button_brand', 5000);
+
+        // 提交前的基礎緩衝
+        await new Promise(resolve => setTimeout(resolve, baseDelay));
+
+        const finalSubmitButton = await waitForButtonToBeEnabled('c-cec-close-case .slds-card__footer button.slds-button_brand');
         finalSubmitButton.click();
+
         showCompletionToast(closeCaseComponent, 'Close Case: 操作成功！請等待網頁更新！');
     }
 
-    /**
-    * @description 處理 "Document Customer Contact" 自動化流程的第二階段。
-    * @param {string} comment - 要填寫的評論。
-    */
+
     async function handleStageTwoDocumentContact(comment) {
-        const docContactComponent = await waitForElementWithObserver(document.body, 'c-cec-document-customer-contact', 5000);
-        await new Promise(resolve => setTimeout(resolve, 100));
+        const docContactComponent = await waitForElementWithObserver(document.body, 'c-cec-document-customer-contact', 10000);
+
         const radioButtonSelector = 'input[value="Spoke with customer"]';
-        const radioButton = await waitForElementWithObserver(docContactComponent, radioButtonSelector, 5000);
-        await new Promise(resolve => setTimeout(resolve, 100)); // 100ms: 點擊前短暫延時，確保事件監聽器已激活。
+        // 等待單選按鈕出現
+        const radioButton = await waitForElementWithObserver(docContactComponent, radioButtonSelector, 8000);
+
+        // 確保元素可交互並點擊
         radioButton.click();
+
+        // [新增] 點擊單選按鈕後強制等待 500ms
+        // 確保界面響應（例如展開評論框或更新狀態）完成
+        await new Promise(resolve => setTimeout(resolve, 500));
+
         if (comment) {
             try {
+                // 評論框有時候加載較慢，給予獨立等待
                 const commentBox = await waitForElementWithObserver(docContactComponent, 'textarea.slds-textarea', 5000);
                 simulateTyping(commentBox, comment);
             } catch (error) {
                 // 忽略錯誤，某些情況下可能沒有評論框
             }
         }
-        await new Promise(resolve => setTimeout(resolve, 100));
-        const finalSubmitButton = await waitForElementWithObserver(docContactComponent, '.slds-card__footer button.slds-button_brand', 5000);
+
+        const finalSubmitButton = await waitForButtonToBeEnabled('c-cec-document-customer-contact .slds-card__footer button.slds-button_brand');
         finalSubmitButton.click();
+
         showCompletionToast(docContactComponent, 'Document Contact: 操作成功！請等待網頁更新！');
     }
 
-    /**
-    * @description 執行一個完整的 "I Want To..." 自動化流程。
-    * @param {object} config - 流程配置對象。
-    * @param {string} config.searchText - 要在搜索框中輸入的文本。
-    * @param {Function} [config.stageTwoHandler] - 處理第二階段的函數。
-    * @param {string} [config.finalComment] - 傳遞給第二階段處理函數的評論。
-    */
+
     async function automateIWantToAction(config) {
-        const {
-            searchText,
-            stageTwoHandler,
-            finalComment
-        } = config;
-        Log.info('Feature.IWT', `啟動自動化流程: "${searchText}"。`);
+        const { searchText, stageTwoHandler, finalComment } = config;
+        Log.info('Feature.IWT', `啟動自動化流程: "${searchText}" (網絡適應模式)。`);
+
         try {
-            const searchInput = await waitForElementWithObserver(document.body, 'c-ceclookup input.slds-combobox__input', 5000);
+            // 1. 獲取並聚焦輸入框
+            const searchInput = await waitForElementWithObserver(document.body, 'c-ceclookup input.slds-combobox__input', 10000);
             const dropdownTrigger = searchInput.closest('.slds-dropdown-trigger');
-            if (!dropdownTrigger) throw new Error('無法找到下拉列表的觸發容器 .slds-dropdown-trigger');
+            if (!dropdownTrigger) throw new Error('無法找到下拉列表的觸發容器');
+
             searchInput.focus();
+            searchInput.click(); // 確保觸發焦點事件
+
+            // 2. 模擬輸入並等待下拉菜單展開
             simulateTyping(searchInput, searchText);
-            await waitForAttributeChange(dropdownTrigger, 'aria-expanded', 'true', 5000);
-            await new Promise(resolve => setTimeout(resolve, 200)); // 200ms: 等待搜索結果加載。
+
+            // [優化] 等待下拉菜單展開 (aria-expanded="true")
+            // 這裡給予較長的超時 (8秒)，以應對慢網速下的搜索請求
+            try {
+                await waitForAttributeChange(dropdownTrigger, 'aria-expanded', 'true', 8000);
+            } catch (e) {
+                // 如果超時，嘗試再次觸發輸入事件
+                Log.warn('Feature.IWT', '等待下拉菜單超時，嘗試重新觸發輸入...');
+                simulateTyping(searchInput, searchText + ' ');
+                await waitForAttributeChange(dropdownTrigger, 'aria-expanded', 'true', 5000);
+            }
+
+            // [優化] 等待至少一個選項出現
+            await waitForElementWithObserver(dropdownTrigger, 'li.slds-listbox__item', 5000);
+
+            // 3. 選擇項目
             simulateKeyEvent(searchInput, 'ArrowDown', 40);
-            await new Promise(resolve => setTimeout(resolve, 100)); // 100ms: 模擬按鍵後的延遲。
+            await new Promise(resolve => setTimeout(resolve, 150)); // 短暫渲染緩衝
             simulateKeyEvent(searchInput, 'Enter', 13);
+
+            // [優化] 等待輸入框的值被確認（下拉菜單收起）
+            await waitForAttributeChange(dropdownTrigger, 'aria-expanded', 'false', 5000);
+
+            // 4. 點擊提交
             const firstSubmitButton = await waitForButtonToBeEnabled('lightning-button.submit_button button');
             firstSubmitButton.click();
+
+            // 5. 進入第二階段
             if (stageTwoHandler && typeof stageTwoHandler === 'function') {
                 await stageTwoHandler(finalComment);
                 Log.info('Feature.IWT', `自動化流程: "${searchText}" 已成功完成。`);
             }
+
         } catch (error) {
             Log.error('Feature.IWT', `流程 "${searchText}" 在 "第一階段" 失敗: ${error.message}`);
+            showGlobalToast(`自動化失敗: 網絡響應超時`, 'error');
         }
     }
 
-    /**
-    * @description 向 "I Want To..." 組件下方注入自定義的、帶有下拉選項的自動化操作按鈕。
-    *              [最終版] 為 "Close this Case (Auto)" 按鈕及其下拉選項，都增加了長按2秒觸發快速模式的功能。
-    * @param {HTMLElement} anchorElement - 用於定位的錨點元素。
-    */
+
+    // [設定/狀態持久化 / 定時/防抖 / 元素定位] 功能：`injectIWantToButtons`。
     function injectIWantToButtons(anchorElement) {
-        if (anchorElement.dataset.customButtonsInjected === 'true') {
+        const WRAPPER_CLASS = 'cec-iwt-buttons-wrapper';
+
+        // 1. 檢查直接兄弟節點 (最快)
+        const nextSibling = anchorElement.nextElementSibling;
+        if (nextSibling && nextSibling.classList.contains(WRAPPER_CLASS)) {
             return;
         }
+
+        // 2. [新增] 檢查父容器範圍 (雙保險)
+        // 防止因 DOM 引用變化導致 nextSibling 檢查失效，但按鈕其實已經在父容器裡了
+        if (anchorElement.parentElement && anchorElement.parentElement.querySelector(`.${WRAPPER_CLASS}`)) {
+            return;
+        }
+
         const buttonContainer = document.createElement('div');
-        buttonContainer.className = 'slds-grid slds-wrap';
+        buttonContainer.className = `slds-grid slds-wrap ${WRAPPER_CLASS}`; // 添加標識類
         const styles = GM_getValue('iWantToButtonStyles', DEFAULTS.iWantToButtonStyles);
         Object.assign(buttonContainer.style, styles);
 
@@ -5685,6 +6059,7 @@ V53 > V54
         }
         const autoFillTexts = settings;
 
+        // [事件監聽 / 定時/防抖] 功能：`handleOutsideClick`。
         const handleOutsideClick = (e, dropdownMenu, trigger) => {
             if (!trigger.contains(e.target)) {
                 dropdownMenu.classList.remove('show');
@@ -5693,11 +6068,12 @@ V53 > V54
             }
         };
 
-        // 抽離出可複用的長按事件綁定邏輯
+        // [事件監聽 / 定時/防抖] 功能：`applyLongPressHandler`。
         const applyLongPressHandler = (element, config, comment) => {
             let pressTimer = null;
             let longPressTriggered = false;
 
+            // [事件監聽 / 定時/防抖] 功能：`startPress`。
             const startPress = (event) => {
                 if (event.button !== 0) return;
                 longPressTriggered = false;
@@ -5709,7 +6085,6 @@ V53 > V54
                         stageTwoHandler: (c) => config.handler(c, 'fast'),
                         finalComment: comment
                     });
-                    // 如果是下拉菜單項，觸發後需要關閉菜單
                     const dropdownMenu = element.closest('.cec-iwt-dropdown-menu');
                     if (dropdownMenu) {
                         dropdownMenu.classList.remove('show');
@@ -5717,10 +6092,12 @@ V53 > V54
                 }, 1500);
             };
 
+            // [事件監聽] 功能：`cancelPress`。
             const cancelPress = () => {
                 clearTimeout(pressTimer);
             };
 
+            // [事件監聽] 功能：`endPress`。
             const endPress = (event) => {
                 if (event.button !== 0) return;
                 clearTimeout(pressTimer);
@@ -5738,7 +6115,6 @@ V53 > V54
             element.addEventListener('mouseup', endPress);
             element.addEventListener('mouseleave', cancelPress);
         };
-
 
         const buttonConfigs = [{
             name: 'Re-Open Case (Auto)',
@@ -5765,7 +6141,6 @@ V53 > V54
             layoutItem.className = 'slds-var-p-right_xx-small slds-size_4-of-12';
             const commentOptions = autoFillTexts[config.actionKey] || [];
 
-            // 分支 1: 單一按鈕模式
             if (commentOptions.length === 1) {
                 const directButton = document.createElement('button');
                 directButton.title = config.title;
@@ -5787,7 +6162,6 @@ V53 > V54
                 layoutItem.appendChild(directButton);
                 injectedIWTButtons[config.name] = directButton;
 
-                // 分支 2: 下拉菜單模式
             } else {
                 const dropdownTrigger = document.createElement('div');
                 dropdownTrigger.className = 'cec-iwt-dropdown-trigger';
@@ -5806,9 +6180,7 @@ V53 > V54
                         item.className = 'cec-iwt-dropdown-item';
                         item.textContent = comment;
 
-                        // [核心修正] 為下拉菜單中的 "Close Case" 選項應用長按邏輯
                         if (config.actionKey === 'closeCase') {
-                            // 阻止默認的 mousedown 行為，防止觸發菜單關閉
                             item.addEventListener('mousedown', (e) => e.stopPropagation());
                             applyLongPressHandler(item, config, comment);
                         } else {
@@ -5823,7 +6195,7 @@ V53 > V54
                         }
                         dropdownMenu.appendChild(item);
                     });
-                } else { // 零選項的情況
+                } else {
                     const disabledItem = document.createElement('li');
                     disabledItem.className = 'cec-iwt-dropdown-item';
                     disabledItem.textContent = '無可用評論';
@@ -5865,10 +6237,8 @@ V53 > V54
         initAssignButtonMonitor();
     }
 
-    /**
-    * @description 根據 "Assign Case to Me" 按鈕的狀態，更新自定義 "I Want To..." 按鈕的禁用狀態。
-    * @param {boolean} isAssignButtonDisabled - "Assign Case to Me" 按鈕是否被禁用。
-    */
+
+    // [DOM 觀察] 功能：`updateIWTButtonStates`。
     function updateIWTButtonStates(isAssignButtonDisabled) {
         const buttonsToUpdate = [injectedIWTButtons['Close this Case (Auto)'], injectedIWTButtons['Document Customer Contact (Auto)']];
         buttonsToUpdate.forEach(button => {
@@ -5880,9 +6250,7 @@ V53 > V54
         Log.info('Feature.IWT', `聯動狀態更新，自動化按鈕已設置為 ${state} 狀態。`);
     }
 
-    /**
-    * @description 初始化對 "Assign Case to Me" 按鈕的狀態監控，以實現與自定義按鈕的狀態聯動。
-    */
+
     async function initAssignButtonMonitor() {
         const ASSIGN_BUTTON_SELECTORS = [
             'button[title="Assign Case to Me"]',
@@ -5915,13 +6283,7 @@ V53 > V54
         }
     }
 
-    /**
-    * @description 一個帶有重試和備選選項機制的安全點擊函數，用於填充下拉框。
-    * @param {HTMLElement} modalRoot - 彈窗的根節點。
-    * @param {string} buttonSelector - 下拉框觸發按鈕的選擇器。
-    * @param {string[]} itemValues - 備選的選項 `data-value` 列表。
-    * @returns {Promise<boolean>} 如果成功選擇則返回 true。
-    */
+
     async function safeClickWithOptions(modalRoot, buttonSelector, itemValues) {
         if (!itemValues || !Array.isArray(itemValues)) {
             return true;
@@ -5961,13 +6323,10 @@ V53 > V54
         throw new Error(`所有備選選項 [${options.join(', ')}] 都選擇失敗`);
     }
 
-    /**
-        * @description 在彈出窗口的底部注入快捷操作按鈕。
-        *              [優化] 按鈕注入成功後，延遲 500ms 自動將網頁下移 111px。
-        * @param {HTMLElement} footer - 彈窗的 footer 元素。
-        */
+
+    // [設定/狀態持久化 / 元素定位] 功能：`addModalActionButtons`。
     function addModalActionButtons(footer) {
-        // 防止重複注入
+        // 1. 存在性檢查：如果按鈕已經存在，說明本函數已經執行過並成功，直接退出，防止後續滾動代碼被重複觸發
         if (footer.querySelector(".custom-action-button-container")) {
             return;
         }
@@ -5975,16 +6334,18 @@ V53 > V54
         const modalRoot = footer.getRootNode()?.host;
         if (!modalRoot) return;
 
+        // 2. 獲取 Salesforce 原生 Save 按鈕作為錨點
         const saveButtonWrapper = findElementInShadows(footer, 'lightning-button[variant="brand"]');
         if (!saveButtonWrapper) {
-            return;
+            return; // 基礎組件未加載完畢，等待 Scanner 下次輪詢
         }
 
-        // 設置 Footer 樣式
+        // 3. 配置 Footer 佈局
         footer.style.display = 'flex';
         footer.style.justifyContent = 'flex-end';
         footer.style.alignItems = 'center';
 
+        // 4. 創建按鈕容器
         const buttonContainer = document.createElement("div");
         buttonContainer.className = "custom-action-button-container";
         buttonContainer.style.display = 'flex';
@@ -6017,19 +6378,15 @@ V53 > V54
             btn.className = "slds-button";
             btn.style.cssText = styleString;
 
-            // 綁定點擊事件 (填充下拉框)
             btn.addEventListener("click", async () => {
                 try {
                     await safeClickWithOptions(modalRoot, 'button[aria-label*="Case Category"]', config.category);
                     await safeClickWithOptions(modalRoot, 'button[aria-label*="Case Sub Category"]', config.subCategory);
                     await safeClickWithOptions(modalRoot, 'button[aria-label*="Inquirer Role"]', config.role);
-                } catch (error) {
-                    // 錯誤已在 safeClickWithOptions 內部記錄
-                }
+                } catch (error) { }
             });
             buttonContainer.appendChild(btn);
 
-            // 每 7 個按鈕換行
             if ((index + 1) % 7 === 0 && (index + 1) < buttonsConfig.length) {
                 const flexBreaker = document.createElement('div');
                 flexBreaker.style.flexBasis = '100%';
@@ -6038,33 +6395,37 @@ V53 > V54
             }
         });
 
-        // 將按鈕容器插入到 Save 按鈕之前
+        // 5. 執行按鈕注入
         footer.insertBefore(buttonContainer, saveButtonWrapper);
-        Log.info('UI.ModalButtons', `快捷操作按鈕已成功注入彈窗。`);
+        Log.info('UI.ModalButtons', `快捷操作按鈕注入成功。`);
 
-        // [修改] 根據設置決定是否執行下移
+        // 6. [核心修復邏輯] 單次滾動鎖定
+        // 只有在啟動了自動滾動功能，且該 footer 元素尚未執行過滾動時才執行
         if (GM_getValue('autoScrollAfterActionButtons', DEFAULTS.autoScrollAfterActionButtons)) {
-            setTimeout(() => {
-                window.scrollBy({
-                    top: 111,
-                    behavior: 'smooth'
-                });
-                Log.info('UI.Scroll', '快捷按鈕注入完畢，頁面已自動下移 111px。');
-            }, 500);
+            if (footer.dataset.cecScrollExecuted !== 'true') {
+                // 立即標記為已執行，防止 setTimeout 排隊期間被再次觸發
+                footer.dataset.cecScrollExecuted = 'true';
+
+                setTimeout(() => {
+                    // 執行物理滾動
+                    window.scrollBy({
+                        top: 111,
+                        behavior: 'smooth'
+                    });
+                    Log.info('UI.Scroll', '執行一次性自動下移 111px。');
+                }, 500); // 500ms 延遲以確保 Salesforce 完成高度重算
+            }
         }
     }
 
-    /**
-    * @description 帶重試機制地向目標窗口發送消息，直到收到確認回執。
-    * @param {Window} windowHandle - 目標窗口句柄。
-    * @param {object} messagePayload - 要發送的消息負載。
-    * @param {string} targetOrigin - 目標窗口的源。
-    */
+
+    // [設定/狀態持久化 / 事件監聽 / 定時/防抖] 功能：`sendMessageWithRetries`。
     function sendMessageWithRetries(windowHandle, messagePayload, targetOrigin) {
         const MAX_RETRIES = 120;
         const RETRY_INTERVAL = 2000; // 2000ms: 每次重試發送消息的間隔，確保目標窗口有足夠時間加載和響應。
         let attempt = 0;
         let intervalId = null;
+        // [設定/狀態持久化 / 事件監聽 / 定時/防抖] 功能：`trySendMessage`。
         const trySendMessage = () => {
             if (attempt >= MAX_RETRIES || !windowHandle || windowHandle.closed) {
                 if (attempt >= MAX_RETRIES) {
@@ -6079,6 +6440,7 @@ V53 > V54
         };
         trySendMessage();
         intervalId = setInterval(trySendMessage, RETRY_INTERVAL);
+        // [設定/狀態持久化 / 事件監聽] 功能：`confirmationListener`。
         const confirmationListener = (event) => {
             if (event.origin !== targetOrigin) return;
             if (event.data && event.data.type === 'CEC_REQUEST_RECEIVED' && event.data.payload && event.data.payload.timestamp === messagePayload.payload.timestamp) {
@@ -6090,9 +6452,7 @@ V53 > V54
         window.addEventListener('message', confirmationListener);
     }
 
-    /**
-    * @description 如果啟用了自動查詢，則在頁面加載並提取到追踪號後，自動向IVP窗口發送查詢請求。
-    */
+
     async function autoQueryIVPOnLoad() {
         if (!GM_getValue('autoIVPQueryEnabled', DEFAULTS.autoIVPQueryEnabled)) {
             Log.warn('Feature.IVP', `未啟用自動 IVP 查詢功能。`);
@@ -6111,6 +6471,7 @@ V53 > V54
                 alert('CEC 功能強化：打開 IVP 窗口失敗，可能已被瀏覽器攔截。請為此網站允許彈窗。');
                 return;
             }
+            // [設定/狀態持久化] 功能：`messagePayload`。
             const messagePayload = {
                 type: 'CEC_SEARCH_REQUEST',
                 payload: {
@@ -6128,9 +6489,7 @@ V53 > V54
         }
     }
 
-    /**
-    * @description [新增] 如果啟用了自動 Web 查詢，則在頁面加載並提取到追踪號後，自動向 UPS Web 窗口發送查詢請求。
-    */
+
     async function autoQueryWebOnLoad() {
         if (!GM_getValue('autoWebQueryEnabled', DEFAULTS.autoWebQueryEnabled)) {
             return;
@@ -6150,6 +6509,7 @@ V53 > V54
                 return;
             }
 
+            // [設定/狀態持久化 / 元素定位] 功能：`messagePayload`。
             const messagePayload = {
                 type: 'CEC_SEARCH_REQUEST',
                 payload: {
@@ -6170,9 +6530,8 @@ V53 > V54
         }
     }
 
-    /**
-    * @description 根據用戶設置調整 Case Description 文本框或顯示區域的高度。
-    */
+
+    // [設定/狀態持久化 / 元素定位] 功能：`adjustCaseDescriptionHeight`。
     function adjustCaseDescriptionHeight() {
         const desiredHeight = GM_getValue("caseDescriptionHeight", DEFAULTS.caseDescriptionHeight) + "px";
 
@@ -6208,11 +6567,8 @@ V53 > V54
         }
     }
 
-    /**
-    * @description [增強版] 處理聯繫人卡片，根據賬戶的 "Preferred" 狀態進行高亮，
-    *              並新增邏輯：檢查 "Account Status"，如果為 "SUSPENDED"，則禁用 "Schedule a Pickup" 按鈕。
-    * @param {HTMLElement} card - 聯繫人卡片元素。
-    */
+
+    // [設定/狀態持久化 / 定時/防抖 / 元素定位] 功能：`processContactCard`。
     function processContactCard(card) {
         const highlightMode = GM_getValue('accountHighlightMode', 'pca');
         if (highlightMode === 'off') {
@@ -6343,12 +6699,8 @@ V53 > V54
         Log.info('UI.ContactCard', `[首次加載] 聯繫人卡片高亮規則已應用。`);
     }
 
-    /**
-    * @description 一個更激進的、不檢查可見性的 Shadow DOM 元素查找函數。
-    * @param {Node} root - 開始搜索的根節點。
-    * @param {string} selector - CSS選擇器。
-    * @returns {HTMLElement|null} 找到的第一個元素，或 null。
-    */
+
+    // [設定/狀態持久化 / 事件監聽 / 元素定位] 功能：`findElementInShadows_Aggressive`。
     function findElementInShadows_Aggressive(root, selector) {
         if (!root) return null;
         if (root.shadowRoot) {
@@ -6368,10 +6720,8 @@ V53 > V54
         return null;
     }
 
-    /**
-    * @description 如果用戶啟用了屏蔽功能，則攔截並移除原生的IVP卡片內容（iframe）。
-    * @param {HTMLElement} cardElement - IVP卡片的容器元素。
-    */
+
+    // [設定/狀態持久化 / 事件監聽 / 元素定位] 功能：`handleIVPCardBlocking`。
     function handleIVPCardBlocking(cardElement) {
         const shouldBlock = GM_getValue('blockIVPCard', DEFAULTS.blockIVPCard);
         if (!shouldBlock) return;
@@ -6379,6 +6729,7 @@ V53 > V54
             return;
         }
         cardElement.dataset.ivpObserverAttached = 'true';
+        // [DOM 觀察 / 事件監聽 / 元素定位] 功能：`ivpState`。
         const ivpState = {
             iframe: null,
             parent: null,
@@ -6404,6 +6755,7 @@ V53 > V54
                 }
             }, true);
         }
+        // [DOM 觀察 / 定時/防抖 / 元素定位] 功能：`findIframeBulldozer`。
         const findIframeBulldozer = (root) => {
             let iframe = root.querySelector('iframe');
             if (iframe) return iframe;
@@ -6416,6 +6768,7 @@ V53 > V54
             }
             return null;
         };
+        // [DOM 觀察 / 定時/防抖] 功能：`findAndStoreTask`。
         const findAndStoreTask = () => {
             const iframe = findIframeBulldozer(cardElement);
             if (iframe) {
@@ -6451,120 +6804,107 @@ V53 > V54
         }
     }
 
-    /**
-    * @description 執行自動指派的核心邏輯，包括所有者驗證、緩存檢查和點擊操作。
-    * @param {string} 當前用Case ID作緩存鍵。
-    * @param {boolean} [isCachedCase=false] - 是否為緩存命中模式，此模式下僅應用視覺反饋。
-    */
-    async function handleAutoAssign(caseUrl, isCachedCase = false) {
+
+    async function handleAutoAssign(caseUrl) {
         const ASSIGNMENT_CACHE_KEY = 'assignmentLog';
         const caseId = getCaseIdFromUrl(caseUrl);
-        if (!caseId) {
-            Log.error('Feature.AutoAssign', `無法從 URL (${caseUrl}) 提取 Case ID，自動指派緩存操作已中止。`);
-            return;
-        }
-        const findOwnerBlockWithRetry = (timeout = 15000) => { // 15000ms: 等待 "Case Owner" 信息塊出現的超時。
-            return new Promise((resolve, reject) => {
-                const startTime = Date.now();
-                const interval = setInterval(() => {
-                    if (Date.now() - startTime > timeout) {
-                        clearInterval(interval);
-                        reject(new Error(`在${timeout/1000}秒內等待 "Case Owner" 信息塊超時。`));
-                        return;
-                    }
-                    const allHighlightItems = findAllElementsInShadows(document.body, 'records-highlights-details-item');
-                    for (const item of allHighlightItems) {
-                        const titleElement = findElementInShadows(item, 'p.slds-text-title');
-                        if (titleElement && (titleElement.getAttribute('title') === 'Case Owner' || titleElement.innerText.trim() === 'Case Owner')) {
-                            clearInterval(interval);
-                            resolve(item);
-                            return;
-                        }
-                    }
-                }, 500); // 500ms: 輪詢間隔。
-            });
-        };
-        try {
-            if (isCachedCase) {
-                try {
-                    const assignButton = await waitForElementWithObserver(document.body, 'button[title="Assign Case to Me"]', 10000); // 10000ms: 等待指派按鈕出現的超時。
-                    if (assignButton && !assignButton.disabled) {
-                        assignButton.style.setProperty('background-color', '#0070d2', 'important');
-                        assignButton.style.setProperty('color', '#fff', 'important');
-                    }
-                } catch (error) {
-                    // 忽略錯誤
-                }
-                return;
-            }
-            Log.info('Feature.AutoAssign', `自動指派流程啟動。`);
-            const targetUser = GM_getValue('autoAssignUser', DEFAULTS.autoAssignUser);
-            if (!targetUser) {
-                Log.warn('Feature.AutoAssign', `未設置目標用戶名，自動指派功能已禁用。`);
-                return;
-            }
-            let ownerBlock;
-            try {
-                ownerBlock = await findOwnerBlockWithRetry();
-            } catch (err) {
-                return;
-            }
-            let ownerElement, currentOwner;
-            try {
-                const preciseOwnerSelector = 'force-owner-lookup .owner-name span';
-                ownerElement = await waitForElementWithObserver(ownerBlock, preciseOwnerSelector, 10000); // 10000ms: 等待所有者姓名元素出現的超時。
-                currentOwner = ownerElement?.innerText?.trim() || '';
-            } catch (err) {
-                Log.error('Feature.AutoAssign', `查找 "Case Owner" 姓名元素時發生錯誤或超時。`);
-                return;
-            }
-            if (!currentOwner) {
-                return;
-            }
-            if (currentOwner.toLowerCase() !== targetUser.toLowerCase()) {
-                Log.info('Feature.AutoAssign', `Owner "${currentOwner}" 與目標用戶 "${targetUser}" 不匹配。`);
-                return;
-            }
-            let assignButton;
-            try {
-                assignButton = await waitForElementWithObserver(document.body, 'button[title="Assign Case to Me"]', 100000); // 100000ms: 等待指派按鈕出現的超時。
-            } catch (err) {
-                Log.error('Feature.AutoAssign', `查找 "Assign Case to Me" 按鈕時發生錯誤或超時。`);
-                return;
-            }
-            if (assignButton && !assignButton.disabled) {
-                await new Promise(resolve => setTimeout(resolve, 100)); // 300ms: 點擊前的短暫延遲，確保UI穩定。
-                assignButton.click();
-                assignButton.style.setProperty('background-color', '#0070d2', 'important');
-                assignButton.style.setProperty('color', '#fff', 'important');
-                const cache = GM_getValue(ASSIGNMENT_CACHE_KEY, {});
-                const CACHE_TTL = 10 * 60 * 60 * 1000; // 60分鐘: 指派成功記錄的緩存有效期。// 10小時
-                // [修改] 使用 caseId 作為緩存 key
-                cache[caseId] = {
-                    timestamp: Date.now()
-                };
-                GM_setValue(ASSIGNMENT_CACHE_KEY, cache);
-                Log.info('Feature.AutoAssign', `自動指派成功 (Case ID: ${caseId})，已點擊 "Assign Case to Me" 按鈕並更新緩存。`);
+        if (!caseId) return true; // 無法處理，視為結束
 
-                setTimeout(() => {
-                    Log.info('Feature.AutoAssign', `8秒後執行高亮狀態重新檢查。`);
-                    checkAndColorComposeButton();
-                }, 8000); // 8000ms: 指派成功後，等待足夠時間讓後端和UI更新，然後重新檢查計時器狀態。
-            } else {
-                Log.warn('Feature.AutoAssign', `"Assign Case to Me" 按鈕不存在或處於禁用狀態。`);
-            }
-        } catch (outerErr) {
-            Log.error('Feature.AutoAssign', `執行自動指派時發生未知外部錯誤: ${outerErr.message}`);
+        // --- [優化] 狀態緩存檢查 (Case Closed) ---
+        // 避免每次循環都去掃描 records-highlights-details-item
+        const cachedData = CASE_DATA_CACHE.get(caseId) || {};
+
+        if (cachedData.isClosed === true) {
+            return true; // 已知已關閉，直接結束
         }
+
+        // 如果緩存中沒有狀態，則掃描一次
+        if (cachedData.isClosed === undefined) {
+            const highlights = findAllElementsInShadows(document.body, 'records-highlights-details-item');
+            // 只有當 highlights 存在時才判斷，否則可能是還沒加載出來
+            if (highlights.length > 0) {
+                const isClosed = highlights.some(el => {
+                    const text = el.innerText || '';
+                    return text.includes('Status') && text.includes('Closed');
+                });
+
+                if (isClosed) {
+                    cachedData.isClosed = true;
+                    CASE_DATA_CACHE.set(caseId, cachedData);
+                    return true; // 任務結束
+                }
+                // 注意：如果不 Closed，我們先不緩存 false，因為狀態可能從 Loading 變為 Open
+            }
+        }
+
+        // --- 緩存檢查 (視覺反饋修復) ---
+        const cache = GM_getValue(ASSIGNMENT_CACHE_KEY, {});
+        const CACHE_EXPIRATION_MS = 60 * 60 * 1000;
+        const entry = cache[caseId];
+
+        if (entry && (Date.now() - entry.timestamp < CACHE_EXPIRATION_MS)) {
+            // [修復] 即使緩存命中，也必須確保按鈕被染色，才算任務完成
+            const assignButton = findFirstElementInShadows(document.body, ['button[title="Assign Case to Me"]', 'button[aria-label="Assign Case to Me"]']);
+
+            if (assignButton) {
+                if (!assignButton.disabled) {
+                    assignButton.style.setProperty('background-color', '#0070d2', 'important');
+                    assignButton.style.setProperty('color', '#fff', 'important');
+                }
+                // 只有找到了按鈕（無論是否禁用，只要DOM有了），才視為任務真正完成
+                return true;
+            }
+
+            // 如果緩存說「已指派」，但按鈕還沒渲染出來，返回 false
+            // 讓 Scanner 繼續運行，直到按鈕出現並被我們染色
+            return false;
+        }
+
+        // --- 以下是正常的指派邏輯 ---
+
+        // 檢查目標用戶設置
+        const targetUser = RUNTIME_CONFIG.autoAssignUser; // [優化] 使用內存配置
+        if (!targetUser) return true; // 未設置用戶，任務結束
+
+        // 查找 Owner 元素
+        const ownerElement = findFirstElementInShadows(document.body, ['force-owner-lookup .owner-name span', 'span.test-id__field-value']);
+        if (!ownerElement) return false; // Owner 沒出來，繼續等待
+
+        const currentOwner = ownerElement.innerText?.trim() || '';
+        if (!currentOwner) return false; // 內容為空，繼續等待
+
+        // 檢查 Owner 是否匹配
+        if (currentOwner.toLowerCase() !== targetUser.toLowerCase()) {
+            return true; // Owner 不匹配，不需要指派，任務結束
+        }
+
+        // 查找 Assign 按鈕
+        const assignButton = findFirstElementInShadows(document.body, ['button[title="Assign Case to Me"]', 'button[aria-label="Assign Case to Me"]']);
+        if (!assignButton) return false; // 按鈕沒出來，繼續等待
+
+        // 執行指派
+        if (!assignButton.disabled) {
+            assignButton.click();
+            assignButton.style.setProperty('background-color', '#0070d2', 'important');
+            assignButton.style.setProperty('color', '#fff', 'important');
+
+            // 更新緩存
+            cache[caseId] = { timestamp: Date.now() };
+            GM_setValue(ASSIGNMENT_CACHE_KEY, cache);
+
+            Log.info('Feature.AutoAssign', `自動指派成功 (Case ID: ${caseId})。`);
+
+            // 延遲檢查 Compose 按鈕 (作為副作用)
+            setTimeout(() => checkAndColorComposeButton(), 8000);
+
+            return true; // 任務完成
+        }
+
+        return false; // 按鈕可能暫時禁用，繼續等待
     }
 
-    /**
-        * @description 處理 "Associate Contact" 彈窗。
-        *              [修復版 V7]
-        *              1. 修復點擊複製後無法還原原始文本的 Bug。
-        *              2. [新增] 排除編輯圖標 (pencil icon) 的點擊，避免誤觸發複製。
-        * @param {HTMLElement} modal - 彈窗的容器元素。
-        */
+
+    // [設定/狀態持久化 / DOM 觀察 / 定時/防抖 / 元素定位] 功能：`processAssociateContactModal`。
     function processAssociateContactModal(modal) {
         if (processedModals.has(modal)) return;
 
@@ -6641,11 +6981,13 @@ V53 > V54
                 if (l) labelToOriginalIndexMap.set(l, i);
             });
 
+            // [事件監聽 / 元素定位] 功能：`setModalMaxHeight`。
             const setModalMaxHeight = (m) => {
                 m.style.maxHeight = '80vh';
                 m.style.overflowY = 'auto';
             };
 
+            // [事件監聽 / 元素定位] 功能：`matchAndHighlightRow`。
             const matchAndHighlightRow = (row) => {
                 if (!foundTrackingNumber) return;
                 const extractedValue = foundTrackingNumber.substring(2, 8);
@@ -6692,7 +7034,7 @@ V53 > V54
                     // 3. 獲取原始數據
                     const stableValue = cell.getAttribute('data-cell-value') || cell.textContent.trim();
 
-                    // 4. 執行複製與懸浮提示 (保持 V9 穩定的 UI 邏輯)
+                    // 4. 執行複製與懸浮提示 (保持 穩定的 UI 邏輯)
                     navigator.clipboard.writeText(stableValue).then(() => {
                         const tip = document.createElement('span');
                         tip.textContent = '已複製！';
@@ -6733,6 +7075,7 @@ V53 > V54
                 });
             };
 
+            // [DOM 觀察 / 元素定位] 功能：`reorderRow`。
             const reorderRow = (row, isHeader = false) => {
                 const cells = Array.from(row.children);
                 const fragment = document.createDocumentFragment();
@@ -6791,46 +7134,64 @@ V53 > V54
         }
     }
 
-    /**
-    * @description 檢查計時器狀態，如果案件已超期，則將 "Compose" 按鈕標紅。
-    */
+
+    // [元素定位] 功能：`checkAndColorComposeButton`。
     function checkAndColorComposeButton() {
-        const MAX_ATTEMPTS = 20;
-        const POLL_INTERVAL_MS = 500; // 500ms: 輪詢間隔。
-        let attempts = 0;
+        // 1. [新增] 檢查 Case 是否已關閉 (Closed Case 不需要標紅，也可能沒有計時器)
+        // 使用高效的文本檢測，避免複雜的 DOM 遍歷
+        const highlights = findAllElementsInShadows(document.body, 'records-highlights-details-item');
+        const isClosed = highlights.some(el => {
+            const text = el.innerText || '';
+            return text.includes('Status') && text.includes('Closed');
+        });
+        if (isClosed) return true; // Case 已關閉，任務結束
 
-        const poller = setInterval(() => {
-            PageResourceRegistry.addInterval(poller);
-            const composeButton = findElementInShadows(document.body, "button.testid__dummy-button-submit-action");
+        // 2. [新增] 檢查郵件編輯器是否已打開
+        // 如果能找到編輯器框架或 Send 按鈕，說明 Compose 按鈕已經被點擊消失了
+        const editorOrSendBtn = findFirstElementInShadows(document.body, [
+            'div.slds-rich-text-editor',
+            'button.cuf-publisherShareButton', // Send 按鈕
+            'c-email-composer'
+        ]);
+        if (editorOrSendBtn) return true; // 編輯器已打開，任務結束
 
-            if (composeButton || attempts >= MAX_ATTEMPTS) {
-                clearInterval(poller);
+        // --- 原有邏輯 ---
+        const timerTextEl = findElementInShadows(document.body, ".milestoneTimerText");
+        const noTimerEl = findElementInShadows(document.body, ".noPendingMilestoneMessage");
 
-                if (!composeButton) {
-                    Log.warn('UI.ButtonAlert', '"Compose" 按鈕高亮檢查終止，在 10 秒內未找到按鈕元素。');
-                    return;
-                }
+        // 如果計時器組件完全沒出來，返回 false 讓引擎繼續掃描
+        if (!timerTextEl && !noTimerEl) return false;
 
-                const timerTextEl = findElementInShadows(document.body, ".milestoneTimerText");
-                const isOverdue = timerTextEl && timerTextEl.textContent.includes("overdue");
-                const isAlreadyRed = composeButton.style.backgroundColor === "red";
+        // 情況 A: 確認為無計時器狀態 (No Pending Milestone)
+        if (noTimerEl) {
+            return true; // 任務完成，無需操作
+        }
 
-                if (isOverdue && !isAlreadyRed) {
-                    composeButton.style.backgroundColor = "red";
-                    composeButton.style.color = "white";
-                    Log.info('UI.ButtonAlert', `"Compose" 按鈕已因計時器超期標紅。`);
-                } else if (!isOverdue && isAlreadyRed) {
-                    composeButton.style.backgroundColor = "";
-                    composeButton.style.color = "";
-                }
-            }
-            attempts++;
-        }, POLL_INTERVAL_MS);
+        // 情況 B: 發現計時器，現在尋找 Compose 按鈕
+        const composeButton = findElementInShadows(document.body, "button.testid__dummy-button-submit-action");
+
+        if (!composeButton) {
+            return false; // 計時器在，編輯器沒開，但按鈕還沒渲染出來 -> 繼續等待
+        }
+
+        // 按鈕已找到，執行高亮邏輯
+        const isOverdue = timerTextEl.textContent.includes("overdue");
+        const isAlreadyRed = composeButton.style.backgroundColor === "red";
+
+        if (isOverdue && !isAlreadyRed) {
+            composeButton.style.backgroundColor = "red";
+            composeButton.style.color = "white";
+            Log.info('UI.ButtonAlert', `"Compose" 按鈕已因計時器超期標紅。`);
+        } else if (!isOverdue && isAlreadyRed) {
+            composeButton.style.backgroundColor = "";
+            composeButton.style.color = "";
+        }
+
+        return true; // 邏輯執行完畢，任務完成
     }
 
-    /**
-    * @description 檢查是否存在關聯案件，如果存在，則將 "Associate Contact" 按鈕和 "Related Cases" 標籤頁同時標紅。
-    */
+
+    // [元素定位] 功能：`checkAndColorAssociateButton`。
     function checkAndColorAssociateButton() {
         // 1. 獲取元素
         const relatedCasesTab = findElementInShadows(document.body, 'li[data-label^="Related Cases ("]');
@@ -6879,12 +7240,11 @@ V53 > V54
         }
     }
 
-    /**
-    * @description 異步確定當前 Case 的狀態（打開、關閉或未知）。
-    * @returns {Promise<'ACTIVE_OR_NEW'|'CLOSED'|'UNKNOWN'>} 解析為案件狀態的字符串。
-    */
+
+    // [DOM 觀察 / 定時/防抖] 功能：`determineCaseStatus`。
     function determineCaseStatus() {
         return new Promise((resolve) => {
+            // [DOM 觀察 / 定時/防抖] 功能：`checkStatus`。
             const checkStatus = () => {
                 const highlightItems = findAllElementsInShadows(document.body, 'records-highlights-details-item');
                 for (const item of highlightItems) {
@@ -6933,20 +7293,19 @@ V53 > V54
         });
     }
 
-    /**
-    * @description 檢查自動指派所需的關鍵字段是否全部為空。
-    * @returns {Promise<boolean>} 如果三個指定字段的值同時為空，則返回 true (表示應中止)。
-    */
+
     async function areRequiredFieldsEmpty() {
         const CHECK_TIMEOUT = 15000; // 15000ms: 檢查超時。
         const POLL_INTERVAL = 300; // 300ms: 輪詢間隔。
         const MIN_FIELDS_THRESHOLD = 3;
         const fieldsToCheck = ['Substatus', 'Case Category', 'Case Sub Category'];
 
+        // [定時/防抖] 功能：`dissectAndFindText`。
         const dissectAndFindText = (rootNode, fieldTitle) => {
             let foundText = null;
             const processedNodes = new Set();
 
+            // [定時/防抖] 功能：`traverse`。
             function traverse(node) {
                 if (!node || processedNodes.has(node) || foundText) return;
                 processedNodes.add(node);
@@ -6993,6 +7352,7 @@ V53 > V54
                 }, POLL_INTERVAL);
             });
 
+            // [元素定位] 功能：`fieldValues`。
             const fieldValues = {};
             fieldsToCheck.forEach(key => {
                 fieldValues[key] = null;
@@ -7038,9 +7398,7 @@ V53 > V54
     // SECTION: 關聯案件提取器模塊 (Related Cases Extractor Module)
     // =================================================================================
 
-    /**
-    * @description 一個獨立的模塊，用於處理 "Related Cases" 標籤頁的數據提取、UI增強和排序功能。
-    */
+
     const relatedCasesExtractorModule = {
         CASE_ROWS_CONTAINER_SELECTOR: 'c-cec-shipment-identifier-display-rows',
         EXTRACTION_TIMEOUT_MS: 8000, // 8000ms: 等待單個案件詳細信息行加載的超時。
@@ -7086,10 +7444,7 @@ V53 > V54
             isAdded: true
         }],
 
-        /**
-        * @description 處理 "Related Cases" 標籤頁的點擊事件，啟動數據提取流程。
-        * @param {HTMLElement} tabLink - 被點擊的標籤頁鏈接元素。
-        */
+
         handleTabClick(tabLink) {
             if (this.hasExecuted) return;
             this.hasExecuted = true;
@@ -7123,18 +7478,13 @@ V53 > V54
             }, 100); // 100ms: 輪詢間隔，快速檢測面板內容是否加載。
         },
 
-        /**
-        * @description 設置UI（注入樣式）並開始處理所有案件行。
-        * @param {Node} container - 包含案件表格的根節點。
-        */
+
         setupUIAndProcessCases(container) {
             this.injectStyles();
             this.processAllCases(container);
         },
 
-        /**
-        * @description 注入排序圖標所需的CSS樣式。
-        */
+
         injectStyles() {
             GM_addStyle(`
                 .gm-sortable-header {
@@ -7168,10 +7518,7 @@ V53 > V54
             `);
         },
 
-        /**
-        * @description 增強表格頭部，添加新的可排序列表頭。
-        * @param {HTMLTableElement} table - 目標表格元素。
-        */
+
         enhanceTableHeaders(table) {
             const headerRow = table.querySelector('thead tr');
             if (!headerRow || headerRow.dataset.enhanced) return;
@@ -7221,11 +7568,7 @@ V53 > V54
             Log.info('Feature.RelatedCases', `表格頭部已增強，添加了 "Case Owner" 和 "Queues" 列。`);
         },
 
-        /**
-        * @description 根據指定的列對表格進行排序。
-        * @param {HTMLTableElement} table - 要排序的表格。
-        * @param {string} columnId - 用於排序的列的ID。
-        */
+
         sortTableByColumn(table, columnId) {
             const tbody = table.querySelector('tbody');
             if (!tbody) return;
@@ -7262,10 +7605,7 @@ V53 > V54
             Log.info('Feature.RelatedCases', `表格已按 "${columnId}" 列 (${this.currentSort.direction}) 排序。`);
         },
 
-        /**
-        * @description 異步並行處理所有案件行，提取數據並更新UI。
-        * @param {Node} container - 包含案件表格的根節點。
-        */
+
         async processAllCases(container) {
             const table = container.querySelector('table.slds-table');
             if (!table) {
@@ -7279,6 +7619,7 @@ V53 > V54
             const results = new Array(rowsArray.length);
             let nextIndex = 0;
 
+            // [元素定位] 功能：`worker`。
             const worker = async () => {
                 while (nextIndex < rowsArray.length) {
                     const current = nextIndex++;
@@ -7313,12 +7654,7 @@ V53 > V54
             Log.info('Feature.RelatedCases', `成功處理 ${summaryRows.length} 個關聯案件，數據已提取並增強。`);
         },
 
-        /**
-        * @description 處理單個案件行：點擊展開、等待詳細信息、提取數據、創建新單元格並插入。
-        * @param {HTMLTableRowElement} summaryRow - 案件的摘要行。
-        * @param {number} rowIndex - 行索引，用於日誌記錄。
-        * @returns {Promise<HTMLElement>} 解析為用於關閉展開行的點擊目標。
-        */
+
         async processSingleRow(summaryRow, rowIndex) {
             if (summaryRow.dataset.processed) return summaryRow.querySelector('td:first-child');
             const clickTarget = summaryRow.querySelector('td:first-child');
@@ -7346,12 +7682,7 @@ V53 > V54
             }
         },
 
-        /**
-        * @description 創建一個新的表格單元格（td），並為特定列增加交互功能。
-        * @param {string} text - 單元格的文本內容。
-        * @param {string} colId - 列的ID。
-        * @returns {HTMLTableCellElement} 創建的單元格元素。
-        */
+
         createCell(text, colId) {
             const cell = document.createElement('td');
             cell.dataset.colId = colId;
@@ -7393,12 +7724,7 @@ V53 > V54
             return cell;
         },
 
-        /**
-        * @description 從詳細信息容器中根據標籤文本提取數據。
-        * @param {HTMLElement} container - 詳細信息容器。
-        * @param {string} labelText - 要查找的標籤文本。
-        * @returns {string} 提取到的數據，或 'N/A'。
-        */
+
         extractDataByLabel(container, labelText) {
             for (const b of container.querySelectorAll('b')) {
                 if (b.textContent.trim() === labelText) {
@@ -7408,11 +7734,7 @@ V53 > V54
             return 'N/A';
         },
 
-        /**
-        * @description 等待案件的詳細信息行出現。
-        * @param {HTMLTableRowElement} summaryRow - 案件的摘要行。
-        * @returns {Promise<HTMLTableRowElement>} 解析為詳細信息行元素。
-        */
+
         waitForDetailRow(summaryRow) {
             return new Promise((resolve, reject) => {
                 const parentTbody = summaryRow.parentElement;
@@ -7446,162 +7768,397 @@ V53 > V54
     // SECTION: 頁面任務執行器 (Page Task Runner)
     // =================================================================================
 
-    /**
-    * @description [完美優化版] 啟動全局掃描器。
-    * 優化點 1: 背景休眠 (解決多開卡頓，背景時 CPU 佔用近乎 0)
-    * 優化點 2: 有效時間計時 (解決掛機後功能失效，確保 20秒 的"有效"掃描時間)
-    */
+
     function startHighFrequencyScanner(caseUrl) {
-        const SCAN_INTERVAL = 300; // 保持 300ms 的高速掃描，確保當前頁面體驗流暢
-        const MAX_ACTIVE_DURATION = 20000; // 有效掃描時長 20秒
-        // 計算總共需要執行的次數： 20000 / 300 ≈ 67 次
-        const MAX_TICKS = Math.ceil(MAX_ACTIVE_DURATION / SCAN_INTERVAL);
+        const SCAN_INTERVAL = 500; // [優化] 調整為 500ms，響應更快且依然安全
+        const MAX_ACTIVE_DURATION = 15000; // 15秒
+        const START_TIME = Date.now();
 
-        let executedTicks = 0; // 已執行的次數
-        let tasksToRun = CASE_PAGE_CHECKS_CONFIG.filter(task => task.once);
+        // 初始化任務隊列：深拷貝配置
+        let tasksToRun = CASE_PAGE_CHECKS_CONFIG.map(t => ({...t}));
 
-        if (tasksToRun.length === 0) return;
+        // 如果初始隊列為空（理論上不應發生），直接標記處理完成
+        if (tasksToRun.length === 0) {
+            processedCaseUrlsInSession.add(caseUrl);
+            return;
+        }
 
+        // 提取 Case ID 用於緩存鍵生成
+        const currentCaseId = getCaseIdFromUrl(caseUrl);
+
+        // 用於防止重複處理同一元素的 WeakSet
         const processedElements = new WeakSet();
-        Log.info('Core.Scanner', `智能掃描器啟動 (目標有效時長: 20秒)`);
 
-        globalScannerId = setInterval(() => {
-            // 1. 檢查任務是否全部完成 (完成則提前終止)
+        Log.info('Core.Scanner', `單一引擎啟動 (目標有效時長: 15秒, 任務數: ${tasksToRun.length})`);
+
+        // 定義遞歸執行函數
+        const runScannerLoop = async () => {
+            // 1. 停止條件檢查 (外部強制停止)
+            if (globalScannerId === null) return;
+
+            // 腳本暫停
+            if (isScriptPaused) {
+                globalScannerId = null;
+                Log.warn('Core.Scanner', `檢測到腳本暫停，引擎強制停止。`);
+                return;
+            }
+
+            // 超時檢查
+            if (Date.now() - START_TIME > MAX_ACTIVE_DURATION) {
+                globalScannerId = null;
+                const pendingTasks = tasksToRun.map(t => t.id).join(', ');
+                Log.warn('Core.Scanner', `有效掃描時間已達 15秒，引擎停止。未完成任務: [${pendingTasks}]`);
+                return;
+            }
+
+            // 2. [性能優化] 頁面不可見時，暫停執行邏輯，推遲檢查
+            if (document.hidden) {
+                globalScannerId = setTimeout(runScannerLoop, 2000);
+                return;
+            }
+
+            // 3. 執行任務循環 (倒序遍歷以便安全刪除)
+            for (let i = tasksToRun.length - 1; i >= 0; i--) {
+                const task = tasksToRun[i];
+                const taskCacheKey = currentCaseId ? `${currentCaseId}_${task.id}` : null;
+                let isTaskComplete = false;
+
+                try {
+                    // --- 記憶體豁免邏輯 ---
+                    if (taskCacheKey && completedTasksRegister.has(taskCacheKey)) {
+                        tasksToRun.splice(i, 1);
+                        continue;
+                    }
+
+                    // --- 執行任務 Handler ---
+                    if (task.selector) {
+                        // 利用 的 DOM 路徑緩存查找
+                        const elements = findAllElementsInShadows(document, task.selector);
+                        if (elements.length > 0) {
+                            let anySuccess = false;
+                            for (const el of elements) {
+                                if (processedElements.has(el)) continue;
+                                const result = task.handler(el);
+                                if (result) {
+                                    processedElements.add(el);
+                                    anySuccess = true;
+                                }
+                            }
+                            if (anySuccess) isTaskComplete = true;
+                        }
+                    } else {
+                        // 普通邏輯任務
+                        isTaskComplete = await task.handler();
+                    }
+
+                    // --- 處理結果 ---
+                    if (isTaskComplete) {
+                        //  移除單個任務成功日誌，保持控制台整潔
+                        if (taskCacheKey) completedTasksRegister.add(taskCacheKey);
+                        tasksToRun.splice(i, 1);
+                    }
+
+                } catch (e) {
+                    // 任務異常不應崩潰引擎
+                }
+            }
+
+            // 4. [修復] 循環結束後立即檢查隊列狀態
             if (tasksToRun.length === 0) {
-                clearInterval(globalScannerId);
+                // 任務全部完成，執行結束邏輯
                 globalScannerId = null;
                 processedCaseUrlsInSession.add(caseUrl);
-                Log.info('Core.Scanner', `所有一次性任務已完成，掃描器停止。`);
-                return;
+
+                //  計算並顯示耗時
+                const duration = ((Date.now() - START_TIME) / 1000).toFixed(1);
+                Log.info('Core.Scanner', `所有任務處理完畢，引擎主動停止 (用時: ${duration}秒)。`);
+                return; // 終止遞歸
             }
 
-            // 2. 檢查全局暫停開關
-            if (isScriptPaused) return;
+            // 5. 隊列仍有任務，安排下一次執行 (呼吸機制)
+            globalScannerId = setTimeout(runScannerLoop, SCAN_INTERVAL);
+        };
 
-            // 3. [核心優化] 背景檢測
-            // 如果頁面在背景：直接 return。
-            // 不執行 DOM 查詢 (極省 CPU)，也不增加 executedTicks (暫停計時，保留額度)。
-            if (document.hidden) {
-                return;
-            }
-
-            // 4. 檢查有效執行次數是否用完
-            if (executedTicks >= MAX_TICKS) {
-                clearInterval(globalScannerId);
-                globalScannerId = null;
-                Log.info('Core.Scanner', `有效掃描時間已達 20秒，掃描器停止。`);
-                return;
-            }
-
-            // --- 開始執行掃描 (消耗一次額度) ---
-            executedTicks++;
-
-            const currentTasks = [...tasksToRun];
-            for (const task of currentTasks) {
-                const elements = findAllElementsInShadows(document, task.selector);
-                let taskCompleted = false;
-                for (const el of elements) {
-                    if (processedElements.has(el)) continue;
-                    try {
-                        task.handler(el);
-                        processedElements.add(el);
-                        taskCompleted = true;
-                        // 對於 once 類型的任務，標記完成後即可從隊列移除
-                        // 注意：如果您的選擇器對應多個元素且需要全部處理，這裡可能需要微調
-                        // 但基於 V89 的配置，目前的 break 是安全的。
-                        break;
-                    } catch (e) { }
-                }
-                if (taskCompleted) {
-                    tasksToRun = tasksToRun.filter(t => t.id !== task.id);
-                }
-            }
-        }, SCAN_INTERVAL);
-
-        PageResourceRegistry.addInterval(globalScannerId);
+        // 啟動循環
+        globalScannerId = setTimeout(runScannerLoop, SCAN_INTERVAL);
+        PageResourceRegistry.addTimeout(globalScannerId); // 註冊以便清理
     }
 
-    /**
-    * @description 存儲所有在Case頁面需要執行的一次性任務的配置。
-    */
-    const CASE_PAGE_CHECKS_CONFIG = [{
-        id: 'handleContactLogic',
-        selector: 'article.cCEC_ContactSummary, button[title="Associate Contact"]',
-        once: true,
-        handler: (element) => {
-            if (window.contactLogicDone) return;
-            if (element.matches('article.cCEC_ContactSummary')) {
-                window.contactLogicDone = true;
-                processContactCard(element);
+
+    const CASE_PAGE_CHECKS_CONFIG = [
+        {
+            id: 'case_number_extraction',
+            type: 'CONTINUOUS', // 持續嘗試直到 DOM 加載完成
+            handler: async () => {
+                return extractCaseNumberFromHeader();
             }
-        }
-    },{
-        id: 'initComposeButtonWatcher',
-        selector: ".milestoneTimerText, .noPendingMilestoneMessage",
-        once: true,
-        handler: (element) => {
-            if (element.matches('.milestoneTimerText')) {
-                checkAndColorComposeButton();
+        },
+        {
+            id: 'tracking_extraction',
+            type: 'CONTINUOUS', // 持續嘗試直到成功 (依賴 DOM 加載)
+            handler: async () => {
+                return await extractTrackingNumberAndTriggerIVP();
             }
-        }
-    }, {
-        id: 'setupTabClickTriggers',
-        selector: 'a.slds-tabs_scoped__link[data-label^="Related Cases"]',
-        once: true,
-        handler: (tabLink) => {
-            const tabParent = tabLink.closest('li');
-            if (tabParent && !tabParent.dataset.listenerAttached) {
+        },
+        {
+            id: 'auto_assign',
+            type: 'RETRY', // 持續嘗試直到成功或條件不符 (依賴 Owner 欄位和按鈕)
+            handler: async () => {
+                return await handleAutoAssign(location.href);
+            }
+        },
+        {
+            id: 'auto_load_all_feed',
+            type: 'RETRY',
+            handler: async () => {
+                if (!RUNTIME_CONFIG.autoLoadAllUpdates) return true;
+
+                const feed = findElementInShadows(document.body, 'flexipage-component2[data-component-id="forceChatter_exposedFeed"]');
+                if (!feed) return false;
+
+                const now = Date.now();
+
+                // 1. 初始化狀態機
+                if (!feed.dataset.cecLoadInit) {
+                    feed.dataset.cecLoadCycles = '0';
+                    feed.dataset.cecLastItemCount = '0';
+                    feed.dataset.cecIsWaiting = 'false';
+                    feed.dataset.cecLastTriggerTime = '0';
+                    feed.dataset.cecStartTime = String(now);
+                    feed.dataset.cecRetryCount = '0'; // 新增：單頁重試計數器
+                    feed.dataset.cecTotalRetries = '0'; // 新增：總重試累計
+                    feed.dataset.cecLoadInit = 'true';
+                }
+
+                // 2. 首次啟算延時 (2秒)
+                const startTime = parseInt(feed.dataset.cecStartTime);
+                if (now - startTime < 2000) return false;
+
+                const trigger = findElementInShadows(feed, '.loadMoreTrigger');
+                const viewMoreBtn = findElementInShadows(feed, 'button.cuf-showMore');
+                const spinner = findElementInShadows(feed, '.forceInlineSpinner');
+                const isCurrentlyLoading = spinner && !spinner.closest('.hideSpinner');
+
+                let cycles = parseInt(feed.dataset.cecLoadCycles);
+                let lastCount = parseInt(feed.dataset.cecLastItemCount);
+                let isWaiting = feed.dataset.cecIsWaiting === 'true';
+                let lastTriggerTime = parseInt(feed.dataset.cecLastTriggerTime);
+                let retryCount = parseInt(feed.dataset.cecRetryCount);
+                let totalRetries = parseInt(feed.dataset.cecTotalRetries);
+
+                // 3. 數據增量結算
+                const currentCount = findAllElementsInShadows(feed, '.cuf-feedElement').length;
+                if (isWaiting && currentCount > lastCount) {
+                    cycles++;
+                    totalRetries += retryCount;
+                    feed.dataset.cecLoadCycles = String(cycles);
+                    feed.dataset.cecLastItemCount = String(currentCount);
+                    feed.dataset.cecTotalRetries = String(totalRetries);
+                    feed.dataset.cecIsWaiting = 'false';
+                    feed.dataset.cecRetryCount = '0'; // 重置單頁計數
+
+                    // 聚合日誌：清晰展示該頁加載質量
+                    const retryHint = retryCount > 0 ? ` (經過 ${retryCount} 次自動重試)` : '';
+                    Log.info('Feature.AutoLoad', `第 ${cycles} 頁加載成功，總記錄: ${currentCount}${retryHint}。`);
+                    isWaiting = false;
+                }
+
+                // 4. 終止判斷
+                if (cycles >= 5) {
+                    Log.info('Feature.AutoLoad', `加載上限已達 (總計重試: ${totalRetries})，移除背景任務。`);
+                    return true;
+                }
+
+                if (!trigger && !viewMoreBtn && !isCurrentlyLoading) {
+                    const endMarker = findElementInShadows(feed, '.skip-feed-endpoint');
+                    if (endMarker && endMarker.textContent.includes('End of Feed')) {
+                        Log.info('Feature.AutoLoad', `內容完全讀取 (總 Cycles: ${cycles + (isWaiting?1:0)}, 總重試: ${totalRetries + retryCount})，任務結束。`);
+                        return true;
+                    }
+                }
+
+                // 5. 等待態處理（靜默計數）
+                if (isWaiting) {
+                    if (isCurrentlyLoading) {
+                        feed.dataset.cecLastTriggerTime = String(now);
+                    } else if (now - lastTriggerTime > 1000) {
+                        // 1秒超時，執行內部重置，不輸出日誌
+                        retryCount++;
+                        feed.dataset.cecRetryCount = String(retryCount);
+                        feed.dataset.cecIsWaiting = 'false';
+
+                        // 僅在極慢時輸出一次警告
+                        if (retryCount === 10) {
+                            Log.warn('Feature.AutoLoad', `當前網絡響應異常緩慢，已自動重試 10 次...`);
+                        }
+                    }
+                    return false;
+                }
+
+                // 6. 觸發態
+                if (!isCurrentlyLoading) {
+                    if (viewMoreBtn) {
+                        feed.dataset.cecLastItemCount = String(currentCount);
+                        feed.dataset.cecIsWaiting = 'true';
+                        feed.dataset.cecLastTriggerTime = String(now);
+                        viewMoreBtn.click();
+                        return false;
+                    }
+
+                    if (trigger) {
+                        feed.dataset.cecLastItemCount = String(currentCount);
+                        feed.dataset.cecIsWaiting = 'true';
+                        feed.dataset.cecLastTriggerTime = String(now);
+
+                        const originalStyle = trigger.style.cssText;
+                        trigger.style.setProperty('position', 'fixed', 'important');
+                        trigger.style.setProperty('top', '50%', 'important');
+                        trigger.style.setProperty('left', '0px', 'important');
+                        trigger.style.setProperty('width', '100px', 'important');
+                        trigger.style.setProperty('height', '100px', 'important');
+                        trigger.style.setProperty('opacity', '0', 'important');
+                        trigger.style.setProperty('z-index', '9999', 'important');
+                        trigger.style.setProperty('pointer-events', 'none', 'important');
+                        trigger.style.setProperty('cursor', 'inherit', 'important');
+
+                        setTimeout(() => {
+                            if (trigger) trigger.style.cssText = originalStyle;
+                        }, 400);
+
+                        return false;
+                    }
+                }
+
+                return false;
+            }
+        },
+        {
+            id: 'handleContactLogic',
+            selector: 'article.cCEC_ContactSummary, button[title="Associate Contact"]',
+            type: 'ONCE',
+            handler: (element) => {
+                if (window.contactLogicDone) return true;
+                if (element.matches('article.cCEC_ContactSummary')) {
+                    window.contactLogicDone = true;
+                    processContactCard(element);
+                    return true;
+                }
+                if (element.matches('button[title="Associate Contact"]')) {
+                    return true;
+                }
+                return false;
+            }
+        },
+        {
+            id: 'initComposeButtonWatcher',
+            type: 'RETRY', // 持續重試，直到邏輯內部返回 true (找到按鈕或確認無需處理)
+            handler: async () => {
+                return checkAndColorComposeButton();
+            }
+        },
+        {
+            id: 'setupTabClickTriggers',
+            selector: 'a.slds-tabs_scoped__link[data-label^="Related Cases"]',
+            type: 'ONCE',
+            handler: (tabLink) => {
+                const tabParent = tabLink.closest('li');
+                if (!tabParent) return false;
+                if (tabParent.dataset.listenerAttached === 'true') return true;
                 tabParent.addEventListener('click', () => {
                     relatedCasesExtractorModule.handleTabClick(tabLink);
-                }, {
-                    once: true
-                });
+                }, { once: true });
                 tabParent.dataset.listenerAttached = 'true';
+                return true;
             }
-        }
-    }, {
-        id: 'initRelatedCasesWatcherForButton',
-        selector: 'li[data-label^="Related Cases ("]',
-        once: true,
-        handler: () => {
-            checkAndColorAssociateButton();
-        }
-    }, {
-        id: 'adjustCaseDescription',
-        selector: 'lightning-textarea[data-field="DescriptionValue"], div.slds-form-element__label',
-        once: true,
-        handler: () => {
-            adjustCaseDescriptionHeight();
-        }
-    }, {
-        id: 'blockIVPCard',
-        selector: 'article.cCEC_IVPCanvasContainer',
-        once: true,
-        resilient: true,
-        handler: (cardElement) => {
-            handleIVPCardBlocking(cardElement);
-        }
-    }, {
-        id: 'addIVPButtons',
-        selector: 'c-cec-datatable',
-        once: true,
-        resilient: true,
-        handler: (datatableContainer) => {
-            const shadowRoot = datatableContainer.shadowRoot;
-            if (!shadowRoot) return;
+        },
+        {
+            id: 'initRelatedCasesWatcherForButton',
+            selector: 'li[data-label^="Related Cases ("]',
+            type: 'ONCE',
+            handler: () => {
+                checkAndColorAssociateButton();
+                return true;
+            }
+        },
+        {
+            id: 'adjustCaseDescription',
+            selector: 'lightning-textarea[data-field="DescriptionValue"], div.slds-form-element__label',
+            type: 'ONCE',
+            handler: () => {
+                adjustCaseDescriptionHeight();
+                return true;
+            }
+        },
+        {
+            id: 'blockIVPCard',
+            selector: 'article.cCEC_IVPCanvasContainer',
+            type: 'ONCE',
+            handler: (cardElement) => {
+                handleIVPCardBlocking(cardElement);
+                return true;
+            }
+        },
+        {
+            id: 'injectFollowUpButton',
+            selector: 'div[data-target-selection-name="sfdc:StandardButton.Case.Follow"]',
+            type: 'ONCE',
+            handler: (element) => {
+                if (GM_getValue('followUpPanelEnabled', DEFAULTS.followUpPanelEnabled)) {
+                    return FollowUpPanel.ensureCaseButton();
+                }
+                return true;
+            }
+        },
+        {
+            id: 'injectActionButtons',
+            // [優化] 移除 selector，改為邏輯驅動的 RETRY 任務
+            // 這樣我們可以在 handler 內部判斷 "Case Closed" 的情況
+            type: 'RETRY',
+            handler: async () => {
+                // 1. 嘗試尋找 Footer 並注入
+                const footer = findElementInShadows(document.body, 'footer.slds-modal__footer');
+                if (footer) {
+                    addModalActionButtons(footer);
+                    return true; // 找到了，注入成功，任務結束
+                }
 
-            const POLL_INTERVAL = 300;
-            const MAX_ATTEMPTS = 50;
-            let attempts = 0;
+                // 2. [新增] 如果沒找到 Footer，檢查 Case 是否已關閉
+                // 遍歷狀態欄，查找包含 "Status" 和 "Closed" 的文本
+                const highlights = findAllElementsInShadows(document.body, 'records-highlights-details-item');
+                const isClosed = highlights.some(el => {
+                    const text = el.innerText || '';
+                    return text.includes('Status') && text.includes('Closed');
+                });
 
-            const poller = setInterval(() => {
-                attempts++;
+                if (isClosed) {
+                    // Case 已關閉，不需要 Footer，視為任務完成（避免超時報警）
+                    return true;
+                }
+
+                // 3. 既沒找到 Footer，也不是 Closed 狀態 -> 繼續等待
+                return false;
+            }
+        },
+        {
+            id: 'injectIWT_Initial',
+            selector: 'c-cec-i-want-to-container lightning-layout.slds-var-p-bottom_small',
+            type: 'ONCE',
+            handler: (element) => {
+                injectIWantToButtons(element);
+                return true;
+            }
+        },
+        {
+            id: 'addIVPButtons',
+            selector: 'c-cec-datatable',
+            type: 'ONCE',
+            handler: (datatableContainer) => {
+                const shadowRoot = datatableContainer.shadowRoot;
+                if (!shadowRoot) return false;
+                if (datatableContainer.dataset.ivpBtnsAdded === 'true') return true;
+
                 const copyButtons = findAllElementsInShadows(shadowRoot, 'button[name="copyIdentifier"]');
-
                 if (copyButtons.length > 0) {
-                    clearInterval(poller);
-
-                    // --- 1. 注入按鈕邏輯 (保持不變) ---
                     let injectedCount = 0;
                     const MAX_BUTTONS = 10;
                     const allRows = findAllElementsInShadows(shadowRoot, 'tr');
@@ -7614,8 +8171,6 @@ V53 > V54
                         if (copyButtonInRow) {
                             const cellWrapper = copyButtonInRow.closest("lightning-primitive-cell-button");
                             if (cellWrapper && !cellWrapper.parentElement.querySelector('.custom-s-button')) {
-
-                                // 創建 IVP 按鈕
                                 const ivpButton = document.createElement("button");
                                 ivpButton.textContent = "IVP";
                                 ivpButton.className = "slds-button slds-button_icon slds-button_icon-brand custom-s-button";
@@ -7623,7 +8178,6 @@ V53 > V54
                                 ivpButton.style.marginRight = "-2px";
                                 ivpButton.style.fontWeight = 'bold';
 
-                                // 創建 Web 按鈕
                                 const webButton = document.createElement("button");
                                 webButton.textContent = "Web";
                                 webButton.className = "slds-button slds-button_icon slds-button_icon-brand custom-s-button";
@@ -7631,7 +8185,6 @@ V53 > V54
                                 webButton.style.marginRight = "2px";
                                 webButton.style.fontWeight = 'bold';
 
-                                // 插入 DOM
                                 cellWrapper.parentElement.insertBefore(webButton, cellWrapper);
                                 cellWrapper.parentElement.insertBefore(ivpButton, webButton);
 
@@ -7641,67 +8194,38 @@ V53 > V54
                         }
                     }
 
-                    // --- 2. [新增] 調整表頭寬度邏輯 ---
-                    const adjustColumnWidths = () => {
-                        const targetSelectors = [
-                            'th[aria-label="COPY"]',
-                            'th[aria-label="DATE ADDED"]'
-                        ];
-
-                        targetSelectors.forEach(selector => {
-                            const th = shadowRoot.querySelector(selector);
-                            if (th) {
-                                const TARGET_WIDTH = '90px';
-
-                                // 1. 修改最外層 TH
-                                th.style.width = TARGET_WIDTH;
-                                th.style.minWidth = TARGET_WIDTH;
-                                th.style.maxWidth = TARGET_WIDTH;
-
-                                // 2. 修改內部的 Factory 組件
-                                const factory = th.querySelector('lightning-primitive-header-factory');
-                                if (factory) {
-                                    factory.style.width = TARGET_WIDTH;
+                    const targetSelectors = ['th[aria-label="COPY"]', 'th[aria-label="DATE ADDED"]'];
+                    targetSelectors.forEach(selector => {
+                        const th = shadowRoot.querySelector(selector);
+                        if (th) {
+                            const TARGET_WIDTH = '90px';
+                            th.style.width = TARGET_WIDTH;
+                            th.style.minWidth = TARGET_WIDTH;
+                            th.style.maxWidth = TARGET_WIDTH;
+                            const factory = th.querySelector('lightning-primitive-header-factory');
+                            if (factory) factory.style.width = TARGET_WIDTH;
+                            th.querySelectorAll('[style*="width"]').forEach(el => {
+                                if (el.style.width.includes('94px') || el.style.width.includes('95px')) {
+                                    el.style.width = TARGET_WIDTH;
                                 }
+                            });
+                        }
+                    });
 
-                                // 3. 遞歸修改內部所有帶有固定寬度的容器 (div, span, a)
-                                // Salesforce 的結構很深，通常寬度會寫在內層的 div 或 a 標籤上
-                                const innerElements = th.querySelectorAll('[style*="width"]');
-                                innerElements.forEach(el => {
-                                    // 為了安全，我們只修改那些寬度接近原始值 (94px/95px) 的元素
-                                    // 避免誤傷圖標等小元素
-                                    const currentStyle = el.style.width;
-                                    if (currentStyle.includes('94px') || currentStyle.includes('95px')) {
-                                        el.style.width = TARGET_WIDTH;
-                                    }
-                                });
-
-                                Log.info('UI.Enhancement', `已調整表頭寬度: ${selector} -> ${TARGET_WIDTH}`);
-                            }
-                        });
-                    };
-
-                    // 執行寬度調整
-                    adjustColumnWidths();
-
-                    return;
+                    datatableContainer.dataset.ivpBtnsAdded = 'true';
+                    return true;
                 }
-
-                if (attempts >= MAX_ATTEMPTS) {
-                    clearInterval(poller);
-                }
-            }, POLL_INTERVAL);
+                return false;
+            }
         }
-    }];
+    ];
 
 
     // =================================================================================
     // SECTION: 主控制器與初始化 (Main Controller & Initialization)
     // =================================================================================
 
-    /**
-    * @description 處理舊版本設置到新版本的遷移。
-    */
+
     function handleSettingsMigration() {
         const MIGRATION_KEY = 'settingsMigrationV34';
         if (GM_getValue(MIGRATION_KEY, false)) {
@@ -7719,16 +8243,15 @@ V53 > V54
         GM_setValue(MIGRATION_KEY, true);
     }
 
-    /**
-    * @description 在頁面頂部Logo處注入腳本控制按鈕（設置、暫停/恢復）。
-    * @param {HTMLElement} logoElement - 用於注入按鈕的Logo元素。
-    */
+
+    // [設定/狀態持久化 / 事件監聽 / 元素定位] 功能：`injectControlButtons`。
     function injectControlButtons(logoElement) {
         const SETTINGS_BUTTON_ID = 'cec-settings-gear-button';
         const PAUSE_BUTTON_ID = 'cec-pause-toggle-button';
         if (document.getElementById(SETTINGS_BUTTON_ID)) {
             return;
         }
+        // [設定/狀態持久化 / 事件監聽 / 元素定位] 功能：`createSldsIcon`。
         const createSldsIcon = (iconName) => {
             return `
                 <svg class="slds-button__icon" focusable="false" aria-hidden="true">
@@ -7753,6 +8276,7 @@ V53 > V54
         pauseButton.className = 'slds-button slds-button_icon cec-header-button';
         pauseButton.style.cssText = `position: absolute; top: 50%; left: 45%; transform: translate(-50%, -50%); z-index: 10;`;
         pauseButton.innerHTML = createSldsIcon('pause') + '<span class="slds-assistive-text"></span>';
+        // [設定/狀態持久化 / DOM 觀察 / 事件監聽 / 元素定位] 功能：`updatePauseButtonUI`。
         const updatePauseButtonUI = () => {
             const useElement = pauseButton.querySelector('use');
             const text = pauseButton.querySelector('.slds-assistive-text');
@@ -7795,9 +8319,8 @@ V53 > V54
         Log.info('UI.Controls', `頂部控制按鈕 (設置/暫停) 注入成功。`);
     }
 
-    /**
-    * @description 初始化一個觀察器，等待頁面頂部Header出現後注入控制按鈕。
-    */
+
+    // [DOM 觀察 / 事件監聽 / 定時/防抖 / 元素定位] 功能：`initHeaderObserver`。
     function initHeaderObserver() {
         if (window.__cecHeaderObserverInitialized) return;
         window.__cecHeaderObserverInitialized = true;
@@ -7818,9 +8341,8 @@ V53 > V54
         }, 15000); // 15000ms: 等待頂部Header出現的超時。
     }
 
-    /**
-    * @description 初始化全局點擊事件監聽器，用於處理動態出現的元素。
-    */
+
+    // [事件監聽 / 定時/防抖] 功能：`initGlobalClickListener`。
     function initGlobalClickListener() {
         if (window.__cecGlobalClickListenerInitialized) return;
         window.__cecGlobalClickListenerInitialized = true;
@@ -7871,6 +8393,7 @@ V53 > V54
 
                 const targetType = actionButton.dataset.target;
                 const timestamp = Date.now();
+                // [設定/狀態持久化] 功能：`messagePayload`。
                 const messagePayload = {
                     type: 'CEC_SEARCH_REQUEST',
                     payload: { trackingNumber, timestamp }
@@ -7917,36 +8440,7 @@ V53 > V54
         }, true);
     }
 
-    /**
-    * @description 初始化一個觀察器，等待任何彈窗（Modal）出現，並在其中注入快捷按鈕。
-    */
-    function initModalButtonObserver() {
-        if (isScriptPaused) return;
-        const observer = new MutationObserver((mutations, obs) => {
-            if (isScriptPaused) {
-                obs.disconnect();
-                return;
-            }
-            const footer = findElementInShadows(document.body, "footer.slds-modal__footer");
-            if (footer) {
-                addModalActionButtons(footer);
-                obs.disconnect();
-            }
-        });
-        PageResourceRegistry.addObserver(observer);
 
-        observer.observe(document.body, {
-            childList: true,
-            subtree: true
-        });
-        const timeoutId = setTimeout(() => observer.disconnect(), 15000); // 15000ms: 等待彈窗出現的超時。
-        PageResourceRegistry.addTimeout(timeoutId);
-    }
-
-    /**
-    * @description 監控URL的變化。當URL變化時，重置狀態並根據新的URL觸發相應的頁面初始化邏輯。
-    *              [修正版] 修正了 Case 詳情頁 URL 的正則表達式匹配錯誤，並將關鍵字段檢查邏輯移至僅中止自動指派。
-    */
     async function monitorUrlChanges() {
         if (isScriptPaused) {
             return;
@@ -7962,135 +8456,108 @@ V53 > V54
         Log.info('Core.Router', `URL 變更，開始處理新頁面: ${location.href}`);
         lastUrl = location.href;
 
-        // [新增] 路由切換時，強制重置跟進面板的列表高亮狀態 (傳入空 Map)
-        if (GM_getValue('followUpPanelEnabled', DEFAULTS.followUpPanelEnabled)) {
-        FollowUpPanel.highlightListMatches(new Map());
-        }
+        // --- 1. 基礎狀態清理 ---
+        // 清空 DOM 路徑緩存與任務記憶 (無論去哪，舊頁面的緩存都必須清空)
+        DOM_PATH_CACHE = {};
+        completedTasksRegister.clear();
 
-        // --- 頁面級資源統一清理 ---
+        // 資源清理
         PageResourceRegistry.cleanup('urlchange');
-        // Follow-Up Panel: 清理浮層（避免 SPA 切頁殘留）
-        FollowUpPanel.removeAllFloating();
+        if (typeof FollowUpPanel !== 'undefined') FollowUpPanel.removeAllFloating();
 
-        // --- 狀態重置 ---
         injectedIWTButtons = {};
         if (assignButtonObserver) assignButtonObserver.disconnect();
         if (iwtModuleObserver) iwtModuleObserver.disconnect();
         assignButtonObserver = null;
         iwtModuleObserver = null;
         if (relatedCasesExtractorModule) relatedCasesExtractorModule.hasExecuted = false;
-        foundTrackingNumber = null;
         window.contactLogicDone = false;
 
-        // --- 路由匹配 ---
-        // [核心修正] 使用了正確的正則表達式，確保能匹配帶有查詢參數的 URL
+        // --- 2. 路由匹配與精準處理 ---
         const caseRecordPagePattern = /^https:\/\/upsdrive\.lightning\.force\.com\/lightning\/r\/Case\/[a-zA-Z0-9]{18}\/.*/;
         const myOpenCasesListPagePattern = /^https:\/\/upsdrive\.lightning\.force\.com\/lightning\/o\/Case\/list\?.*filterName=My_Open_Cases_CEC.*/;
-        const isTargetExportPage = /^https:\/\/upsdrive\.lightning\.force\.com\/lightning\/o\/Case\/list\?.*filterName=CEC_HK_ERN_Export_Case*/;
 
-        // =================================================================================
-        // 分支 1: Case 詳情頁邏輯
-        // =================================================================================
+        // 分支 A: Case 詳情頁
         if (caseRecordPagePattern.test(location.href)) {
             const caseUrl = location.href;
 
-            // --- 步驟 1: 等待頁面核心 UI 渲染完成 ---
-            const PAGE_READY_SELECTOR = 'c-cec-case-categorization';
-            const PAGE_READY_TIMEOUT = 20000;
-            try {
-                Log.info('Core.Router', `等待 Case 詳情頁核心元素 "${PAGE_READY_SELECTOR}" 出現...`);
-                await waitForElementWithObserver(document.body, PAGE_READY_SELECTOR, PAGE_READY_TIMEOUT);
-                Log.info('Core.Router', `核心元素已出現，開始執行頁面初始化。`);
-            } catch (error) {
-                Log.warn('Core.Router', `等待核心元素超時 (${PAGE_READY_TIMEOUT / 1000}秒)，已中止當前頁面的初始化。`);
-                return;
+            // [核心修復] 僅在確認是 Case 頁面後才嘗試提取 ID 和恢復緩存
+            const currentCaseId = getCaseIdFromUrl(caseUrl);
+
+            if (currentCaseId) {
+                // 嘗試恢復 Case Number 搶跑數據
+                const caseNoCache = GM_getValue('caseNumberLog', {});
+                const caseNoEntry = caseNoCache[currentCaseId];
+                const CASE_TTL = 30 * 24 * 60 * 60 * 1000;
+
+                if (caseNoEntry && (Date.now() - caseNoEntry.timestamp < CASE_TTL)) {
+                    foundCaseNumber = caseNoEntry.caseNo;
+                } else {
+                    foundCaseNumber = null;
+                }
+
+                // 嘗試恢復 Tracking Number 搶跑數據
+                const trackCache = GM_getValue(CACHE_POLICY.TRACKING.KEY, {});
+                const trackEntry = trackCache[currentCaseId];
+                if (trackEntry && (Date.now() - trackEntry.timestamp < CACHE_POLICY.TRACKING.TTL_MS)) {
+                    foundTrackingNumber = trackEntry.trackingNumber;
+                } else {
+                    foundTrackingNumber = null;
+                }
             }
 
-            // --- 步驟 2: 執行不依賴 Case 內部數據的基礎任務 ---
-            Log.info('Core.Router', `正在執行基礎 UI 初始化...`);
-            checkAndNotifyForRecentSend(caseUrl);
-            initModalButtonObserver();
-            initIWantToModuleWatcher();
-
-            // Follow-Up Panel: Case 詳情頁注入『設定跟進時間』按鈕（支援 Console 多 Tab）
-            if (GM_getValue('followUpPanelEnabled', DEFAULTS.followUpPanelEnabled)) {
-                FollowUpPanel.ensureMounted();
-                await FollowUpPanel.ensureCaseButton();
+            // 數據就緒後立刻渲染一次面板 (實現 0 延遲變色)
+            if (GM_getValue('followUpPanelEnabled', DEFAULTS.followUpPanelEnabled) && typeof FollowUpPanel !== 'undefined') {
+                FollowUpPanel.highlightListMatches(new Map());
                 FollowUpPanel.render();
             }
 
-            // --- 步驟 3: 直接啟動數據依賴型任務 (前置守衛已移除) ---
-            Log.info('Core.Router', `正在啟動數據依賴型任務（掃描器、追踪號提取）。`);
+            // 啟動單一引擎掃描器處理 DOM 任務
+            Log.info('Core.Router', `啟動單一引擎掃描器。`);
             startHighFrequencyScanner(caseUrl);
-            extractTrackingNumberAndTriggerIVP();
 
-            // --- 步驟 4: 執行自動指派邏輯 ---
-            if (caseUrl.includes('c__triggeredfrom=reopen')) {
-                Log.info('Feature.AutoAssign', `檢測到 Re-Open Case，已跳過自動指派邏輯。`);
-                return;
+            // 等待核心 UI 加載完成後執行次要初始化
+            const PAGE_READY_SELECTOR = 'c-cec-case-categorization';
+            const PAGE_READY_TIMEOUT = 20000;
+            try {
+                await waitForElementWithObserver(document.body, PAGE_READY_SELECTOR, PAGE_READY_TIMEOUT);
+                checkAndNotifyForRecentSend(caseUrl);
+                initIWantToModuleWatcher();
+                if (GM_getValue('followUpPanelEnabled', DEFAULTS.followUpPanelEnabled)) {
+                    FollowUpPanel.ensureMounted();
+                    FollowUpPanel.render(); // 再次渲染以確保按鈕位置正確
+                }
+            } catch (error) {
+                Log.warn('Core.Router', `等待詳情頁核心元素超時。`);
             }
 
-            const targetUser = GM_getValue('autoAssignUser', DEFAULTS.autoAssignUser);
-            if (!targetUser) {
-                Log.warn('Feature.AutoAssign', `未設置目標用戶名，自動指派功能已禁用。`);
-                return;
-            }
-
-            const ASSIGNMENT_CACHE_KEY = CACHE_POLICY.ASSIGNMENT.KEY;
-            const CACHE_EXPIRATION_MS = CACHE_POLICY.ASSIGNMENT.TTL_MS; // 60分鐘: 自動指派緩存有效期。
-            const cache = GM_getValue(ASSIGNMENT_CACHE_KEY, {});
-
-            const purgeResult = purgeExpiredCacheEntries(cache, CACHE_EXPIRATION_MS);
-            if (purgeResult.changed) {
-                GM_setValue(ASSIGNMENT_CACHE_KEY, purgeResult.cache);
-                Log.info('Feature.AutoAssign', `已清理過期的自動指派緩存條目（removed: ${purgeResult.removed}）。`);
-            }
-            const caseId = getCaseIdFromUrl(caseUrl);
-            const entry = caseId ? cache[caseId] : null;
-
-            if (entry && (Date.now() - entry.timestamp < CACHE_EXPIRATION_MS)) {
-                Log.info('Feature.AutoAssign', `緩存命中：此 Case (ID: ${caseId}) 在 10 小時內已被指派。`);
-                handleAutoAssign(caseUrl, true);
-                return;
-            }
-
-            const initialStatus = await determineCaseStatus();
-            if (initialStatus === 'CLOSED') {
-                Log.info('Feature.AutoAssign', `初始狀態為 "Closed"，不執行指派。`);
-                return;
-            }
-
-            if (initialStatus !== 'ACTIVE_OR_NEW') {
-                Log.info('Feature.AutoAssign', `狀態不符合觸發條件 (當前狀態: "${initialStatus}")。`);
-                return;
-            }
-
-            // --- 步驟 5: 將關鍵字段檢查移至此處，僅中止自動指派 ---
-            if (await areRequiredFieldsEmpty()) {
-                Log.warn('Feature.AutoAssign', `因關鍵字段為空，自動指派流程已中止。其他頁面任務不受影響。`);
-                return; // 僅中止自動指派
-            }
-
-            handleAutoAssign(caseUrl, false);
-
-            // =================================================================================
-            // 分支 2: "My Open Cases CEC" 列表頁邏輯
-            // =================================================================================
+        // 分支 B: Case 列表頁
         } else if (myOpenCasesListPagePattern.test(location.href)) {
-            Log.info('Core.Router', `"My Open Cases CEC" 列表頁已識別，準備啟動列表監控器。`);
+            // 重置提取變量，避免舊數據污染列表頁
+            foundCaseNumber = null;
+            foundTrackingNumber = null;
+
+            if (GM_getValue('followUpPanelEnabled', DEFAULTS.followUpPanelEnabled) && typeof FollowUpPanel !== 'undefined') {
+                FollowUpPanel.highlightListMatches(new Map());
+                FollowUpPanel.render();
+            }
+
+            Log.info('Core.Router', `"My Open Cases CEC" 列表頁已識別。`);
             initCaseListMonitor();
 
-            // =================================================================================
-            // 分支 3: 其他所有頁面
-            // =================================================================================
+        // 分支 C: 其他頁面 (Dashboard 等)
         } else {
-            Log.info('Core.Router', `非目標頁面 (詳情頁/指定列表頁)，跳過核心功能初始化。`);
+            foundCaseNumber = null;
+            foundTrackingNumber = null;
+            if (typeof FollowUpPanel !== 'undefined' && GM_getValue('followUpPanelEnabled', DEFAULTS.followUpPanelEnabled)) {
+                FollowUpPanel.render();
+            }
+            Log.info('Core.Router', `非目標頁面，已重置狀態。`);
         }
     }
 
-    /**
-    * @description 啟動URL監控機制，包括事件監聽和定時心跳檢測。
-    */
+
+    // [設定/狀態持久化 / 事件監聽 / 定時/防抖] 功能：`startUrlMonitoring`。
     function startUrlMonitoring() {
         if (window.__cecUrlMonitoringInitialized) return;
         window.__cecUrlMonitoringInitialized = true;
@@ -8125,11 +8592,42 @@ V53 > V54
         });
     }
 
-    /**
-    * @description 腳本的總入口函數，執行所有初始化操作。
-    */
+
+    // [設定/狀態持久化] 功能：`start`。
     function start() {
         Log.info('Core.Init', `腳本啟動 (Version: ${GM_info.script.version})。`);
+
+        // [優化] 初始化配置快照 (Config Memory)
+        // 將常用配置一次性讀入內存，避免高頻調用 GM_getValue
+        try {
+            RUNTIME_CONFIG = {
+                followUpPanelEnabled: GM_getValue('followUpPanelEnabled', DEFAULTS.followUpPanelEnabled),
+                notifyOnRepliedCaseEnabled: GM_getValue('notifyOnRepliedCaseEnabled', DEFAULTS.notifyOnRepliedCaseEnabled),
+                pcaDoNotClosePromptEnabled: GM_getValue('pcaDoNotClosePromptEnabled', DEFAULTS.pcaDoNotClosePromptEnabled),
+                pcaCaseListHintEnabled: GM_getValue('pcaCaseListHintEnabled', DEFAULTS.pcaCaseListHintEnabled),
+                highlightExpiringCasesEnabled: GM_getValue('highlightExpiringCasesEnabled', false),
+                autoSwitchEnabled: GM_getValue('autoSwitchEnabled', DEFAULTS.autoSwitchEnabled),
+                autoScrollAfterActionButtons: GM_getValue('autoScrollAfterActionButtons', DEFAULTS.autoScrollAfterActionButtons),
+                autoAssignUser: GM_getValue('autoAssignUser', DEFAULTS.autoAssignUser),
+                sentinelCloseEnabled: GM_getValue('sentinelCloseEnabled', DEFAULTS.sentinelCloseEnabled),
+                blockIVPCard: GM_getValue('blockIVPCard', DEFAULTS.blockIVPCard),
+                autoIVPQueryEnabled: GM_getValue('autoIVPQueryEnabled', DEFAULTS.autoIVPQueryEnabled),
+                autoWebQueryEnabled: GM_getValue('autoWebQueryEnabled', DEFAULTS.autoWebQueryEnabled),
+                accountHighlightMode: GM_getValue('accountHighlightMode', 'pca'),
+                richTextEditorHeight: GM_getValue('richTextEditorHeight', DEFAULTS.richTextEditorHeight),
+                caseDescriptionHeight: GM_getValue('caseDescriptionHeight', DEFAULTS.caseDescriptionHeight),
+                caseHistoryHeight: GM_getValue('caseHistoryHeight', DEFAULTS.caseHistoryHeight),
+                postInsertionEnhancementsEnabled: GM_getValue('postInsertionEnhancementsEnabled', DEFAULTS.postInsertionEnhancementsEnabled),
+                templateInsertionMode: GM_getValue('templateInsertionMode', DEFAULTS.templateInsertionMode),
+                cursorPositionBrIndex: GM_getValue('cursorPositionBrIndex', DEFAULTS.cursorPositionBrIndex),
+                autoLoadAllUpdates: GM_getValue('autoLoadAllUpdates', DEFAULTS.autoLoadAllUpdates),
+                cleanModeEnabled: GM_getValue('cleanModeEnabled', DEFAULTS.cleanModeEnabled)
+            };
+            Log.info('Core.Init', `運行時配置快照已加載。`);
+        } catch(e) {
+            Log.warn('Core.Init', `配置加載異常: ${e.message}`);
+        }
+
         handleSettingsMigration();
         initHeaderObserver();
         if (isScriptPaused) {
@@ -8147,6 +8645,7 @@ V53 > V54
         }
         Log.info('UI.Init', `所有自定義樣式 (全局/高度/組件屏蔽) 已應用。`);
 
+        // [設定/狀態持久化] 功能：`CACHE_KEYS`。
         const CACHE_KEYS = {
             ASSIGNMENT: 'assignmentLog',
             REPLIED: 'sendButtonClickLog',
@@ -8173,7 +8672,11 @@ V53 > V54
                     }
                 });
 
-                const message = `成功清理了 ${clearedCount} 個緩存項。`;
+                //  同時清理內存中的狀態
+                DOM_PATH_CACHE = {};
+                completedTasksRegister.clear();
+
+                const message = `成功清理了 ${clearedCount} 個緩存項及當前內存狀態。`;
                 showGlobalToast(message, 'check');
                 Log.info('Core.Cache', `用戶手動清理緩存，共清理 ${clearedCount} 個項目: [${allCacheKeys.join(', ')}]`);
 
