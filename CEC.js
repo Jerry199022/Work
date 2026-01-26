@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CEC功能強化
 // @namespace    CEC Enhanced
-// @version      V117
+// @version      V118
 // @description  快捷操作按鈕、自動指派、IVP/官網快速查詢、聯繫人彈窗優化、按鈕警示色、賬戶檢測(含Suspended)、組件屏蔽、設置菜單、自動IVP/Web查詢、URL精準匹配、快捷按鈕可編輯、(Related Cases)數據提取與增強排序、跟進面板、繁簡轉換、I Want To自動化、開查/預付提示、快過期提示、自動加載Updates、模版插入優化、全局暫停/恢復功能。
 // @author       Jerry Law
 // @match        https://upsdrive.lightning.force.com/*
@@ -4295,7 +4295,7 @@ V53 > V54
 
         // [配置] 高對比度色譜 (深色/高飽和度，適合白字)
         const COLOR_PALETTE = [
-            '#FFADAD', '#FFD6A5', '#FDFFB6', '#CAFFBF', '#9BF6FF', '#A0C4FF', '#BDB2FF', '#FFC6FF'
+            '#FFAADA', '#FFD6A5', '#FDFF60', '#CAFFBF', '#9BF6FF', '#A0C4FF', '#BDB2FF', '#FFC6FF', '#E4F698', '#C9F0FF', '#D6F5C9', '#DF68C9'
         ];
 
         const SEND_BUTTON_CACHE_KEY = CACHE_POLICY.REPLIED.KEY;
