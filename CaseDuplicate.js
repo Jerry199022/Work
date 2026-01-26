@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Case查重與指派分析
 // @namespace    Case duplicate and find A/C
-// @version      V17
+// @version      V18
 // @description  集成Case查重、指派分析(儀表盤可視化+雙向聯動+智能標記)、自動標示與緩存功能。
 // @author       Jerry Law
 // @match        https://upsdrive.lightning.force.com/lightning/*
@@ -89,7 +89,7 @@
                 ERN_CODE: /\((ERN-[A-Z]+)\)/i
             },
             STYLE: {
-                HIGHLIGHT_COLORS: ['#FFADAD', '#FFD6A5', '#FDFFB6', '#CAFFBF', '#9BF6FF', '#A0C4FF', '#BDB2FF', '#FFC6FF'],
+                HIGHLIGHT_COLORS: ['#FFAADA', '#FFD6A5', '#FDFF60', '#CAFFBF', '#9BF6FF', '#A0C4FF', '#BDB2FF', '#FFC6FF', '#E4F698', '#C9F0FF', '#D6F5C9', '#DF68C9'],
                 STICKY_HEADER_CLASS: 'sticky-header-active'
             },
             TIMEOUTS: {
