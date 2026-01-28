@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IVP顯示注釋
 // @namespace    IVP顯示注釋
-// @version      V22
+// @version      V23
 // @description  IVP顯示注釋、一眼模式、定義字體顏色。
 // @author       Jerry Law
 // @match        *://ivp.inside.ups.com/*
@@ -27,10 +27,12 @@
 #PARKHURST SQUARE #1|亞馬遜倉庫
 #165 GLENN FOX RD|亞馬遜倉庫
 #6635 106 AVE SE|亞馬遜倉庫
+#21 JUMP STREET|亞馬遜倉庫
 #8255 NW 66TH STREET|亞馬遜倉庫
 #7600 LTC PARKWAY|亞馬遜倉庫
 #27505 SW 132ND AVE|亞馬遜倉庫
 #4806 Cotter Ln|亞馬遜倉庫
+#27505 SW 132nd AVE 33032-8597|亞馬遜倉庫
 2845 W 48th Pl|亞馬遜倉庫
 #550 OAK RIDGE ROAD|亞馬遜倉庫
 #RASALAT-PPWK|清關文件送達給收件人
@@ -38,6 +40,7 @@
 #MONITORING|監控中
 #LOCKER|儲物櫃
 #RETURN GOODS|退回包裹
+#INVEST ELP|已超過賠償受理時限
 #POA/IRS|需要提供授權書及收件人稅號
 #SAT DELIVERY|星期六送貨
 #SAT AIR DEL|星期六空運送貨
@@ -625,6 +628,7 @@
 #BO|玻利維亞
 #BW|波札那
 #BR|巴西
+#BA|波士尼亞與赫塞哥維納
 #VG|英屬維爾京群島
 #BN|汶萊
 #BG|保加利亞
@@ -822,11 +826,11 @@
 #CW|庫拉索
 #KM|科摩羅
 #COMOROS|科摩羅 - KM
-#BONAIRE, SINT EUSTATIUS AND SABA|波奈,荷蘭屬加勒比 - BQ
+#BONAIRE~ SINT EUSTATIUS AND SABA|波奈,荷蘭屬加勒比 - BQ
 #ARUBA|阿鲁巴 - AW
 #CZECHIA|捷克 - CZ
-#CONGO, THE DEMOCRATIC REPUBLIC OF|剛果 - CG
-#TANZANIA, UNITED REPUBLIC OF|坦尚尼亞 - TZ
+#CONGO~ THE DEMOCRATIC REPUBLIC OF|剛果 - CG
+#TANZANIA~ UNITED REPUBLIC OF|坦尚尼亞 - TZ
 #MAYOTTE|馬約特島 - YT
 #AFGHANISTAN|阿富汗 - AF
 #ALBANIA|阿爾巴尼亞 - AL
@@ -839,6 +843,7 @@
 #AUSTRALIA|澳洲 - 澳大利亞 - AU
 #AUSTRIA|奧地利 - AT
 #AZERBAIJAN|阿塞拜疆 - AZ
+#BOSNIA AND HERZEGOVINA|波士尼亞與赫塞哥維納 - BA
 #BAHAMAS|巴哈馬 - BS
 #BANGLADESH|孟加拉 - BD
 #BELARUS|白俄羅斯 - BY
@@ -846,7 +851,7 @@
 #BELIZE|貝裡斯 - BZ
 #BENIN|貝南 - BJ
 #BHUTAN|不丹 - BT
-#BOLIVIA, PLURINATIONAL STATE OF|玻利維亞 - BO
+#BOLIVIA~ PLURINATIONAL STATE OF|玻利維亞 - BO
 #BOTSWANA|波札那 - BW
 #BRAZIL|巴西 - BR
 #BRITISH VIRGIN ISLANDS|英屬維爾京群島 - VG
@@ -861,7 +866,7 @@
 #CANARY ISLANDS|加那利群島 - IC
 #CAYMAN ISLANDS|開曼群島 - KY
 #CHILE|智利 - CL
-#HONG KONG SAR, CHINA|香港 - HK
+#HONG KONG SAR~ CHINA|香港 - HK
 #CHINA MAINLAND|中國 - CN
 #COLOMBIA|哥倫比亞 - CO
 #DEMOCRATIC REPUBLIC OF THE CONGO|剛果 - CG
@@ -916,7 +921,7 @@
 #JORDAN|約旦 - JO
 #KAZAKHSTAN|哈薩克 - KZ
 #KENYA|肯亞 - KE
-#KOREA, REPUBLIC OF|韓國 - KR
+#KOREA~ REPUBLIC OF|韓國 - KR
 #KOSOVO|科索沃 - XK
 #KUWAIT|科威特 - KW
 #KYRGYZSTAN|吉爾吉斯 - KG
@@ -934,7 +939,7 @@
 #MARTINIQUE|法屬馬丁尼克 - MQ
 #MEXICO|墨西哥 - MX
 #MOLDOVA|摩爾多瓦 - MD
-#MOLDOVA, REPUBLIC OF|摩爾多瓦 - MD
+#MOLDOVA~ REPUBLIC OF|摩爾多瓦 - MD
 #MONGOLIA|蒙古 - MN
 #MONTENEGRO|黑山 - ME
 #MOROCCO|摩洛哥 - MA
@@ -1006,7 +1011,7 @@
 #AMERICA|美國 - US
 #URUGUAY|烏拉圭 - UY
 #UZBEKISTAN|烏茲別克 - 烏茲別克斯坦 - UZ
-#NETHERLANDS, KINGDOM OF THE|荷蘭
+#NETHERLANDS~ KINGDOM OF THE|荷蘭
 #VANUATU|新赫布裡底 - VU
 #VENEZUELA~ BOLIVARIAN REPUBLIC OF|委內瑞拉 - VE
 #ZAMBIA|尚比亞 - ZM
@@ -1064,6 +1069,9 @@ Package ID
 PACKAGE WAS DRIVER RELEASED
 Search By:
 BLVD LOS AN
+GOODYEAR AZ
+REPUBLIC OF UZBEKISTAN TASHKENT
+KUTZTOWN PA 19530 US
 
 `;
 
