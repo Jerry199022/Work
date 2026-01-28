@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CEC功能強化
 // @namespace    CEC Enhanced
-// @version      V118
+// @version      V119
 // @description  快捷操作按鈕、自動指派、IVP/官網快速查詢、聯繫人彈窗優化、按鈕警示色、賬戶檢測(含Suspended)、組件屏蔽、設置菜單、自動IVP/Web查詢、URL精準匹配、快捷按鈕可編輯、(Related Cases)數據提取與增強排序、跟進面板、繁簡轉換、I Want To自動化、開查/預付提示、快過期提示、自動加載Updates、模版插入優化、全局暫停/恢復功能。
 // @author       Jerry Law
 // @match        https://upsdrive.lightning.force.com/*
@@ -18,7 +18,7 @@
 // ==/UserScript==
 
 /*
-V90 > V117
+V90 > V119
 -架構重構：單一引擎化
 -強化跟進面板
 -優化攔截提示
@@ -7393,6 +7393,98 @@ V53 > V54
         }
     }
 
+        /**
+    * @description [V115 原生邏輯復刻版] 檢查是否為初始狀態的 New Case。
+    *              完全採用原腳本 `areRequiredFieldsEmpty` 的深層 DOM 遍歷與取值邏輯。
+    *              優先檢查 lightning-formatted-text，並使用遞歸查找 Shadow DOM 文本。
+    */
+    function isNewAndEmptyCase() {
+        // 1. 定義原腳本中的遞歸查找輔助函數 (確保邏輯完全一致)
+        const dissectAndFindText = (rootNode, fieldTitle) => {
+            let foundText = null;
+            const processedNodes = new Set();
+
+            function traverse(node) {
+                if (!node || processedNodes.has(node) || foundText) return;
+                processedNodes.add(node);
+                if (node.nodeType === Node.TEXT_NODE) {
+                    const text = (node.nodeValue || '').trim();
+                    if (text) {
+                        const parent = node.parentElement;
+                        // 排除標題本身
+                        const isTitleNode = parent && parent.classList && parent.classList.contains('slds-text-title');
+                        if (!isTitleNode && text !== fieldTitle) {
+                            foundText = text;
+                            return;
+                        }
+                    }
+                }
+                if (node.shadowRoot) {
+                    traverse(node.shadowRoot);
+                    if (foundText) return;
+                }
+                if (node.childNodes && node.childNodes.length > 0) {
+                    for (const child of node.childNodes) {
+                        traverse(child);
+                        if (foundText) return;
+                    }
+                }
+            }
+            traverse(rootNode);
+            return foundText;
+        };
+
+        // 2. 獲取高亮面板項目
+        const items = findAllElementsInShadows(document.body, 'records-highlights-details-item');
+        if (items.length < 3) return false; // DOM 未加載完畢，繼續等待
+
+        let isStatusNew = false;
+        let hasSubstatus = false;
+        let hasCategory = false;
+        let hasSubCategory = false;
+
+        // 3. 遍歷並提取值 (使用原腳本的提取邏輯)
+        for (const item of items) {
+            // 獲取標題元素
+            const titleElement = findElementInShadows(item, 'p.slds-text-title');
+            if (!titleElement) continue;
+
+            // 獲取標題文本 (使用 getAttribute('title') 與原腳本保持一致)
+            const title = (titleElement.getAttribute('title') || titleElement.textContent).trim();
+
+            // 提取值
+            let value = null;
+            const standardValueElement = findElementInShadows(item, 'lightning-formatted-text');
+            if (standardValueElement && standardValueElement.textContent.trim()) {
+                value = standardValueElement.textContent.trim();
+            } else {
+                // 回退到深度遞歸查找
+                value = dissectAndFindText(item, title);
+            }
+
+            // 4. 判斷邏輯
+            if (title === 'Current Status' || title === 'Status') {
+                if (value && value.includes('New')) {
+                    isStatusNew = true;
+                }
+            }
+            if (title === 'Substatus' && value) hasSubstatus = true;
+            if (title === 'Case Category' && value) hasCategory = true;
+            if (title === 'Case Sub Category' && value) hasSubCategory = true;
+        }
+
+        // 5. 最終判定：狀態是 New，且其他三個欄位必須都沒有值 (false)
+        const result = isStatusNew && !hasSubstatus && !hasCategory && !hasSubCategory;
+
+        if (result && !window._cecNewCaseLogged) {
+            Log.info('Core.Scanner', '檢測到初始 New Case (使用深層 DOM 邏輯確認)，啟用任務豁免。');
+            window._cecNewCaseLogged = true;
+        } else if (!result) {
+            window._cecNewCaseLogged = false;
+        }
+
+        return result;
+    }
 
     // =================================================================================
     // SECTION: 關聯案件提取器模塊 (Related Cases Extractor Module)
@@ -7770,8 +7862,8 @@ V53 > V54
 
 
     function startHighFrequencyScanner(caseUrl) {
-        const SCAN_INTERVAL = 500; // [優化] 調整為 500ms，響應更快且依然安全
-        const MAX_ACTIVE_DURATION = 15000; // 15秒
+        const SCAN_INTERVAL = 800; // [優化] 調整為 500ms，響應更快且依然安全
+        const MAX_ACTIVE_DURATION = 20000; // 20秒
         const START_TIME = Date.now();
 
         // 初始化任務隊列：深拷貝配置
@@ -7789,7 +7881,7 @@ V53 > V54
         // 用於防止重複處理同一元素的 WeakSet
         const processedElements = new WeakSet();
 
-        Log.info('Core.Scanner', `單一引擎啟動 (目標有效時長: 15秒, 任務數: ${tasksToRun.length})`);
+        Log.info('Core.Scanner', `單一引擎啟動 (目標有效時長: 20秒, 任務數: ${tasksToRun.length})`);
 
         // 定義遞歸執行函數
         const runScannerLoop = async () => {
@@ -7807,7 +7899,7 @@ V53 > V54
             if (Date.now() - START_TIME > MAX_ACTIVE_DURATION) {
                 globalScannerId = null;
                 const pendingTasks = tasksToRun.map(t => t.id).join(', ');
-                Log.warn('Core.Scanner', `有效掃描時間已達 15秒，引擎停止。未完成任務: [${pendingTasks}]`);
+                Log.warn('Core.Scanner', `有效掃描時間已達 20秒，引擎停止。未完成任務: [${pendingTasks}]`);
                 return;
             }
 
@@ -7885,199 +7977,93 @@ V53 > V54
     }
 
 
+    /**
+    * @description [V117 全面修正版] 存儲所有在 Case 頁面需要執行的任務配置。
+    *              修復 addIVPButtons 和 blockIVPCard 在 New Case 下因組件缺失導致無法觸發豁免邏輯的問題。
+    *              所有依賴 DOM 組件存在的任務均已改為內部查找模式。
+    */
     const CASE_PAGE_CHECKS_CONFIG = [
         {
             id: 'case_number_extraction',
-            type: 'CONTINUOUS', // 持續嘗試直到 DOM 加載完成
+            type: 'CONTINUOUS',
             handler: async () => {
                 return extractCaseNumberFromHeader();
             }
         },
         {
             id: 'tracking_extraction',
-            type: 'CONTINUOUS', // 持續嘗試直到成功 (依賴 DOM 加載)
+            type: 'CONTINUOUS',
             handler: async () => {
+                if (isNewAndEmptyCase()) return true;
                 return await extractTrackingNumberAndTriggerIVP();
             }
         },
         {
             id: 'auto_assign',
-            type: 'RETRY', // 持續嘗試直到成功或條件不符 (依賴 Owner 欄位和按鈕)
+            type: 'RETRY',
             handler: async () => {
+                if (isNewAndEmptyCase()) return true;
                 return await handleAutoAssign(location.href);
             }
         },
         {
-            id: 'auto_load_all_feed',
-            type: 'RETRY',
-            handler: async () => {
-                if (!RUNTIME_CONFIG.autoLoadAllUpdates) return true;
-
-                const feed = findElementInShadows(document.body, 'flexipage-component2[data-component-id="forceChatter_exposedFeed"]');
-                if (!feed) return false;
-
-                const now = Date.now();
-
-                // 1. 初始化狀態機
-                if (!feed.dataset.cecLoadInit) {
-                    feed.dataset.cecLoadCycles = '0';
-                    feed.dataset.cecLastItemCount = '0';
-                    feed.dataset.cecIsWaiting = 'false';
-                    feed.dataset.cecLastTriggerTime = '0';
-                    feed.dataset.cecStartTime = String(now);
-                    feed.dataset.cecRetryCount = '0'; // 新增：單頁重試計數器
-                    feed.dataset.cecTotalRetries = '0'; // 新增：總重試累計
-                    feed.dataset.cecLoadInit = 'true';
-                }
-
-                // 2. 首次啟算延時 (2秒)
-                const startTime = parseInt(feed.dataset.cecStartTime);
-                if (now - startTime < 2000) return false;
-
-                const trigger = findElementInShadows(feed, '.loadMoreTrigger');
-                const viewMoreBtn = findElementInShadows(feed, 'button.cuf-showMore');
-                const spinner = findElementInShadows(feed, '.forceInlineSpinner');
-                const isCurrentlyLoading = spinner && !spinner.closest('.hideSpinner');
-
-                let cycles = parseInt(feed.dataset.cecLoadCycles);
-                let lastCount = parseInt(feed.dataset.cecLastItemCount);
-                let isWaiting = feed.dataset.cecIsWaiting === 'true';
-                let lastTriggerTime = parseInt(feed.dataset.cecLastTriggerTime);
-                let retryCount = parseInt(feed.dataset.cecRetryCount);
-                let totalRetries = parseInt(feed.dataset.cecTotalRetries);
-
-                // 3. 數據增量結算
-                const currentCount = findAllElementsInShadows(feed, '.cuf-feedElement').length;
-                if (isWaiting && currentCount > lastCount) {
-                    cycles++;
-                    totalRetries += retryCount;
-                    feed.dataset.cecLoadCycles = String(cycles);
-                    feed.dataset.cecLastItemCount = String(currentCount);
-                    feed.dataset.cecTotalRetries = String(totalRetries);
-                    feed.dataset.cecIsWaiting = 'false';
-                    feed.dataset.cecRetryCount = '0'; // 重置單頁計數
-
-                    // 聚合日誌：清晰展示該頁加載質量
-                    const retryHint = retryCount > 0 ? ` (經過 ${retryCount} 次自動重試)` : '';
-                    Log.info('Feature.AutoLoad', `第 ${cycles} 頁加載成功，總記錄: ${currentCount}${retryHint}。`);
-                    isWaiting = false;
-                }
-
-                // 4. 終止判斷
-                if (cycles >= 5) {
-                    Log.info('Feature.AutoLoad', `加載上限已達 (總計重試: ${totalRetries})，移除背景任務。`);
-                    return true;
-                }
-
-                if (!trigger && !viewMoreBtn && !isCurrentlyLoading) {
-                    const endMarker = findElementInShadows(feed, '.skip-feed-endpoint');
-                    if (endMarker && endMarker.textContent.includes('End of Feed')) {
-                        Log.info('Feature.AutoLoad', `內容完全讀取 (總 Cycles: ${cycles + (isWaiting?1:0)}, 總重試: ${totalRetries + retryCount})，任務結束。`);
-                        return true;
-                    }
-                }
-
-                // 5. 等待態處理（靜默計數）
-                if (isWaiting) {
-                    if (isCurrentlyLoading) {
-                        feed.dataset.cecLastTriggerTime = String(now);
-                    } else if (now - lastTriggerTime > 1000) {
-                        // 1秒超時，執行內部重置，不輸出日誌
-                        retryCount++;
-                        feed.dataset.cecRetryCount = String(retryCount);
-                        feed.dataset.cecIsWaiting = 'false';
-
-                        // 僅在極慢時輸出一次警告
-                        if (retryCount === 10) {
-                            Log.warn('Feature.AutoLoad', `當前網絡響應異常緩慢，已自動重試 10 次...`);
-                        }
-                    }
-                    return false;
-                }
-
-                // 6. 觸發態
-                if (!isCurrentlyLoading) {
-                    if (viewMoreBtn) {
-                        feed.dataset.cecLastItemCount = String(currentCount);
-                        feed.dataset.cecIsWaiting = 'true';
-                        feed.dataset.cecLastTriggerTime = String(now);
-                        viewMoreBtn.click();
-                        return false;
-                    }
-
-                    if (trigger) {
-                        feed.dataset.cecLastItemCount = String(currentCount);
-                        feed.dataset.cecIsWaiting = 'true';
-                        feed.dataset.cecLastTriggerTime = String(now);
-
-                        const originalStyle = trigger.style.cssText;
-                        trigger.style.setProperty('position', 'fixed', 'important');
-                        trigger.style.setProperty('top', '50%', 'important');
-                        trigger.style.setProperty('left', '0px', 'important');
-                        trigger.style.setProperty('width', '100px', 'important');
-                        trigger.style.setProperty('height', '100px', 'important');
-                        trigger.style.setProperty('opacity', '0', 'important');
-                        trigger.style.setProperty('z-index', '9999', 'important');
-                        trigger.style.setProperty('pointer-events', 'none', 'important');
-                        trigger.style.setProperty('cursor', 'inherit', 'important');
-
-                        setTimeout(() => {
-                            if (trigger) trigger.style.cssText = originalStyle;
-                        }, 400);
-
-                        return false;
-                    }
-                }
-
-                return false;
-            }
-        },
-        {
             id: 'handleContactLogic',
-            selector: 'article.cCEC_ContactSummary, button[title="Associate Contact"]',
-            type: 'ONCE',
-            handler: (element) => {
+            type: 'RETRY',
+            handler: () => {
+                if (isNewAndEmptyCase()) return true;
                 if (window.contactLogicDone) return true;
-                if (element.matches('article.cCEC_ContactSummary')) {
+
+                const summary = findElementInShadows(document.body, 'article.cCEC_ContactSummary');
+                if (summary) {
                     window.contactLogicDone = true;
-                    processContactCard(element);
+                    processContactCard(summary);
                     return true;
                 }
-                if (element.matches('button[title="Associate Contact"]')) {
-                    return true;
-                }
+                const btn = findElementInShadows(document.body, 'button[title="Associate Contact"]');
+                if (btn) return true;
                 return false;
             }
         },
         {
             id: 'initComposeButtonWatcher',
-            type: 'RETRY', // 持續重試，直到邏輯內部返回 true (找到按鈕或確認無需處理)
+            type: 'RETRY',
             handler: async () => {
+                if (isNewAndEmptyCase()) return true;
                 return checkAndColorComposeButton();
             }
         },
         {
             id: 'setupTabClickTriggers',
-            selector: 'a.slds-tabs_scoped__link[data-label^="Related Cases"]',
-            type: 'ONCE',
-            handler: (tabLink) => {
-                const tabParent = tabLink.closest('li');
-                if (!tabParent) return false;
-                if (tabParent.dataset.listenerAttached === 'true') return true;
-                tabParent.addEventListener('click', () => {
-                    relatedCasesExtractorModule.handleTabClick(tabLink);
-                }, { once: true });
-                tabParent.dataset.listenerAttached = 'true';
-                return true;
+            type: 'RETRY',
+            handler: () => {
+                if (isNewAndEmptyCase()) return true;
+
+                const tabLink = findElementInShadows(document.body, 'a.slds-tabs_scoped__link[data-label^="Related Cases"]');
+                if (tabLink) {
+                    const tabParent = tabLink.closest('li');
+                    if (!tabParent) return false;
+                    if (tabParent.dataset.listenerAttached === 'true') return true;
+                    tabParent.addEventListener('click', () => {
+                        relatedCasesExtractorModule.handleTabClick(tabLink);
+                    }, { once: true });
+                    tabParent.dataset.listenerAttached = 'true';
+                    return true;
+                }
+                return false;
             }
         },
         {
             id: 'initRelatedCasesWatcherForButton',
-            selector: 'li[data-label^="Related Cases ("]',
-            type: 'ONCE',
+            type: 'RETRY',
             handler: () => {
-                checkAndColorAssociateButton();
-                return true;
+                if (isNewAndEmptyCase()) return true;
+
+                const tabEl = findElementInShadows(document.body, 'li[data-label^="Related Cases ("]');
+                if (tabEl) {
+                    checkAndColorAssociateButton();
+                    return true;
+                }
+                return false;
             }
         },
         {
@@ -8091,11 +8077,19 @@ V53 > V54
         },
         {
             id: 'blockIVPCard',
-            selector: 'article.cCEC_IVPCanvasContainer',
-            type: 'ONCE',
-            handler: (cardElement) => {
-                handleIVPCardBlocking(cardElement);
-                return true;
+            // [修正] 移除 selector，改為內部查找，防止 New Case 因找不到 IVP 容器而超時
+            type: 'RETRY',
+            handler: () => {
+                // 1. 豁免檢查
+                if (isNewAndEmptyCase()) return true;
+
+                // 2. 查找元素
+                const cardElement = findElementInShadows(document.body, 'article.cCEC_IVPCanvasContainer');
+                if (cardElement) {
+                    handleIVPCardBlocking(cardElement);
+                    return true;
+                }
+                return false;
             }
         },
         {
@@ -8111,31 +8105,20 @@ V53 > V54
         },
         {
             id: 'injectActionButtons',
-            // [優化] 移除 selector，改為邏輯驅動的 RETRY 任務
-            // 這樣我們可以在 handler 內部判斷 "Case Closed" 的情況
             type: 'RETRY',
             handler: async () => {
-                // 1. 嘗試尋找 Footer 並注入
                 const footer = findElementInShadows(document.body, 'footer.slds-modal__footer');
                 if (footer) {
                     addModalActionButtons(footer);
-                    return true; // 找到了，注入成功，任務結束
+                    return true;
                 }
-
-                // 2. [新增] 如果沒找到 Footer，檢查 Case 是否已關閉
-                // 遍歷狀態欄，查找包含 "Status" 和 "Closed" 的文本
                 const highlights = findAllElementsInShadows(document.body, 'records-highlights-details-item');
                 const isClosed = highlights.some(el => {
                     const text = el.innerText || '';
                     return text.includes('Status') && text.includes('Closed');
                 });
-
-                if (isClosed) {
-                    // Case 已關閉，不需要 Footer，視為任務完成（避免超時報警）
-                    return true;
-                }
-
-                // 3. 既沒找到 Footer，也不是 Closed 狀態 -> 繼續等待
+                if (isClosed) return true;
+                if (isNewAndEmptyCase()) return true;
                 return false;
             }
         },
@@ -8150,9 +8133,17 @@ V53 > V54
         },
         {
             id: 'addIVPButtons',
-            selector: 'c-cec-datatable',
-            type: 'ONCE',
-            handler: (datatableContainer) => {
+            // [修正] 移除 selector 'c-cec-datatable'，改為內部查找
+            type: 'RETRY',
+            handler: () => {
+                // 1. 豁免檢查 (優先執行)
+                if (isNewAndEmptyCase()) return true;
+
+                // 2. 手動查找 Datatable
+                const datatableContainer = findElementInShadows(document.body, 'c-cec-datatable');
+                if (!datatableContainer) return false; // 沒找到組件，繼續等待 (Retrying)
+
+                // 3. 組件存在，執行注入邏輯
                 const shadowRoot = datatableContainer.shadowRoot;
                 if (!shadowRoot) return false;
                 if (datatableContainer.dataset.ivpBtnsAdded === 'true') return true;
